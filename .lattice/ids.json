@@ -1,0 +1,12 @@
+{
+  "map": {
+    "DB-1": "task_01KJB54NPTRPTYCWCAV8DM2T4X",
+    "DB-2": "task_01KJB54NR27W69VF8J8RWYW0QF",
+    "DB-3": "task_01KJB54NSVC4YP0M4FR0GKAHRQ",
+    "DB-4": "task_01KJB54NVNF93CWPK4E6AXQ7XA"
+  },
+  "next_seqs": {
+    "DB": 5
+  },
+  "schema_version": 2
+}
