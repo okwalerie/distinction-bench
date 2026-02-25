@@ -1,0 +1,90 @@
+
+
+* Script
+
+My name is Valerie Kim.
+
+I'm an independent AI researcher and software developer, here to introduce Distinction Bench, a new evaluation suite that isolates for abstraction capabilities.
+
+Most benchmarks are about translating between similar formats, whether it's code-to-prose, or increasingly tangled rules. However, by going simpler, we can test the same simple rules in trillions of disparate representations without worrying about whether the rules are too difficult to understand.
+
+
+Here are the rules involved, but before we go into detail... see how my preliminary testing shows that Opus 4.5's performance varies wildly based on bracket style alone. 
+
+This is notable because we want AI to abstract; to intentionally ignore irrelevant details and focus only on relevant ones.
+
+Performance mismatches suggest syntactic pattern matching rather than reasoning, i.e., identifying structure based on simple relations.
+
+
+
+* Gemini's Script
+
+The Script: "DistinctionBench: Testing Structural Generalization"
+** [0:00-0:45] The Hook: The "Syntax vs. Semantics" Gap
+
+: (Visual: Split screen. Left side: Standard code. Right side: Your "Noisy Mismatch" dialect).
+
+"Hi, I'm [Name]. We know LLMs are excellent at semantic pattern matching. But can they distinguish Structure from Noise?
+"I’ve built DistinctionBench, a novel evaluation suite based on Boundary Logic—a minimalist formal system where distinction is the only relation.
+"Most math benchmarks test arithmetic or memorized theorems. DistinctionBench tests Topological Intuition. I present the model with a logical structure, but I heavily distort the representation—using emojis, mismatched brackets, or ASCII art. The logical value is identical, but the 'syntax' is chaotic. This forces the model to ignore the surface-level tokens and reconstruct the underlying tree structure."
+
+** [0:45-1:45] The "Why": Why this breaks LLMs
+: (Visual: Show the "Gemini 2.5 Flash" vs "Gemini 3" or "Opus 4.5" results chart).
+
+"Here is why this matters for the frontier. Current models are brittle.
+"Look at this data from my v1.1 run. When I give Gemini 2.5 Flash the 'Canonical' notation, it gets 12% accuracy. When I switch to 'Noisy-Balanced'—mathematically isomorphic, just visually different—it drops to 7%. It can't generalize.
+"But look at Gemini 3 Flash (High Reasoning). It jumps to 95% on the Noisy dataset. This is a massive signal. It indicates a phase transition in the model's ability to decouple logic from presentation.
+"This benchmark captures a capability that standard benchmarks miss: Operational Abstraction. Can the model perform a functorial mapping from a noisy input to a clean logical form?"
+
+** [1:45-2:30] The "How": Technical Rigor
+: (Visual: Scroll through your Python code/Inspect logs. Show the 'structure accuracy' metric).
+
+"I built this using the Inspect framework. It’s fully reproducible. I'm not just checking if the answer is 'void' or 'marked.' I'm measuring Structure Accuracy—did the model correctly parse the nesting depth?
+"This is computationally efficient but mathematically rigorous. Because the axioms are so simple (Law of Calling, Law of Crossing), we can generate infinite synthetic data with known ground truths, scaling from trivial to impossible difficulty. It is a 'Gym' for reasoning models."
+
+** [2:30-3:00] The Conclusion: Why Me?
+: (Visual: Your face, or the Euler Identity diagram).
+
+"I am applying to [Anthropic/OpenAI/Epoch] because I believe we need evaluations that measure understanding, not just retention. My background is unconventional—I approach AI from the perspective of formal systems and boundary mathematics.
+"I found that Opus 4.5 and Gemini 3 are beginning to 'see' the form behind the symbols. I want to build the infrastructure that measures how much further they can go."
+
+* Gemini Script Redux
+
+** Slide 1: The Problem (The "Syntax Gap")
+Visual: A split screen.
+Left: Standard LoF expression: ((a) b)
+Right: The same expression in your "Lunatic/Noisy" dialect (mismatched brackets, emojis, etc.).
+Text at bottom: "Semantic Identity vs. Syntactic Entropy"
+*** Script (0:00 - 0:45):
+"Hi, I’m Valerie Kim. I am an independent researcher working on Topological Structural Generalization.
+"We know that LLMs are excellent at semantic pattern matching—if the text looks like English or standard Python, they perform well. But do they actually understand the logic, or are they just memorizing the syntax?
+"To find out, I built DistinctionBench.
+"It takes a fundamental logical structure—Boundary Logic—and subjects it to extreme syntactic stress. I generate trillions of unique, mathematically identical expressions using 'noisy' representations—mismatched brackets, emojis, and chaotic ASCII.
+"The logic remains simple: just two axioms. But to solve it, the model must strip away the noise and reconstruct the topological tree. It tests for invariance."
+** Slide 2: The Evidence (The "Smoking Gun")
+Visual: Your Data Table (The V1.1 Results).
+Highlight Gemini 2.5 Flash (Low scores on Noisy)
+Highlight Gemini 3 Flash or Opus (High scores on Noisy).
+Text: "Phase Transition in Reasoning"
+*** Script (0:45 - 1:45):
+"Here is why this matters for the frontier.
+"I ran DistinctionBench on the latest models, and the results revealed a massive hidden brittleness.
+"Look at Gemini 2.5. When I give it the standard notation, it performs okay. But when I switch to the 'Noisy' dialect—conceptually identical—its performance crashes to nearly zero. It cannot separate the signal from the syntax. It is hallucinating reasoning.
+"But look at Gemini 3. It maintains 95% accuracy even in the noisy environment.
+"This benchmark detected a phase transition in reasoning capability that standard benchmarks like GSM8K miss. It proves that the newer model has begun to generalize the concept of containment, rather than just matching tokens."
+** Slide 3: The Engine (The "Infinite Data")
+Visual: A screenshot of your code / Inspect log / The Generator logic.
+Show that it is algorithmic, not hand-written.
+Text: "Uncontaminated. Infinite. Reproducible."
+*** Script (1:45 - 2:15):
+"The problem with current benchmarks like ARC is that they are finite and prone to contamination.
+"DistinctionBench is algorithmic. I can generate infinite synthetic data with known ground truths, scaling from trivial depth to impossible complexity.
+"I built this using the Inspect framework. It is fully reproducible, rigorous, and provides a continuous signal for training runs. It is effectively a 'Unit Test' for the Core Knowledge Prior of object permanence and distinction."
+** Slide 4: The Ask (Why You)
+Visual: Your contact info / "DistinctionBench" logo / GitHub link.
+Text: "Valerie Kim - Research Engineer"
+*** Script (2:15 - 2:45):
+"I am applying to join your team because I believe we need evaluations that measure robustness, not just retention.
+"I have the engineering skills to build the infrastructure, and the theoretical background to design the metrics that break your models—so that we can fix them.
+"Thank you."
+

@@ -305,3 +305,46 @@ And idk if I am comfortable with having that be a trade secret?
 patents broadly are fake and you could never really prove someone did or didnt use a similar internal eval suite or get training gradients off of it or the opposite of it and so on
 but yes everything is NDAed and you will not get to work on public projects once you're yoinked by a research lab
 that's why i've been livepublishing code at reflex speed and trying to leak as much of my motivations and results as possible up until whatever point in time i'm forced to stop doing that
+
+* <2026-01-16 Fri>
+sqcu: right now i'm trying to stew together some EASY things for BABY policies, like, what is uhhh sounding like uhhh one of the densest and most baroque policy modeling environments ever. to me, this is all about curriculum learning: the simplest problem is one where you can have simple situations, simple symbolic representations of them, and simple normative statements resulting from the symbolics, but where each individual step of this simple inference chain can still be done wrong. ideally you can make any part of this chain of inferences harder, and can vary the complexity of any of the chunks in both training and evaluation
+
+walerie: This is giving HEAVY Objective Information Theory / Sextuple Information Model vibes from Xu Jianfeng
+Very obscure but notable created by the head honcho of the largest informatization effort in the world, China's entire judicial system digital transformation
+The tuple winograd model, I mean
+I think a big part of what is making this difficult is the fact that like, it's really fucking hard to think about what even this formalism of distinction even means if you're trying to unformalize it 
+AFAIK the distinction of LoF is a formalization of the behaviourt of distinction at large but like, I've been long puzzled on how I would translate a natural language statement into a LoF expression that didn't go through the Boolean logic translation first
+One thing that I think is notable and important is that Laws of Form is about the notion of distinction as *perfect* continence, *perfect* containment. As if we presupposed there was a perfect continence. But all concepts sublimate or are troubled upon deep enough investigation. Only mathematical concepts are such, and as Lou Kauffman says often, "mathematics and LoF is about how a distinction would be like, if there WERE (presupposing) a distinction."
+
+sqcu: clopus is also really struggling here haha [image A: example 2]
+sqcu: i think that the clopus interpretation of perfect continence is the simple (textual? correct?) ontological reading of perfect continence as 'perfectly contains' or 'let's just reject as an ontological primitive mereologies of partial containment as first order symbols or first order distinguishing marks we use while constructing our system of rewriting rules'. like, if you wanted a leaky mereology, you can build a leaky mereology, but it would be something you construct as a hors-texte to spencer brown's legible + clarified algebra
+7:03 PM
+
+walerie: The most straightforward plain language interpretation of the mark from LoF came from The Markable Mark http://markability.net
+
+sqcu: re: markability; yeah i think this is a good auxiliary for laws of form, which i think is a genuinely confusing text if you're not reading it in the context of 'responses to wittgenstein + responses to computer science'
+
+[Image B: because we *arent* spencer-brown]
+to me, i think the most confusing thing about laws of form is that spencer immediately tells you 'psssst you can build a computer with this symbolically and it'll be really easy to describe', but the secondary sources seem to get caught in redescribing the theorems you need to *get to computers* and time-series or stateful logics. this topic is *fiendish* and definitely challenging for me, and i have to write the most contorted stuff to even claude it out, e.g. attachment selection
+
+[Image C: Example 7]
+ah here's a great one from clopus. sharing a link to the problem solving process if you're curious: claude.ai/share/c994ec26-0664-45d8-81ba-7ea1e0bb6248 
+some of the suggestions from claude opus genuinely feel on the level of adventure game puzzles (quality sign)
+
+walerie: 👀
+walerie: I was told that it was very category theory-pilled.! I suppose it is, although without any of the language shappings of category theory. I wonder if it might help to use language that is more attached to conventional mathematics. Like, for example, any arithmetic LoF expression is a tree, and any algebraic LoF expression can be described as a semilattice
+And for equations of the second order, i.e., self-referential ones w reentry, unsure.
+I'm not sure how to take George Spencer Brown's word that the idea of reentry necessarily results in indeterminacy in the case of f= ((f a) b)  where a, b = unmarked
+
+It seems there's been a recent paper about how it just is never the case. And that only the sequential iteration reading is sensible, and never the infinite reading.
+
+sqcu: hmmm... thank goodness i'm not motivated by any claims i'm trying to yoke to the equivalency of meaning of term rewriting results with some kind of physical or informational system whose behavior i'm trying to predict!
+from my perspective the spencer term rules are like, really convenient notation for describing puzzles with extreme sensitivity to variations
+
+It is a nice benefit for sure, fairly ergonomic way of transcribing and simplifying
+
+(like, the desired application here is to demonstrate the didactic teaching of a mapping from a situation, a list of rules, and a question to a scratch space which uses the rules to try to answer the question, where supplying differnet rules would lead to different answers.) that the spencer brown symbolic systems are *really good* at iterating candidate puzzles which satisfy this goal is a really interesting demonstration of a property of the axiomatic system which sort of veers off into topics not normally bound to philosophy of logic
+
+walerie: It is a nice benefit for sure, fairly ergonomic way of transcribing and simplifying
+
+sqcu: with huge benefits for the maximum complexity of a problem you can try to present in ~512 'tokens'!

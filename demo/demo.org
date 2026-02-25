@@ -1,3 +1,8 @@
+* Same problem, different outfit
+
+These inputs encode the SAME structure, but the model answers them differently.
+
+
 * Can we trust AI to be consistent?
 
 1. What is two plus two?
@@ -7,27 +12,31 @@
 
 
 * Distinction Bench: isolating abstraction
-Most evals vary the =rules=.
-DistinctionBench varies the =representation=, with constant rules.
-
-goal: does the model keep the SAME internal computation
-when only the encoding changes?
-
-  Most benchmarks are about translating between similar formats, or increasingly /tangled/ rules.
+Most benchmarks are about translating between similar formats, or increasingly /tangled/ rules.
   
 A simple idea: test *simple rules* in *many different representations*.
 
 - /Abstraction/ :: the act of ignoring *irrelevant details* and *focusing on the relevant parts.*
+  Can the model apply the same simple rules when only the encoding changes?
   
-  Without this capability, AI is closer to *pattern matching* than *reasoning*.
+  
+  : accuracy (Γ) + invariance drop across dialects (∆rep)
 
 
 * Why Distinction Bench?
-  We want our AIs *to be capable of reason*, not just to *pretend*.
-  
-  By representing the /simplest/ system in many ways, Distinction Bench helps expose and address fundamental weaknesses in abstraction.
-  
-  Blog/Report to be published at https://valeriekim.ca
+If a model can't stay consistent across equivalent encodings, you can’t trust it to:
+- follow specs across formats
+- generalize across UI / tools
+- be audited (evals lie)
+
+* What I'm doing next
+
+Ccaling DistinctionBench in =inspect-ai=:
+- more dialect families (text, 2d, images)
+- per-model invariance profiles (∆rep)
+
+if you want a *simple* benchmark that’s *hard* to overfit:
+let’s talk.
 
 
 * COMMENT Experiment Samples :ARCHIVE:

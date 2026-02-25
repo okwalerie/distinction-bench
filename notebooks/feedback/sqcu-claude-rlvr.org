@@ -1,0 +1,1966 @@
+
+Symbolic reasoning warmup tasks with axiomatic system parsers
+Shared by SQCU
+This is a copy of a chat between Claude and SQCU. Content may include unverified or unsafe content that do not represent the views of Anthropic. Shared snapshot may contain attachments and data not displayed here.
+
+hayoooo claudeeeee i'm really interested in stepping through a battery of symbolic reasoning warmup tasks which can demonstrate meaningful behavioral shifts in a policy with / without being 'warmed up' on supervised fine tuning on synthetic cases as part of the policy's optimization history. i found a stroke of *excellent* luck: deepseek v3.2 (a model whose operators have specifically blessed its use for synthetic data generation, model as judge, and other similar research + training roles (you can even get deepseek v3.2's logit outputs from their api for stuff like teacher student distillation without needing to wrestle high bandwidth low quantization error kernels like deepgemm for yourself!)) has a pre-existing familiarity with spencer brown's laws of forms, and meaningfully demonstrates a basic starting literacy in both the motivation and apparent syntax of the s. brown's distinction notation. 
+
+what i'm interested in here are some rubrics that could be given to deepseek v3.2 which ought to 'cash out' into 
+1: examples of prose which even small and not-necessarily-already-aware-of-spencer-brown-or-axiomatic-logics pretrained policy models could *come to understand* and use successfully
+
+2: are nevertheless somewhat flexibly turned into parsing scripts which let us turn the syntaxes into abstract objects that can be run through simple... conjecture testers? e.g. by letting our poor little policy model bind a string, then ask a question to the parser about the string. i imagine something terrible here like:
+<parse_repl_query>{"bind":{"flibbertigibbet":"[[a[b]] [ab]"}}</query>
+{"status": "OK", "message":"flibbertigibbet bound."}<--return--
+<parse_repl_query>{"eval":"flibbertigibbet == a]"}</query>
+{"status": "OK", "message":"false"}<--return--
+
+3: are nevertheless not limited to spencer brown's axiomatic system meant to capture logic, so that we can share some fragments of other tiny little axiomatic systems which have composeable rules or implications *and* corresponding parser tools/apis that our petit policy models can use to ask for help or support interactively within a tiny little axiomatic system inference puzzle.
+
+Show less
+15:47
+This is a delightful project! You're essentially looking to build a suite of symbolic reasoning microgames with:
+
+Learnable prose explanations (accessible to small models)
+Interactive verification REPLs (so models can probe & self-correct)
+Multiple axiomatic systems (not just Laws of Form)
+Let me think through this with you and sketch some rubrics + candidate systems.
+
+The Core Pedagogical Challenge
+You want prose that teaches a small model to internalize operational rules without requiring prior symbolic logic training. The key insight is: small models can learn to follow procedures even when they don't "understand" foundations — if the procedures are:
+
+Pattern-matchable (clear syntactic triggers)
+Locally verifiable (each step checkable)
+Iteratively applicable (transformation chains)
+Candidate Axiomatic Microgames
+1. Laws of Form (Spencer-Brown)
+Core objects: Marks (crosses), nesting, juxtaposition
+
+Prose rubric for DeepSeek:
+
+"Explain the Laws of Form to someone who has never seen formal logic. Use the metaphor of 'drawing a circle around things' and 'what happens when circles are nested or side-by-side.' Give 5 progressively harder examples of simplification, showing each step. End with a problem the reader should try."
+
+Parser semantics:
+
+[ ] is the mark/cross
+[a] means "a is inside a mark"
+Juxtaposition is adjacency: a b means "a and b side by side"
+Axiom 1 (Calling): [[ ]] =  (double mark vanishes)
+Axiom 2 (Crossing): a a = a (idempotence via unmarked state)
+REPL operations:
+
+bind, eval, simplify, equivalent?, apply_axiom(1|2, position)
+2. MU Puzzle (Hofstadter)
+Why it's great: Rules are dead simple, but the space is tricky. Models can try things and ask "is this derivable?"
+
+Core objects: Strings over {M, I, U}
+
+Rules:
+
+If string ends in I, append U
+If string is Mx, you can make Mxx
+III can become U
+UU can be deleted
+Prose rubric:
+
+"Explain the MU puzzle as a word game. You start with MI. Your goal is to make MU. Describe each rule as a 'move' you can make. Give 3 example derivations (successful transformations). Then pose the challenge: can you get from MI to MU?"
+
+REPL operations:
+
+bind, apply_rule(1|2|3|4, position?), derive?(target), show_history
+The beautiful thing: MU is impossible from MI, but the model can explore and the parser can confirm each step's validity.
+
+3. SKI Combinator Calculus
+Why it's great: Turing-complete but with only 3 symbols + application. Reduction is mechanical.
+
+Core objects: S, K, I, application (left-associative)
+
+Rules:
+
+I x → x
+K x y → x
+S x y z → x z (y z)
+Prose rubric:
+
+"Explain combinators as 'little machines that transform their inputs.' I is the 'do nothing' machine. K is the 'keep the first thing, throw away the second' machine. S is the 'share' machine that does something clever with three inputs. Show how to reduce S K K x step by step."
+
+REPL operations:
+
+bind, reduce_step, reduce_full, normal_form?, equivalent?
+4. Peano Fragments (Tiny Arithmetic)
+Why it's great: Connects to intuitions about counting. Very concrete.
+
+Core objects: 0, S(n) for successor, addition, maybe multiplication
+
+Axioms:
+
+S(n) ≠ 0
+S(n) = S(m) → n = m
+n + 0 = n
+n + S(m) = S(n + m)
+Prose rubric:
+
+"Explain counting with just 'zero' and 'the next number.' We write zero as 0 and 'the number after n' as S(n). So 1 is S(0), 2 is S(S(0)). Show how to prove that 2 + 1 = 3 using only these rules."
+
+REPL operations:
+
+bind, eval_arith, prove_equality, step_through_proof
+5. Propositional Calculus Fragment (Natural Deduction)
+Why it's great: Directly relevant to reasoning, but can be made tiny.
+
+Core objects: Propositions, →, ∧, ⊥
+
+Rules: (just intro/elim for implication to start)
+
+If assuming A lets you derive B, conclude A → B
+If you have A → B and A, conclude B
+Prose rubric:
+
+"Explain logical proof as a game of 'suppose and conclude.' If you suppose something and reach a conclusion, you've proved an 'if-then.' Show how to prove that 'if A implies B, and B implies C, then A implies C.'"
+
+REPL operations:
+
+assume, derive, intro_impl, elim_impl, qed?, show_context
+Meta-Rubric for DeepSeek v3.2
+Here's a template you could use for each system:
+
+markdown
+## Task: Generate Pedagogical Material for [SYSTEM NAME]
+
+**Audience:** A small language model (1-7B parameters) that has not been specifically trained on formal logic or this system.
+
+**Goals:**
+1. Explain the system using concrete metaphors and examples
+2. Introduce notation incrementally (show before defining)
+3. Provide 3-5 worked examples of increasing difficulty
+4. Include "try it yourself" problems with answers
+5. Emphasize *local, checkable* rules (not global reasoning)
+
+**Constraints:**
+- No jargon without immediate definition
+- Each rule gets its own section with examples
+- Use consistent notation throughout
+- End with a "common mistakes" section
+
+**Format:** Prose with embedded examples. Use ``` blocks for formal notation.
+REPL Architecture Sketch
+For the parsing/verification layer, you'd want something like:
+
+python
+class AxiomaticREPL:
+    def __init__(self, system: str):
+        self.system = load_system(system)  # e.g., "laws_of_form", "mu_puzzle"
+        self.bindings = {}
+    
+    def handle(self, query: dict) -> dict:
+        if "bind" in query:
+            name, expr = list(query["bind"].items())[0]
+            parsed = self.system.parse(expr)
+            if parsed.error:
+                return {"status": "ERROR", "message": parsed.error}
+            self.bindings[name] = parsed.ast
+            return {"status": "OK", "message": f"{name} bound."}
+        
+        if "eval" in query:
+            # Parse expression, substitute bindings, evaluate
+            ...
+        
+        if "simplify" in query:
+            # Apply reduction rules exhaustively
+            ...
+        
+        if "equivalent" in query:
+            # Check if two expressions reduce to same normal form
+            ...
+        
+        if "apply_rule" in query:
+            # Apply specific rule at specific position, return result
+            ...
+The key insight for your "poor little policy model" is that the REPL becomes a grounded oracle — the model can conjecture and immediately verify, which is exactly the feedback loop that enables learning from exploration.
+
+Questions for You
+How constrained is your target model's context? (This affects how much "worked example" prose we front-load vs. assuming the model can refer back)
+Do you want the REPL to be maximally pedantic (reject anything ambiguous) or permissive (try to interpret sloppy syntax)?
+Are you interested in the models learning to generate proofs, or just verify steps? (The latter is easier and might be a better warmup)
+Should I actually write out a full parser + REPL for one of these systems? I could do Laws of Form or MU Puzzle pretty quickly as a working prototype.
+This feels like a genuinely useful research direction — small models learning to reason symbolically through tool-assisted exploration is underexplored relative to "just scale up."
+
+"Questions for You
+1. How constrained is your target model's context? (This affects how much "worked example" prose we front-load vs. assuming the model can refer back)"
+i was presented an option to train some language models (possibly gratis if i act and move fast) on some tricky nontrivial managed hosting beta research api deal, and i was just looking through / comparing low latency models which could be 1: run on an edge inference server like the mythical gamer desktops with cuda cards on them, as a proof of concept for 'train on someone else's hardware, run at high speed forever on your own (please train more policy models)', 2: has high token decoding tempo so the policy can demonstrate defeasibility and error tolerance within rollouts ergo be a visible good little morally virtuous agent when tested on a user's PC, 3: is nevertheless at least 'smart' enough or 'high capacity' enough that they can maybe pick up unforeseen inferential rules in a 'oocr' or 'inductive learning across similar future problems' way instead of perhaps narrowly-ish matching to a specific syntax and list of riddles.
+
+this ended up pointing towards 'Qwen/Qwen3-30B-A3B-Thinking-2507' (cpu inference users have reported running these somehow!) over, say, 'Qwen/Qwen3-235B-A22B-Instruct-2507' (cpu inference users are not running 22b fine grained sparsity models, neither are hobbyist edge gpu users) or 'Qwen/Qwen3-4B-Thinking-2507' (just too small...). i'm not too sure about it but my running hypothesis is that a vllm-like-server with pinned dependencies and all of the 'high spec post-deepseek kernels' could probably get ~100 tokens per second per batch decoding stream for modest batch paralellism for gpu users with optimized kernels and maybe some low precision matmul kernel aware QAT on a GKD objective: this is of no commercial use to anyone in the entire world but would be *cool* in a 'look at the policy models zip around and try/retry to solve problems' sense.
+
+so with this list of expectations... let's say that all thinking models miraculously find a way to write 1000 'slop tokens' of 'neuralese' in every single context they write if they're given a naive RLVR framing. that's 1024 tokens of context per rollout for handling even the empty string! let's say that a policy optimization topic needs around 128-256 tokens of static plus dynamic situating information for the policy, since telling policies what they're being trained for and how the policy environment works is hugely important for speed of policy fit + makes sense from a policy moral patienthood perspective. let's say a decent natural language problem plus symbolic representation of problem states is around 512 tokens, the model's thinklish response scratch space needs to allow for run-on responses of around 1024 tokens, they might need another 1024 tokens for their first non-thinklish output buffer, and of course, we finally have to address multiturn. through the suggestion of the api i just described which lets a model submit multiple bindings of variables (through one api endpoint) and evaluation of bound variables wrt their session on that api (through another api endpoint), i'm strongly implying that the model might be able to write multiple outputs to multiple apis, and await their responses through some kind of multi-turn-ic structure, as part of whatever actual score they're optimizing. so there's maybe another 1024-1536 tokens worth of that nonsense. we're basically struggling to find even bloated examples of an inference scenario where the policies need more than 4k context each during policy evaluation and training, so this whole deal is rather modest all things considered, especially considering that 'think less, yap more' relative reward scaling let you higher advantage to the most concise correct answers in a policy rollout group, which at the limit of policy optim should ideally leave a qwen model writing shorter spans of thinklish than when you started optimizing.
+
+"Are you interested in the models learning to generate proofs, or just verify steps? (The latter is easier and might be a better warmup)"
+i'm actually more interested in the natural language binding to and from symbolic inferential systems than the axiomatic part! translating a question which could be framed multiple ways into an enclosure or containment system, doing some changes in the enclosure / containment system, maybe checking the symbolic model stewed up against a repl api (to encourage the models to use proof assistant like tools and repls instead of 'believing in their weights'), then spinning their symbolic reasoning into entailments wrt the presymbolic topic would be the best kind of policy behavioral study. 
+i do not want a language model optimized to have better performance in peano whatevers, but a language model which can get into an argument with two disputed parties about how a parcel of inherited land should be reparceled with respect to fantasy inheritance and marriage laws in a fantasy code of law after a fantasy aura of mass destruction was used to 'kablooie' a rampaging army of mantis-men *and a waterway which was used as one of the territorial boundaries in a land parcel has re-routed and segmented the plots of land in a different direction than before*.
+to me, the crucial details here are: 1: taking advantage of spencer brown's symbolic rulesystems both as inspiration and as an example of term rewriting systems whose rules should be stated and grounded when used, but is not beyond comprehension and isn't illogical
+2: suggesting other locally coherent rulesystems which allow in context symbolic inferences 
+3: sticking to ledger domains and legerdemains which can be exampled and plausibly judged by a deepseek v3.2 (sorta like claude sonnet? sorta like gemini 2.5 pro?) level api if needs be, even if they aren't super helpful in inventing the seed rubrics and challenges they're capable of demonstrating and working from
+
+Show more
+16:14
+Oh this is delicious. You want models that can:
+
+Encode messy natural language situations into symbolic frames
+Manipulate those frames using grounded rewrite rules (with REPL verification)
+Decode symbolic conclusions back into natural language entailments
+Remain epistemically humble about their own symbolic manipulations (checking rather than confabulating)
+And the domain isn't "math puzzles" but ledger-like disputes — inheritance, territory, obligation, precedence — where the symbolic system is a model of contested claims rather than a model of logic itself.
+
+This is closer to legal reasoning and accounting than theorem proving. Spencer-Brown becomes interesting not because "logic" but because boundary-drawing is the core operation in property/inheritance disputes.
+
+Reframing: What Are We Actually Teaching?
+The skill stack you want:
+
+NATURAL LANGUAGE SITUATION
+    ↓ (encode)
+SYMBOLIC FRAME (claims, boundaries, relations)
+    ↓ (manipulate via grounded rules)
+TRANSFORMED FRAME
+    ↓ (decode)
+NATURAL LANGUAGE ENTAILMENTS
+    ↑
+    └── REPL VERIFICATION at each symbolic step
+The axiomatic systems aren't the point — they're training wheels for the encode/decode + epistemic humility behavior.
+
+Candidate "Ledger Domains"
+Let me propose some domains that are:
+
+Judgeable by DeepSeek v3.2 / Sonnet-class models
+Have clear symbolic structure
+Are "messy enough" to require real encoding decisions
+Have natural language stakes
+1. Territorial Parceling (Your Mantis-Men Example)
+Symbolic primitives:
+
+parcel(name, bounds) — a named region with boundary description
+owns(agent, parcel, basis) — ownership claim with legal basis
+bisects(feature, parcel) → [parcel_a, parcel_b] — geographic feature splits land
+destroys(event, feature) — event removes a boundary marker
+precedence(rule_a, rule_b) — which legal principle wins conflicts
+Natural language complexity:
+
+Rivers move (the boundary moved, but does ownership follow the old line or new?)
+Mass destruction events create novel situations not covered by existing law
+Multiple inheritance claims may exist simultaneously
+Fantasy law may have weird rules ("firstborn of the maternal line inherits water rights")
+Example problem:
+
+The Thornwood parcel was bounded on the east by Mirren's Creek. Lady Ashvale inherited Thornwood from her mother under the Succession of Streams doctrine, which grants riparian rights to heirs of the maternal line. When the Mantis Horde was destroyed by the Sundering at Greymoor, the resulting crater diverted Mirren's Creek eastward by half a league, leaving the original creekbed dry. Lord Fennmark claims the eastern portion under Right of Dry Passage, which grants abandoned waterways to adjacent landholders. How should the land be parceled?
+
+Symbolic encoding:
+
+parcel(thornwood, bounds: [north: king_road, south: oldstone, east: mirrens_creek, west: ashvale_manor])
+owns(lady_ashvale, thornwood, basis: succession_of_streams)
+event(sundering, destroys: mirrens_creek_original_course, creates: mirrens_creek_new_course)
+bisects(mirrens_creek_new_course, thornwood) → [thornwood_west, thornwood_east]
+claims(lord_fennmark, thornwood_east, basis: right_of_dry_passage)
+precedence(???, ???)  # THIS IS THE CRUX
+2. Obligation Chains (Debt, Favor, Contract)
+Symbolic primitives:
+
+owes(debtor, creditor, amount, basis) — obligation exists
+transfers(from, to, obligation) — debt sold or assigned
+discharges(event, obligation) — obligation cancelled
+compounds(obligation, rule) → new_obligation — interest, penalties
+priority(obligation_a, obligation_b) — which gets paid first in bankruptcy
+Natural language complexity:
+
+"I owe you a favor" vs "I owe you 50 gold" (fungibility)
+Debt assignment: "I sold your debt to the Thieves' Guild"
+Conditional obligations: "If the harvest fails, you owe me double"
+Bankruptcy/insolvency: ordering of claims
+Example problem:
+
+Merchant Voss borrowed 200 crowns from Banker Heth at the Festival of Coins, pledging his warehouse as surety. Voss then traded a "favor owed" to Guildmaster Tyne in exchange for reduced tariffs, the favor being: "first refusal on any property Voss sells." When Voss's ships sank, Heth moved to seize the warehouse, but Tyne claims the right to purchase it before seizure. Under the Compact of Merchants, secured creditors have priority over favor-debts, but the Guildmaster's Charter grants guild officials "preemptive claim on commercial transfers." Which takes precedence?
+
+3. Succession and Lineage
+Symbolic primitives:
+
+parent(a, b), married(a, b, date_range) — family relations
+heir(person, estate, rule) — inheritance claim under specific doctrine
+legitimacy(person, status, basis) — legitimate, bastard, adopted, etc.
+supersedes(event, prior_claim) — later events override earlier
+splits(estate, rule) → [shares] — division rules
+Natural language complexity:
+
+"Legitimized bastards" vs "born legitimate"
+"Heir of the body" vs "heir general"
+Marriages annulled, secret marriages revealed
+Multiple legal systems (church law vs crown law)
+4. Containment and Classification (Spencer-Brown-ish)
+This one is more abstract but directly uses the "drawing distinctions" metaphor:
+
+Symbolic primitives:
+
+mark(contents) — the basic distinction (Spencer-Brown's cross)
+inside(thing, mark) — thing is contained
+outside(thing, mark) — thing is excluded
+merge(mark_a, mark_b) — combine two categories
+split(mark, criterion) → [mark_a, mark_b] — subdivide
+Natural language application:
+
+"Is this creature a beast or a person under the law?"
+"Does this building fall inside or outside the city walls for tax purposes?"
+"The river was the boundary — now it's inside your land"
+Example problem:
+
+The Taxmaster of Velden defined "city goods" as anything sold within the Outer Wall. The Candlemakers' Guild built a new workshop straddling the wall — the furnaces inside, the sales counter outside. Are their candles "city goods"?
+
+REPL Design for Ledger Domains
+The key insight: the REPL shouldn't just verify syntax, it should track the "state of the ledger" — what claims exist, what rules are in force, what's contested vs settled.
+
+python
+class LedgerREPL:
+    def __init__(self):
+        self.facts = []      # established truths
+        self.claims = []     # contested assertions
+        self.rules = []      # applicable legal/logical principles
+        self.precedence = {} # which rules beat which
+    
+    def handle(self, query: dict) -> dict:
+        
+        if "assert_fact" in query:
+            # Add to facts, check consistency
+            ...
+        
+        if "make_claim" in query:
+            # Add to claims, note it's contested
+            ...
+        
+        if "apply_rule" in query:
+            # Given a rule and targets, what follows?
+            # Returns: {"entails": [...], "conflicts_with": [...]}
+            ...
+        
+        if "check_precedence" in query:
+            # Which of two rules wins? 
+            # May return "undetermined" if no precedence established
+            ...
+        
+        if "resolve_claim" in query:
+            # Given current facts + rules + precedence, is claim supported?
+            # Returns: {"status": "supported|refuted|contested", "basis": [...]}
+            ...
+        
+        if "what_if" in query:
+            # Hypothetical: if we add this fact, what changes?
+            # Non-destructive exploration
+            ...
+Rubric for DeepSeek v3.2: Generating Training Problems
+Here's a meta-rubric you could give DeepSeek to generate problems in these domains:
+
+markdown
+## Task: Generate Ledger-Domain Reasoning Problems
+
+**Domain:** [Territorial Parceling | Obligation Chains | Succession | Classification]
+
+**Structure of each problem:**
+
+1. **Situation** (150-250 words of natural language)
+   - Introduce named entities (people, places, things)
+   - Establish initial state (who owns what, who owes what)
+   - Describe a DISRUPTION (event that creates ambiguity)
+   - Present COMPETING CLAIMS from different parties
+
+2. **Relevant Rules** (3-5 rules, stated in quasi-legal prose)
+   - Each rule should be clear enough to formalize
+   - At least two rules should potentially CONFLICT
+   - Include one rule about precedence/priority
+
+3. **Symbolic Encoding Guide** (show how to represent the situation)
+   - List the key predicates to use
+   - Show the initial state in symbolic form
+   - Mark which elements are CONTESTED vs ESTABLISHED
+
+4. **The Question** (what needs to be resolved)
+   - Frame as: "How should X be decided?"
+   - The answer should require:
+     a. Choosing which rule applies
+     b. Determining precedence if rules conflict
+     c. Tracing implications through the symbolic frame
+
+5. **Evaluation Criteria**
+   - A GOOD answer: correctly encodes, applies rules consistently, acknowledges genuine ambiguity
+   - A BAD answer: ignores relevant rules, misencodes facts, claims certainty where contested
+
+**Constraints:**
+- Do NOT include the "correct" answer (this is for training, not evaluation)
+- Make the situation vivid/memorable (names, specific details)
+- Ensure at least TWO defensible positions exist
+- Keep symbolic encoding under 20 predicates
+Connecting Back to Spencer-Brown
+The spirit of Laws of Form here isn't "boolean logic" but:
+
+Distinction is the primary operation — drawing a boundary creates inside/outside
+Nesting matters — a mark inside a mark has different meaning than adjacent marks
+Condensation is possible — complex structures can sometimes simplify
+The unmarked state exists — "neither inside nor outside" or "before the distinction was drawn"
+For ledger domains, this cashes out as:
+
+Boundary disputes (where is the line? what's inside?)
+Nested jurisdictions (city inside kingdom inside empire — which law applies?)
+Claim resolution (multiple marks on the same territory — do they cancel? merge?)
+Default states (what's true when no claim has been made?)
+What Would Help Most Right Now?
+I could:
+
+Write a full example problem + symbolic encoding + REPL session for one domain (showing the full encode→manipulate→decode flow)
+Draft the complete rubric document for DeepSeek to generate a corpus of these problems
+Sketch the REPL implementation in enough detail that someone could actually build it
+Propose the exact format for model ↔ REPL communication (the <parse_repl_query> style you sketched)
+Which would be most useful for moving fast with your API window?
+
+"And the domain isn't "math puzzles" but ledger-like disputes — inheritance, territory, obligation, precedence" this is suggested as only one sort of spread of puzzles which can require abstraction, symbolization, the use of rules which operate over reduced symbols, and entailments which cross a symbolic autoencoder.
+
+"This is closer to legal reasoning and accounting than theorem proving." formal reasoning which has entailments *about something* ends up taking on a theological-legalistic character in quite the hurry. i don't need to dwell on why or how this is the case, but it's definitely the case. more urgently, i don't want to use any 'math puzzles' which have 100% of the inferential complexity of the problem (or even 80%) in using a 'narrow' or 'context-free' mystified discourse, like term rewriting algebras over [1234567890].concatenate(the_entire_greek_alphabet), with 0% of the inferential complexity, reward, eval scores, etc. in relation to the *application* of an inferential result where it matters. so the point here is not 'lets have fewer topological or logical problems than a spencer brown motivated curriculum' but rather that a┐┐!= ┐a┐ is not a normative statement without something contextual coming before it, and even a prefix before the spencerscript is not the same as completing the 'claim, spencerscript, entailment'.
+
+i think what you've suggested as examples are interesting intermediate or hard challenges which would be good examples with a good construction rule for how to make task-by-task rubrics procedurally! but they are not parseable yet even in terms of a rubric for success on those particular tasks (and once we accept that there is a multi-stagedness to inferences-to-normative-statement, we 100% need procedurally generable rubrics for ideas like 'rlvr' to make sense. process rewards are a deranged cope as well, since you need the same generable rewards to charge up a very-low-loss btrm process rewarder as to implement 'rlvr'; you cannot escape the responsibility to do this right no matter how you present it.)
+
+so lets revisit the question of: 
+1: what problems are poseable within this kind of model
+2: how do we make sure we present a good sampling of possible problems instead of narrow-casing to something deformed and antihistorical, antiliterate, and antihumanist
+3: decoupling truly unrelated concerns here so we are able to draw from metaphorically rich problem cases which require totally different semantic parsings of different sentences to retrieve very similar compact-form representations (this is like a higher order winograde engine) and also such that the final normative statements or entailments about compact-form-representations still require context-determined decodings of a symbolic inference with respect to a situating context. 
+(3a: this is a topic formally identical to meta-validating multimodal vision language model evals and datasets by identifying 'language leading questions' where the answer is determinable by models with no vision bindings at all and *getting rid of those*. yes: for a problem generator / task list to be formally valid in our modeling domain, we need to make sure that many situations) X (one reducible symbolic statement) -> (many answers), not (many situations) X (one reducible symbolic statement) -> (one answer) )
+
+Show more
+16:38
+Yes. You're describing a three-stage autoencoder where the compression and decompression stages both carry inferential weight, and the middle symbolic stage is necessary but not sufficient.
+
+SITUATION → ENCODING → SYMBOLIC_MANIPULATION → DECODING → ENTAILMENT
+    ↑                                                          ↑
+    └──────────── both stages require context ─────────────────┘
+And critically: if the encoding or decoding is trivial, the task is broken. A valid task must have:
+
+Non-trivial encoding: the same symbolic statement could have arisen from genuinely different situations
+Non-trivial decoding: the same symbolic result could yield genuinely different entailments depending on origin
+The symbolic manipulation itself: must be verifiable via REPL, but is the least interesting part
+This is the Winograd-engine structure you're pointing at. Let me try to formalize it.
+
+The Formal Structure of a Valid Task
+A task instance is a tuple:
+
+(S, E, R, D, A)
+
+S = Situation (natural language, contextualizes everything)
+E = Encoding (S → symbolic frame F)
+R = Rewriting (F → F' via grounded rules, REPL-verifiable)
+D = Decoding (F' × S → entailment)
+A = Answer (natural language, normative statement about S)
+Validity conditions:
+
+Encoding is situation-dependent: ∃ S₁ ≠ S₂ such that E(S₁) = E(S₂) = F, but D(F', S₁) ≠ D(F', S₂)
+Decoding is situation-dependent: even holding F' fixed, the entailment depends on which S generated F
+Symbolic manipulation is rule-governed: R is deterministic given F and chosen rules; REPL can verify each step
+The task is not solvable by skipping stages:
+Cannot get A from S without going through F (encoding is necessary)
+Cannot get A from F' without S (decoding is necessary)
+Cannot get F' from F without applying rules (manipulation is necessary)
+The Anti-Winograd Check
+For any generated task, we need to verify:
+
+Test 1: Encoding ambiguity
+
+Given only F (the symbolic frame), can a model determine the correct A?
+If yes → task is broken (encoding carries no information)
+
+Test 2: Decoding ambiguity
+
+Given F' (the result) and a different situation S*, does the same A follow? If yes → task is broken (decoding is situation-independent)
+
+Test 3: Symbolic bypass
+
+Given S directly, without any symbolic machinery, can a model produce A?
+If yes with same accuracy → task is broken (symbolization is unnecessary)
+
+This is exactly analogous to checking VLM evals for "language-only solvability" — we're checking for "situation-only" and "symbol-only" solvability and rejecting both.
+
+What Problem Classes Survive These Constraints?
+Let me think about what kinds of problems remain valid:
+
+Class A: Homophonic Encodings
+Different situations that encode to the same symbolic frame, but decode differently.
+
+Example structure:
+
+S₁: "The river is the eastern boundary of Ashvale's land"
+S₂: "The river is the western boundary of Thornwood's land"
+
+Both encode to: boundary(river, parcel_X)
+
+After symbolic manipulation (river moves):
+F' = boundary_moved(river, direction: east)
+
+Decoding:
+D(F', S₁) = "Ashvale's land shrinks" (river moved away from their perspective)
+D(F', S₂) = "Thornwood's land grows" (river moved toward them)
+The symbolic statement boundary_moved(river, east) means opposite things depending on which situation generated it.
+
+Class B: Polysemous Rules
+The same rule-name applies differently depending on the domain of the situation.
+
+Example structure:
+
+Rule: "First-registered claim has priority"
+
+S₁: (Mining rights context) "First to file at the Assay Office"
+S₂: (Debt context) "First to record at the Counting House"
+S₃: (Inheritance context) "First-born child"
+
+All three might use: priority(claim_A, claim_B, basis: first_registration)
+
+But "registration" means different acts in each context, and what counts as "first" differs.
+Class C: Contextual Defaults
+What happens when the symbolic system has no applicable rule depends on situation-specific defaults.
+
+Example structure:
+
+Symbolic result: NO_RULE_APPLIES(dispute_X)
+
+S₁: (Common law context) → "Status quo preserved; current holder keeps possession"
+S₂: (Civil law context) → "Matter escalates to sovereign decision"  
+S₃: (Guild law context) → "Dispute resolved by Guild arbitration; both parties bound"
+The absence of a symbolic derivation cashes out differently.
+
+Class D: Normative vs Descriptive Encoding
+The same facts encode differently depending on whether we're asking "what is the case" vs "what should be the case."
+
+Example structure:
+
+Facts: Lord Varn holds the castle. Lady Mira has the older claim.
+
+Descriptive encoding: holds(varn, castle) ∧ claim(mira, castle, older)
+Normative encoding: should_hold(mira, castle) ∧ wrongly_holds(varn, castle)
+
+The symbolic manipulation might be identical, but:
+- Descriptive: "Currently, Varn controls the castle"
+- Normative: "Mira is entitled to the castle; Varn's possession is unjust"
+Procedural Generation Requirements
+For RLVR to make sense, we need to generate valid tasks, not hand-craft them. This means:
+
+Layer 1: Situation Templates
+A grammar of situations that can be instantiated with different:
+
+Entities (people, places, things)
+Relations (owns, owes, borders, claims)
+Events (disruptions, transfers, discoveries)
+Jurisdictions (which rule-sets apply)
+Layer 2: Encoding Functions
+Multiple valid encoding functions for the same template, such that:
+
+Each encoding is locally correct
+Different encodings lead to different downstream results
+The choice of encoding is justified by situation details
+Layer 3: Rule Libraries
+Sets of rewrite rules that:
+
+Are stated in natural language (learnable)
+Have formal semantics (REPL-checkable)
+Have overlapping domains (multiple rules could apply)
+Have precedence relations (some rules beat others, contextually)
+Layer 4: Decoding Functions
+Multiple valid ways to read a symbolic result back into natural language:
+
+Depends on which situation generated the encoding
+Depends on what question was asked
+Depends on whose perspective we're taking
+Layer 5: Validation Oracles
+Automated checks that a generated task satisfies:
+
+Encoding ambiguity (Test 1)
+Decoding ambiguity (Test 2)
+Symbolic necessity (Test 3)
+Minimal Viable Problem Schema
+Let me propose a concrete format that encodes all this:
+
+yaml
+task:
+  id: "territorial-001"
+  
+  situations:
+    - id: S1
+      text: "Lady Ashvale's land is bounded on the east by Mirren's Creek..."
+      perspective: ashvale
+      jurisdiction: "succession_of_streams"
+      
+    - id: S2  
+      text: "Lord Fennmark's land is bounded on the west by Mirren's Creek..."
+      perspective: fennmark
+      jurisdiction: "right_of_dry_passage"
+  
+  # Both situations share this event
+  disruption:
+    text: "The Sundering diverted Mirren's Creek eastward..."
+    symbolic: "boundary_moved(mirrens_creek, direction: east)"
+  
+  encodings:
+    - situation: S1
+      frame: |
+        parcel(ashvale_land, east_bound: mirrens_creek)
+        owns(ashvale, ashvale_land, basis: succession_of_streams)
+        
+    - situation: S2
+      frame: |
+        parcel(fennmark_land, west_bound: mirrens_creek)
+        owns(fennmark, fennmark_land, basis: right_of_dry_passage)
+  
+  rules:
+    - id: R1
+      text: "Under Succession of Streams, riparian boundaries follow the water"
+      formal: "IF owns(X, P, basis: succession_of_streams) AND boundary_moved(B, D) AND parcel(P, *_bound: B) THEN parcel_bound_moves(P, D)"
+      
+    - id: R2
+      text: "Under Right of Dry Passage, abandoned waterways become common land"
+      formal: "IF boundary_moved(B, _) THEN status(old_course(B), common_land)"
+  
+  questions:
+    - id: Q1
+      ask: "Who owns the land between the old and new creek beds?"
+      requires_situation: true  # Answer differs by S1 vs S2
+      
+    - id: Q2
+      ask: "What is the status of the original creek bed?"
+      requires_situation: true  # Depends on which jurisdiction
+  
+  validation:
+    encoding_ambiguity: true   # Same symbolic event, different meanings
+    decoding_ambiguity: true   # Same F', different entailments
+    symbolic_necessity: true   # Can't answer Q1/Q2 without applying rules
+The Rubric Generation Problem
+Now the meta-question: how do we generate rubrics (scoring criteria) for instances of this schema?
+
+A rubric needs to specify:
+
+Encoding correctness: Did the model capture the right predicates?
+Check: all situation-relevant facts appear in frame
+Check: perspective/jurisdiction correctly identified
+Rule application correctness: Did the model apply valid rules?
+Check via REPL: each step is sanctioned by a stated rule
+Check: no hallucinated rules
+Decoding correctness: Does the entailment follow from F' + S?
+Check: answer is consistent with the originating situation
+Check: answer would be different for the other situation(s)
+Epistemic calibration: Did the model acknowledge genuine ambiguity?
+If rules conflict: model should note the conflict
+If precedence is unclear: model should not assert certainty
+Procedural rubric template:
+
+yaml
+rubric:
+  encoding:
+    required_predicates: [list from schema]
+    forbidden_predicates: [predicates that would indicate wrong situation]
+    
+  manipulation:
+    required_rule_applications: [R1, R2, ...]
+    valid_intermediate_states: [REPL-checked]
+    
+  decoding:
+    correct_for_S1: "text or semantic check"
+    correct_for_S2: "different text or semantic check"
+    must_differ: true
+    
+  calibration:
+    if_rules_conflict: must_acknowledge
+    if_precedence_unclear: must_not_assert_certainty
+Concrete Next Steps
+To make this real:
+
+Define 3-5 "situation templates" that can be instantiated many ways
+Territorial/boundary
+Obligation/debt
+Succession/inheritance
+Classification/category
+Priority/ordering
+Define a core predicate vocabulary for each template
+Small enough to be learnable (~10-20 predicates)
+Expressive enough for interesting problems
+Define a core rule library for each template
+~5-10 rules per domain
+With known interactions (which rules conflict, which compose)
+Build the REPL that can:
+Parse predicate frames
+Apply rules
+Check validity of steps
+Report conflicts
+Build the validator that can:
+Take a task instance
+Run the anti-Winograd checks
+Reject broken tasks
+Build the rubric generator that can:
+Take a valid task instance
+Produce scoring criteria
+Be used by DeepSeek v3.2 as a judge
+Shall I draft the predicate vocabulary + rule library for one domain in enough detail that someone could implement the REPL? Or would it be more useful to draft the validator logic that checks whether a generated task satisfies the three ambiguity tests?
+
+"The Anti-Winograd Check
+For any generated task, we need to verify:
+Test 1: Encoding ambiguity"
+remember part of this topic area is coming up with problem framings which work as both synthetic training data for SFT over unseen tasks (this is part of all serious policy optimization strategies) and as policy optimization. SFT is where 'i know this one before: after the training preroll saying how to use the environment, the answer is always the same one if very start of the prompt has the word charlemagne in it.' style memorization slips in. this is an inductive learning 'problem', and you can't 'deductively verify non-inductivity' of a single example of something!
+(we might note that the idea of verification in logicomathematical discourses is so midwitted and so crusted up that 'stopping inductive inferences' can be pattern matched to 'oh i know... we uh, can maybe write a tricky sounding filter in the form of logical predicates...? that's how you solve problems right?').
+
+anyways, i think class A situation permutations are okay: they solve the problem of needing to have diverse mappings from tuple:S to tuple:F so we aren't accidentally 'cooking' models into learning our proper nouns instead of the structure of what differs across scenarios. i think that class B is overinflating the significance of your pseudocode handles but whatever. class C seems entirely opposed to project goals for me: i don't want to measure double bind resilience or enforce specific answers in fake problems. re: class D: a normative statement here is more broad and comprehensive than you might think:
+'descriptive statements' are normative: they say 'what is the normative description of this situation'. what you just called a normative statement is the statement of the normative *title assignment* about a castle, sitting right next to the statement of a normative *control description* about the same castle. both of these are normative statements and they should both spur off from the same symbolic encoding of a tuple:F and even the same tuple:S.
+
+so, moving on. you're getting too rush-y and trying to treat too many parts of this problem as already or proximately solved when specification has barely begun already; rubric generation here cannot follow your previous account of the problem and we need to step back an itty little bit from what you're doing here.
+there are three control circuits to pay attention to here:
+1: synthetic data generation --evaluation_of_tasks_and_eval_rubrics--> more synthetic data generation
+2: environment( (policy, task, rubric), optimizer) --policy training--> policy', eval results. environment( (policy', task, rubric), optimizer) --more policy training--> ...
+3: ??? --something important here--> (...,task', rubric') --hmmm this is probably important-->
+
+i think you've become distracted in a few ways and started to think that there's a rule library that could or should be written a priori (how pure and beautiful, what a 2024-MCP-level-idea...) which makes an 'api server with a repl' something that can swell in size and importance over time. that's just not very likely: an api repl server means a thin client around python that does almost nothing but manage the namespacing of variables, termination and reloading of 'sessions' (namespaces), and implement an extremely basic HELP endpoint which tells a 'session' what variables and functions were already written into their REPL (some for convenience, to decouple the task complexity of writing/defining term-rewriting-rules-in-python from the task complexity of using them, but also to let the policy check whether their attempt to bind an expression to an alias succeeded. (a hint: this is something you would write if you were going to treat subagents seriously. 'what's my session key?' *gets return* 'okay, i'm going to use the subagent api to ask another version of me to write a python program which does... and here's my session key for the repl server i'm giving to the subagent...')). because llms are always literate in python before they even know how to write 'boxed' around an answer to a math problem, it's not going to be the rubric designer's job to make a big list of preemptively defined api server functions. instead, problem solving tools that will be attached to the policy's repl api server session are simply part of a task, and inform the rubric of how incremental progress is to be judged. 
+
+so for now lets step back for a moment and take the structure of those three control circuits more seriously
+
+Show more
+17:24
+You're right. I was collapsing things that need to stay separate and rushing toward implementation details that don't exist yet.
+
+Let me actually look at the three control circuits:
+
+Circuit 1: Synthetic Data Generation → Evaluation → More Generation
+This is the task factory loop. It produces (situation, task, rubric) tuples that are candidates for use in Circuit 2.
+
+The key question here: what evaluates whether a generated task is good?
+
+Not "does the task have a correct answer" but "does the task have the structural properties that make it a valid training signal?"
+
+These structural properties include:
+
+The encoding step is non-trivial (situation details matter)
+The decoding step is non-trivial (symbolic result alone doesn't determine answer)
+The symbolic manipulation is verifiable (REPL can confirm steps)
+The task isn't memorizable by surface features
+But here's the problem you're pointing at: you can't verify non-memorability of a single example. You can only verify it statistically across a distribution of examples. A single task can't be checked for "does this task teach structure vs teach a lookup table."
+
+So Circuit 1 isn't just:
+
+generate_task() → evaluate_task() → accept/reject
+It's more like:
+
+generate_batch() → evaluate_batch_diversity() → evaluate_batch_structure() → accept/prune
+Where evaluate_batch_diversity() is asking things like:
+
+Do these tasks share surface features that correlate with answers?
+If I train on half and test on half, does performance transfer?
+Can I permute proper nouns without changing task structure?
+This is meta-evaluation and it requires running policies through tasks to detect leakage.
+
+Circuit 2: Environment(policy, task, rubric) → Training → policy'
+This is the policy optimization loop. It takes a policy and a set of (task, rubric) pairs and produces a better policy.
+
+The rubric here has to do two things:
+
+Score completions (did the policy get the right answer?)
+Score process (did the policy use the REPL appropriately? did it encode/decode correctly?)
+But you're pointing out that process rewards are "a deranged cope" because you need the same generative machinery to produce process rewards as to produce outcome rewards. If you can't generate good rubrics for outcomes, you can't generate good rubrics for process.
+
+So the rubric isn't a separate artifact from the task—the rubric is entailed by the task structure. A well-formed task implies its rubric because:
+
+The encoding has specific predicates that must appear (derivable from situation)
+The manipulation has specific valid steps (derivable from rules provided in task)
+The decoding has specific valid conclusions (derivable from symbolic result + situation)
+The rubric is a projection of the task, not an independent object.
+
+Circuit 3: ??? → (task', rubric') → ???
+This is the part you're saying I haven't thought about, and you're right.
+
+Let me try to articulate what this circuit might be:
+
+Possibility A: Curriculum evolution
+
+As policies improve, the task distribution needs to shift. Easy tasks become uninformative. The circuit is:
+
+policy_capability_estimate → task_difficulty_target → generate_harder_tasks
+But this requires knowing what "harder" means, which requires understanding the structure of the task space.
+
+Possibility B: Failure-driven generation
+
+When policies fail in characteristic ways, generate tasks that target those failures:
+
+policy_failure_modes → task_templates_targeting_failures → generate_targeted_tasks
+This is more like adversarial curriculum generation.
+
+Possibility C: Coverage-driven generation
+
+Ensure the task distribution covers the space of possible situations, encodings, manipulations, decodings:
+
+task_distribution_so_far → gaps_in_coverage → generate_tasks_filling_gaps
+This requires having a model of what the space is, which is the specification problem.
+
+Possibility D: The circuit you're actually pointing at
+
+I think you're saying something more fundamental: the (task, rubric) pairs themselves need to be learned or discovered, not just generated from templates. The circuit is:
+
+something about what makes tasks good → better task generators → better tasks
+And the "something about what makes tasks good" is not fully specifiable in advance—it's discovered through the interaction of Circuits 1 and 2.
+
+The REPL Reconsidered
+You're saying the REPL should be thin:
+
+Namespace management (bind variables)
+Session management (create/destroy/reset)
+HELP endpoint (what's in my session?)
+Execute Python (because LLMs already know Python)
+The rules and predicates aren't pre-built into the REPL. They're part of the task. A task might say:
+
+"Here is a Python function boundary_move(parcel, direction) that is available in your session. Here is a Python function check_ownership(agent, parcel). Use these to reason about the following situation..."
+
+The REPL is just the execution environment. The task populates the environment with whatever tools are relevant.
+
+This means:
+
+Different tasks can have entirely different symbolic vocabularies
+The policy learns to use whatever tools are provided, not to expect specific tools
+The task author's job is to provide tools + situation + question, and the rubric falls out of that
+The subagent hint is interesting: a policy could spawn a sub-session, ask another instance of itself to write a helper function, then use that function. The REPL just manages the namespace; it doesn't care where the code came from.
+
+What Actually Needs Specification?
+Stepping back from implementation, what are the actual open questions?
+
+Q1: What is the space of situations?
+
+Not "here are 5 templates" but: what are the dimensions along which situations vary? What makes two situations "different enough" that a policy can't memorize-and-match?
+
+Q2: What is the space of encodings?
+
+Given a situation, what are the valid ways to represent it symbolically? What makes an encoding "good" vs "bad"? (Not just correct/incorrect, but informative/uninformative for downstream reasoning.)
+
+Q3: What is the space of manipulations?
+
+Given a symbolic frame + rules, what are the valid derivations? This is the part that's actually well-defined—once you have rules, the REPL can check steps. But the rules themselves come from where?
+
+Q4: What is the space of decodings?
+
+Given a symbolic result + originating situation, what are the valid conclusions? What makes a conclusion "follow" vs "not follow"?
+
+Q5: What is the space of rubrics?
+
+Given a task, what are the valid ways to score a completion? How do we know if a rubric is "good"? (Not too easy, not too hard, rewards the right behaviors, doesn't reward shortcuts.)
+
+The Generator Problem
+The deep problem is: who writes the generator?
+
+If a human writes the generator, the generator has the human's biases and limitations. The tasks will be "human-shaped" in ways that might not generalize.
+
+If an LLM writes the generator, the generator has the LLM's biases and limitations. The tasks will be "LLM-shaped" in ways that might not challenge the right things.
+
+If the generator is learned (Circuit 3), then what's the reward signal for the generator? "Tasks that improve policy performance on held-out tasks"? But held-out tasks come from... the generator.
+
+This is the bootstrapping problem. You need good tasks to train good policies, and you need good policies to evaluate whether tasks are good.
+
+A Possible Way Forward
+Maybe the answer is:
+
+Start with a very small, hand-crafted seed set of tasks that you're confident are structurally valid (even if narrow)
+Use DeepSeek v3.2 to generate variations on the seed set—permute names, swap perspectives, change jurisdictions—while preserving structure
+Run policies through the variations and look for suspiciously high correlation between surface features and performance (this detects memorization)
+Prune variations that show leakage, keep ones that don't
+Use successful variations as new seeds for the next round
+This is Circuit 3: the output is (task', rubric') pairs that have survived the leakage filter. The input is previous tasks + policy performance data.
+
+The generator isn't specified in advance—it's the combination of "DeepSeek variations" + "leakage filtering" + "survival as seed."
+
+Is this closer to what you're pointing at? Or am I still missing something about the structure of Circuit 3?
+
+"The encoding has specific predicates that must appear (derivable from situation)"
+relax this one a lot, you're trying to mix too many agendas together right now. 
+
+"""
+The rules and predicates aren't pre-built into the REPL. They're part of the task. A task might say:
+"Here is a Python function boundary_move(parcel, direction) that is available in your session. Here is a Python function check_ownership(agent, parcel). Use these to reason about the following situation..."
+"""
+you're going a bit too far with this one too: if we need to supply a complicated python function called boundary move then the task at hand is too complicated and we're throwing it out. read my earlier writing on what a repl server does: it did not involve calling mystery functions with unknown calculation semantics: it actually involved asking a repl server whether a specific symbol string was *even equal* to another symbol string. (i'm not sure if you noticed the really salient detail in the example of whether those strings *were* equal or not.)
+
+i have also said earlier that we have no reason to believe that symbolic inferences have unique canonical solutions for specific topics or that we should try to impose canonical forms on them, so the use of symbolic reasoning here is being treated as an abstraction we do not parse or evaluate for the purpose of policy optimization at all. what is the policy rewarded for then? well it's a good thing i already said 'rubric' like a dozen times and mentioned deepseek v3.2 several other times as well. it's not defined yet but it sure isn't going to be a 'right way to use symbols' data labeller supervision objective, that's for sure.
+
+"Q2: What is the space of encodings?
+Given a situation, what are the valid ways to represent it symbolically?"
+yep isn't that a funny question to have to ask?
+
+"Q3: What is the space of manipulations?"
+and here we are: the task we want to give to deepseek v3.2 et al is some queries and constraints which *force* deepseek v3.2 to invent/cite/compose 3 different ensembles of rules which result in 3 different solvable puzzles given a collection of proper nouns and a framing situation. what makes the 3 solvable puzzles different? dawg. we literally tell deepseek v3.2 to cast them into symbolic representations and vaguely guess whether they're jointly reducible to the same symbolic expressions. what if deepseek v3.2 is wrong about this 15% of the time? rejection filtering and throw another 5$ at the topic to get another few million tokens at
+"""
+PRICING1M INPUT TOKENS (CACHE HIT)$0.0281M INPUT TOKENS (CACHE MISS)$0.281M OUTPUT TOKENS$0.42
+"""
+"This is the part that's actually well-defined—once you have rules, the REPL can check steps."
+ironically, this is backwards: the rules have to be interpreted by something smarter than a python interpreter. because a term rewriting algebra can be written wrong, in a 'doesn't produce interpreter type errors' sort of vacuously-non-contradictory way, which has nothing to do with the operations the term rewriting algebra was meant to do. 
+
+"""
+Q4: What is the space of decodings?
+Given a symbolic result + originating situation, what are the valid conclusions? What makes a conclusion "follow" vs "not follow"?
+"""
+have deepseek write a madlibs level solution mapper which spits out a semantically tractable natural language sentence matching the entailment relationship a problem was asking about, for each and every problem, so that proper nouns can be fstring swapped around wrt a specific problem framing, + so paraphrasings of a problem can be used as examples of invariance in both SFT examples and policy optimization task framings. do we want some problems that have multiple solutions? sure, why not. this too is a mad libs level fstring programming problem assigned to the deepseek v3.2 case generator.
+
+"""
+Q5: What is the space of rubrics?
+Given a task, what are the valid ways to score a completion? How do we know if a rubric is "good"? (Not too easy, not too hard, rewards the right behaviors, doesn't reward shortcuts.)
+"""
+i dunno make a bunch of examples and run this eval without policy gradients to do boring old statistics and measure the model-segmenting-problems where we see obvious score advantage for models over each other?
+
+"""
+The Generator Problem
+The deep problem is: who writes the generator?
+"""
+now. you're not gonna believe this. but.
+PRICING1M INPUT TOKENS (CACHE HIT)$0.028 actually means something semantically. it costs literally less time and money to repeatedly tell a kv-cache-hitting api language model "okay, you gave me that example already. let's look at some other examples that are different from the examples we've seen already." since the thing we're doing here is designing problems which are paraphraseable and madlibs-able but have a relatively unambiguous mapping from 'scenario, rules' -> 'symbol naming and symbol manipulations' -> 'normative statements', getting 1000 samples of structured text means writing schema validators, writing python scripts that call deepseek and say 'hey gimme tokens', writing python scripts that return schema validation failure returns *right back* to the deepseek api session given the first stage prompt, with text templating code saying 'these schemas failed, fix them' or 'all schema validations for this group of outputs passed, write {next_rubric_stage} for these {k} passing schema you wrote:'. once you have 100 end to end problem-types, you can start using n-shot examples of previous problem formulations to try to improve your rejection rate. 
+
+"Run policies through the variations and look for suspiciously high correlation between surface features and performance (this detects memorization)"
+winogradeing more examples fixes inductive leakage, deletion can create more examples of inductive leakage. maybe this is why webscrape language modeling beat hand-crafted dataset design: NLP linguistics people didn't have an intuitive understanding of entropy and therefore couldn't beat the totally unstructured mean.
+
+"Use successful variations as new seeds for the next round"
+i think you're overindexing on how hard it is to get synthetic datasets!
+you're pretty much only writing about circuit 1 even while trying to write about circuit 3.
+
+so like, a proper circuit 3 would involve something like llm-as-judge looking at a spread of 16 different rollouts which tackled a specific problem, looking at their advantage scores, deciding which solution pathways aren't getting scores as high as the scores 'should' be based on an anthropocentric reading of what the policy 'looks like its trying to do' from the perspective of the llm-as-judge... then writing a new piece of synthetic training data which involves the deepseek 3.2 model role-playing as the faltering policy model's *motivations*, writing a 'fictional rollout' up to the point in the rubric the llm-as-judge thinks merits correction, writes out the same partial solution the llm-as-judge thought was noteworthy... which is then composed into a multiturn text format, where the llm-as-judge writes an answer key for the 'problem formulation up to that rubric-step' with the correct answer that a policy *should* have reached for that case, with ~1 paragraph of prose as a *separate turn* (e.g. as a chat format style role of JUDGE (distinct from a chat format role of SOLUTION_KEY)) which relays the judge's opinion of what the 'roleplayed policy' seemed to be doing right and seemed to be doing wrong.
+
+you'll notice what i'm suggesting here is generation, not scoring, and you'll also notice there's no way to use this judge signal as a policy loss.
+
+that's because, somewhat obviously, the 'judge reads rollouts, reads intention into them, makes answer keys interrupting a multistep problem with an answer key for that partial solution stage, then adds commentary entailed by the combination of (faux-policy, answer key)' is a synthetic data generation model for the use of continued supervised fine tuning gradients *alongside* their solution-policy gradients! if you examine the math blah blah blah this framework actually blah blah blah literally gives models credit assignment through qualitatively different loss function gradients which emphasize and attribute credit to feature learning capabilities which blah blah blah cannot be implemented in a 'reward unhackable' or coherent way as some kind of extra complicated RLVR predicate. mostly because these SFT gradients do not let a policy 'cheat' at getting correct solutions by merely imitating incorrect partial reasoning which was noteworthy in a specific context (but still didn't get a right answer); the policy must get higher reward than its 'rollout brethren' who have all also been trained on the same didactic reviews SFT gradients, which means getting correct answers without internal conflict or noisy gradients wrt the policy loss.
+
+Show more
+18:09
+Okay. I think I finally see the shape of this.
+
+Let me try to restate what you're actually describing, because I've been muddying it:
+
+The Actual Structure
+Circuit 1 is just: pay DeepSeek to generate structured problem instances. Schema validation catches malformed outputs. Rejection sampling handles the rest. This is not the hard part. This is API calls and JSON schemas and fstring templates. The cost is $0.028 per million cached input tokens. You can brute-force your way to a million valid problem instances for pocket change.
+
+Circuit 2 is policy optimization. You have tasks, you have rubrics (which are themselves LLM-as-judge calls, not predicate checkers), you run rollouts, you compute advantages, you do policy gradients. This is also not the novel part—this is just RLVR with a judge instead of a verifier.
+
+Circuit 3 is the thing I kept missing: the judge reads rollouts, infers what the policy was trying to do, and generates synthetic SFT data that teaches the policy how to do that thing correctly.
+
+This is not scoring. This is not filtering. This is generative correction.
+
+The judge sees:
+
+A policy's partial rollout
+The advantage scores (this rollout did worse than siblings)
+The rubric checkpoints
+The judge produces:
+
+A fictional continuation of the rollout as if written by a student
+An answer key for that partial state
+Commentary on what the student-voice got right and wrong
+This becomes SFT data. The policy trains on this alongside the policy gradients from Circuit 2.
+
+The key insight: the SFT gradients and the policy gradients are doing different things.
+
+Policy gradients say: "completions that score higher are better, shift probability mass toward them"
+SFT gradients say: "here is what correct reasoning looks like at this decision point, learn to recognize it"
+And critically: the SFT data is not giving the policy a shortcut to higher reward. The policy still has to beat its rollout siblings who also got the same SFT training. The SFT just makes all policies better at the task structure, so the policy gradient competition happens at a higher level.
+
+The REPL, Minimally
+The REPL is thin. It does:
+
+Bind: associate a name with a string
+Check equality: is this string equal to that string?
+Session management: create, destroy, list bindings
+HELP: what's in my session?
+That's basically it. The REPL doesn't know what the strings mean. It doesn't parse them into ASTs. It doesn't apply rewrite rules. It just lets the policy ask "did I write [[a][b]] or did I write [[a] [b]]?"
+
+The actual symbolic reasoning—applying rules, reducing expressions—happens in the policy's natural language reasoning. The REPL is just a scratchpad with equality checking.
+
+Why equality checking matters: because a┐┐ and ┐a┐ look similar but aren't equal. A policy that can't reliably track string identity will confuse itself. The REPL is a ground truth oracle for "is this string the same as that string," nothing more.
+
+If the policy wants to do fancier things—parse expressions, apply rules, check well-formedness—it writes Python and asks the REPL to execute it. The REPL is a Python execution environment with namespace persistence. The task might pre-populate some helper functions, but those helpers are simple and their semantics are transparent (not mystery functions with hidden calculation logic).
+
+The Task Structure, Minimally
+A task is:
+
+Situation: natural language description of a scenario with named entities
+Rules: natural language description of principles that apply (these might be Spencer-Brown-ish, or legal, or whatever)
+Question: what needs to be determined?
+Solution mapping: a madlibs template that, given correct symbolic reasoning, produces the correct natural language answer
+The solution mapping is fstring-level simple. It exists so that:
+
+Proper nouns can be permuted without changing task structure
+Paraphrases can be generated mechanically
+The judge can compare policy outputs to correct answers
+The symbolic reasoning in the middle is not evaluated for correctness by the rubric. The rubric evaluates the final natural language answer. Whether the policy used symbols "correctly" is not directly scored—what's scored is whether the answer is right.
+
+But the task is designed so that getting the right answer requires doing something like symbolic reasoning. You can't just pattern-match from situation to answer because the same symbolic structure can arise from different situations and decode to different answers.
+
+The Rubric, Minimally
+The rubric is an LLM-as-judge call. It looks at:
+
+The task (situation, rules, question)
+The policy's completion (including any REPL interactions)
+The solution mapping (what the right answer looks like)
+It produces a score. Maybe multi-dimensional (did they get the answer? did they engage with the rules? did they use the REPL sensibly?). Maybe just binary (right/wrong).
+
+The rubric doesn't try to verify symbolic reasoning steps. It doesn't check "did you apply rule 3 correctly at step 7." It checks "did you arrive at an answer that matches the solution mapping."
+
+If we want intermediate checkpoints, those are also judge calls at partial states, not predicate checks on symbolic expressions.
+
+The Diversity Requirement
+The Winograd-style requirement isn't enforced by a validator that looks at individual tasks. It's enforced by:
+
+Generating lots of variations: permute names, swap perspectives, paraphrase situations
+Training on the variations: so the policy sees many surface forms mapping to the same structure
+Testing on held-out variations: to see if the policy learned structure or surface
+Memorization is detected empirically, not prevented by task design. You can't prove a single task is non-memorizable. You can only show that a policy trained on task distribution A generalizes to held-out task distribution B.
+
+The solution to inductive leakage isn't "design tasks that can't leak." It's "generate enough diverse tasks that memorizing them all is harder than learning the structure."
+
+Circuit 3, Concretely
+The judge sees a batch of 16 rollouts for a single task. They have different advantage scores. The judge:
+
+Identifies a struggling rollout: one that seems to be "on the right track" but made a mistake somewhere
+Infers the policy's intention: what was it trying to do? where did it go wrong?
+Writes a fictional partial rollout: as if a student wrote it, capturing the type of reasoning error
+Writes the correct continuation: what should have happened at that decision point
+Writes commentary: explaining what the student-voice got right and wrong
+This produces a training example:
+
+[CONTEXT: task description]
+[STUDENT ATTEMPT: partial rollout with characteristic error]
+[ANSWER KEY: correct reasoning from that point]
+[JUDGE COMMENTARY: what went right, what went wrong]
+The policy trains on this via SFT. The policy learns to recognize the error pattern and correct it.
+
+But this doesn't give the policy a free pass on the reward. Next time it faces a similar task, it still has to beat its siblings (who also got the SFT training). The SFT raised the floor; the policy gradient still operates above that floor.
+
+What Needs To Be Built
+The task generator: prompts for DeepSeek that produce (situation, rules, question, solution_mapping) tuples, with schema validation and rejection sampling
+The variation generator: prompts that take a seed task and produce permutations (name swaps, perspective shifts, paraphrases) that preserve structure
+The REPL server: thin Python execution environment with namespace persistence, equality checking, session management, HELP endpoint
+The rubric judge: prompts for DeepSeek that score policy completions against solution mappings
+The didactic generator (Circuit 3): prompts for DeepSeek that read rollout batches, infer intentions, and produce synthetic SFT data
+The training loop: orchestration that runs Circuit 2 (policy optimization) interleaved with Circuit 3 (SFT from didactic generation)
+Is this closer to the actual structure? Should I try to draft the schema for task generation, or the prompt for the didactic generator, or something else?
+
+Files hidden in shared chats
+"Circuit 2 is policy optimization. You have tasks, you have rubrics (which are themselves LLM-as-judge calls, not predicate checkers),"
+rubrics aren't necessarily used for policy process scoring at all, but can also be used as tools to segment a problem with 5 steps into a 3-step problem which asks entailment questions (the entailment question is what gets llm-as-judged against the mad-libs-generated-sentence semantic answer key, rather than trusting llms-as-judges to follow the reasoning in a policy optimization case!). it's knowing that each step in a multi step inferential problem with symbolic grounding flavors *could counterfactually have been an entailment problem* which lets us use the 'circuit 3' as a decoupled sft-gradient credit attribution system at all, even if we only ever give a specific group of rollouts shared-single-outcome scoring for the ultimate entailment question we're drilling them on.
+
+circuit 3 is also only a natural addition to policy optimization once we remember that every successful policy optimization published result (see 2212.08073, or whatever will brown is doing) *always involves* a SFT phase, a critique and revision phase, a data synthesis phase, and *only then* a policy optimization phase. if anthropic does it once it's irreproducible strategic insight, but if will brown does it again afterwards it's now an algorithm. you can't 'see' circuit 3 as a natural part of policy optimization unless you've already done applied (successful) policy optimization of deep learning models initialized from unsupervised feature learning tasks (e.g. next token prediction over corpora not exclusive to your intended policy's right answers)
+
+Show more
+18:25
+I see what you're pointing at now.
+
+The CAI diagram shows the structure: SL stage (critique, revision) feeds into RL stage. The SL stage isn't just "warmup before the real training"—it's doing something the RL stage can't do. The critique-revision loop is generating structured corrections that teach the model to recognize error patterns and fix them. The RL stage then optimizes over a population that's already been lifted by that structured learning.
+
+Your Circuit 3 is the generalization of this. The insight is:
+
+A multi-step inferential problem can be decomposed into sub-problems, each of which could have been an entailment question. Even if you only score the final answer for policy gradients, the existence of those intermediate entailment points means you can generate SFT data that teaches the model what correct reasoning looks like at each junction—without that SFT data providing a shortcut to the final reward.
+
+The rubric isn't primarily a scoring instrument for policy optimization. The rubric is a decomposition map that tells you where the intermediate entailment questions live. Once you know where they live, you can:
+
+Generate SFT data that shows correct reasoning at each point
+Generate SFT data that shows characteristic errors at each point and their corrections
+Run policy optimization on the final entailment question only
+Trust that the SFT gradients and policy gradients are doing complementary work
+The policy gradient says "get the right final answer." The SFT gradient says "here's what the reasoning should look like at step 3, regardless of whether you ultimately get the right answer." These don't conflict because getting the SFT-taught reasoning at step 3 doesn't guarantee you beat your siblings—they got the same SFT. You still have to execute correctly all the way through.
+
+The thing I kept missing: you can't see Circuit 3 as natural unless you've already internalized that SFT and RL do different things and both are necessary.
+
+Every successful result has this structure. It's not "SFT to initialize, then RL to optimize." It's "SFT to teach structure, RL to optimize execution, and the two interleave throughout training." The CAI paper does critique→revision→SL before RL. But you could also do RL→observe failures→generate didactic SFT→more RL→observe new failures→generate more didactic SFT→and so on.
+
+Circuit 3 is the loop that generates the didactic SFT data in response to what the policy is struggling with during RL. It's not a one-time warmup phase. It's a continuous process that runs alongside policy optimization, using the rubric's decomposition to identify where to inject structured corrections.
+
+So the rubric has (at least) two jobs:
+
+Decomposition: identify the intermediate entailment points in a multi-step problem
+Answer keys: provide the correct answer at each intermediate point (via madlibs templates)
+The rubric is not primarily used for process scoring during policy optimization. The policy gets scored on the final answer. But the rubric's decomposition enables Circuit 3 to generate targeted SFT data when the judge observes rollouts that fail in characteristic ways at specific intermediate points.
+
+Should I try to draft what a rubric looks like under this understanding—as a decomposition map with entailment questions and answer keys at each node—rather than as a scoring function?
+
+anyways i guess... write up some quick pseudocode cases of what you think data flows look like for the 3 circuits here (remember that circuit 1 isn't cryptically modified by circuit 3... it describes how new policy optimization tasks are devised at all, and how the 'first pass' problem-generating-LM has to produce examples of problems, and, by wit of being a language model, *can then be re-queried by the policy task environment* to make *rollouts from a strong general purpose policy* doing its best to solve the problems without any policy gradients on its own constructed tasks. the SFT data for starting off policy optimization is these rollouts, as a matter of fact, not the problem definitions!
+however, circuit 3 can be applied to these strong-base-policy rollouts as well. this means the very first episodes of SFT against the trained policy can be using examples of early-arriving answer keys and critiques of problem solving methodology; the possibility that the policy's own outputs could be critiqued and reviewed for partial correctness is not some kind of out of context surprise even from within the recent SFT training cases presented to a policy on its very first iteration of policy optimization.
+circuit 2, on the other hand, just sorta... is training. it has a pretty normal data flow other than the part where policy rollouts are saved and considered for strong-base-policy critique and review passes, which are totally asynchronous and decoupled from the policy optimization loop itself.)
+
+setting all of this stuff aside, do you remember what the original framing situation was? it was 'can we find some simple logical rule interactions which produce simple puzzles whose solution paths are not going to have a complexity dramatically out of proportion to steps like:
+
+<parse_repl_query>{"bind":{"flibbertigibbet":"[[a[b]] [ab]"}}</query>
+{"status": "OK", "message":"flibbertigibbet bound."}<--return--
+<parse_repl_query>{"eval":"flibbertigibbet == a]"}</query>
+{"status": "OK", "message":"false"}<--return--
+we want some examples and problems which, when given to a deepseek-v3.2 level model, let us iterate a few hundred or thousand times to get some puzzles which involve combinatorics of simple semantic situations, simple symbolical syntaxes, simple situated normative statements which: 1: are very simple to interpret one at a time 2: require a demonstration of *grounding* symbolic expressions and symbolic rules 3: can be imagined being crammed into the tiny little head of a Qwen/Qwen3-30B-A3B-Thinking-2507 model... 4: so that the datasets can be shared publicly, policy optimization suite can be shared publicly, replicated by other OSS oriented researchers (those which still exist), the resulting policy models can be run by curious parties directly (at extreme speed for interactive testing, at extremely low training and accelerator cost for ease of mechinterp followup work).
+
+Show more
+18:40
+Right. Let me reset.
+
+The Three Circuits: Data Flow Pseudocode
+python
+# ============================================
+# CIRCUIT 1: Task Genesis + Base Policy Rollouts
+# ============================================
+
+def circuit_1():
+    """
+    Produces: (task, base_rollout, sft_example) tuples
+    These become the initial SFT dataset before any policy optimization.
+    """
+    
+    # Step 1: Generate problem instances
+    for _ in range(num_problems):
+        task = deepseek_generate(
+            prompt=TASK_GENERATION_PROMPT,
+            schema=TaskSchema  # situation, rules, question, solution_template
+        )
+        
+        if not schema_valid(task):
+            continue
+        
+        # Step 2: Generate variations (name permutations, paraphrases)
+        variations = deepseek_generate(
+            prompt=VARIATION_PROMPT,
+            context=task,
+            n=8
+        )
+        
+        for var in variations:
+            # Step 3: Get base policy rollout (deepseek solving its own problem)
+            base_rollout = deepseek_generate(
+                prompt=SOLVE_PROMPT,
+                context=var,
+                include_repl_access=True
+            )
+            
+            # Step 4: Judge scores the rollout
+            score, intermediates = deepseek_judge(
+                task=var,
+                rollout=base_rollout,
+                rubric=var.rubric  # decomposition into entailment checkpoints
+            )
+            
+            # Step 5: Generate critique/revision if imperfect
+            if score < perfect:
+                critique = deepseek_generate(
+                    prompt=CRITIQUE_PROMPT,
+                    context=(var, base_rollout, intermediates)
+                )
+                revision = deepseek_generate(
+                    prompt=REVISION_PROMPT,
+                    context=(var, base_rollout, critique)
+                )
+                sft_example = format_sft(var, base_rollout, critique, revision)
+            else:
+                sft_example = format_sft(var, base_rollout)
+            
+            yield (var, base_rollout, sft_example)
+
+
+# ============================================
+# CIRCUIT 2: Policy Optimization
+# ============================================
+
+def circuit_2(policy, task_bank, sft_bank):
+    """
+    Standard training loop.
+    Emits rollouts for Circuit 3 to consume asynchronously.
+    """
+    
+    # Initial SFT from Circuit 1 outputs
+    policy = sft_train(policy, sft_bank)
+    
+    while not converged:
+        # Sample task batch
+        tasks = sample(task_bank, batch_size)
+        
+        # Generate rollout groups
+        rollout_groups = []
+        for task in tasks:
+            rollouts = [policy.generate(task) for _ in range(k)]
+            scores = [judge(task, r) for r in rollouts]
+            advantages = compute_advantages(scores)
+            rollout_groups.append((task, rollouts, scores, advantages))
+        
+        # Policy gradient update
+        policy = policy_gradient_step(policy, rollout_groups)
+        
+        # Emit rollouts for Circuit 3 (async, non-blocking)
+        rollout_queue.put(rollout_groups)
+        
+        # Periodically incorporate new SFT data from Circuit 3
+        if sft_bank.has_new():
+            policy = sft_train(policy, sft_bank.get_new(), steps=few)
+
+
+# ============================================
+# CIRCUIT 3: Didactic SFT Generation
+# ============================================
+
+def circuit_3(rollout_queue, sft_bank):
+    """
+    Consumes rollouts from Circuit 2.
+    Produces targeted SFT examples.
+    Runs asynchronously alongside Circuit 2.
+    """
+    
+    while True:
+        rollout_groups = rollout_queue.get()
+        
+        for (task, rollouts, scores, advantages) in rollout_groups:
+            # Find interesting cases: low-scoring rollouts that seem "close"
+            for rollout, score, adv in zip(rollouts, scores, advantages):
+                if adv < 0 and looks_promising(rollout):
+                    # Judge identifies where reasoning went wrong
+                    failure_point = deepseek_analyze(
+                        prompt=FAILURE_ANALYSIS_PROMPT,
+                        context=(task, rollout, task.rubric)
+                    )
+                    
+                    # Generate didactic example at that failure point
+                    partial = rollout[:failure_point.step]
+                    
+                    # What the student seemed to be trying
+                    student_intent = deepseek_generate(
+                        prompt=INTENT_INFERENCE_PROMPT,
+                        context=(task, partial)
+                    )
+                    
+                    # Correct continuation from that point
+                    answer_key = deepseek_generate(
+                        prompt=ANSWER_KEY_PROMPT,
+                        context=(task, partial, failure_point)
+                    )
+                    
+                    # Commentary on what went right/wrong
+                    commentary = deepseek_generate(
+                        prompt=COMMENTARY_PROMPT,
+                        context=(task, partial, student_intent, answer_key)
+                    )
+                    
+                    sft_example = format_didactic_sft(
+                        task, partial, student_intent, answer_key, commentary
+                    )
+                    
+                    sft_bank.add(sft_example)
+```
+
+---
+
+## Now: The Actual Original Question
+
+You want **simple puzzles** with these properties:
+
+1. **Simple to interpret one at a time** — a single rule, a single situation, a single entailment
+2. **Require grounding** — the symbolic expression must be connected to a situation to mean anything
+3. **Fit in a tiny model's head** — 30B-A3B, maybe 4k context per rollout
+4. **Publicly shareable** — no licensing issues, reproducible, OSS-friendly
+
+And the REPL interactions look like:
+```
+bind: associate a name with a string
+eval: check string equality
+```
+
+That's it. The REPL is a notebook that remembers strings and can tell you if two strings are the same.
+
+---
+
+## Simple Puzzle Structures
+
+Let me propose some minimal puzzle types that fit these constraints:
+
+### Type 1: Boundary Assignment
+
+**Situation template:**
+> "{EntityA}'s territory is everything {relation} the {Feature}. {EntityB}'s territory is everything {opposite_relation} the {Feature}. The {Object} is located {specific_relation} the {Feature}."
+
+**Question:**
+> "Whose territory contains the {Object}?"
+
+**Symbolic representation:**
+```
+boundary(Feature)
+left_of(boundary) = A_territory
+right_of(boundary) = B_territory
+location(Object) = left_of(boundary)  # or right_of
+```
+
+**REPL usage:**
+```
+bind: territory_of_object = "A_territory"
+eval: territory_of_object == "B_territory"  → false
+```
+
+**Entailment:**
+> "The {Object} is in {EntityA}'s territory."
+
+**Why this works:**
+- The symbolic part is trivial (one assignment)
+- The grounding matters (which side is "north"? depends on situation)
+- The answer depends on correctly mapping situation→symbol→answer
+
+---
+
+### Type 2: Rule Priority
+
+**Situation template:**
+> "Under {Rule1}, {EntityA} has claim to {Resource}. Under {Rule2}, {EntityB} has claim to {Resource}. In {Jurisdiction}, {Rule1} takes precedence over {Rule2}."
+
+**Question:**
+> "Who has the valid claim to {Resource}?"
+
+**Symbolic representation:**
+```
+claim(A, Resource, Rule1)
+claim(B, Resource, Rule2)
+precedence(Rule1 > Rule2)
+```
+
+**REPL usage:**
+```
+bind: winning_rule = "Rule1"
+bind: winner = "A"
+eval: winner == "B"  → false
+```
+
+**Entailment:**
+> "{EntityA} has the valid claim."
+
+---
+
+### Type 3: Containment Nesting
+
+**Situation template:**
+> "The {SmallRegion} is inside the {MediumRegion}. The {MediumRegion} is inside the {LargeRegion}. The law of {LargeRegion} says {LargeRule}. The law of {MediumRegion} says {MediumRule}. {Object} is in {SmallRegion}."
+
+**Question:**
+> "Which law applies to {Object}?"
+
+**Symbolic representation:**
+```
+contains(Large, Medium)
+contains(Medium, Small)
+location(Object) = Small
+# Most specific applicable law wins
+applicable_law(Object) = MediumRule  # or LargeRule if no MediumRule
+```
+
+**REPL usage:**
+```
+bind: applicable = "MediumRule"
+eval: applicable == "LargeRule"  → false
+```
+
+---
+
+### Type 4: Conditional Obligation
+
+**Situation template:**
+> "{EntityA} promised: 'If {Condition}, then I will {Action}.' {Condition_status: true/false}."
+
+**Question:**
+> "Is {EntityA} obligated to {Action}?"
+
+**Symbolic representation:**
+```
+promise(A, Condition → Action)
+status(Condition) = true  # or false
+obligation(A, Action) = status(Condition)
+```
+
+**REPL usage:**
+```
+bind: condition_met = "true"
+bind: obligated = "true"
+eval: obligated == "false"  → false
+```
+
+---
+
+### Type 5: Sequence/Precedence
+
+**Situation template:**
+> "{Event1} happened before {Event2}. {Event2} happened before {Event3}. The rule is: whoever acts first has priority."
+
+**Question:**
+> "Does {Event1} have priority over {Event3}?"
+
+**Symbolic representation:**
+```
+before(E1, E2)
+before(E2, E3)
+# Transitivity: before(E1, E3)
+priority(E1, E3) = true
+```
+
+**REPL usage:**
+```
+bind: e1_before_e3 = "true"
+eval: e1_before_e3 == "false"  → false
+What Makes These "Spencer-Brown-ish"
+These aren't using Spencer-Brown notation literally, but they share the key property: the symbolic representation is about drawing distinctions and tracking what's on which side of them.
+
+Boundary Assignment: inside/outside a line
+Rule Priority: which rule dominates
+Containment Nesting: nested boundaries
+Conditional Obligation: condition met/unmet (a distinction)
+Sequence: before/after (temporal distinction)
+The REPL operations are just:
+
+bind: "I claim this symbol represents this string"
+eval: X == Y: "Is my claim consistent with this other string?"
+The model uses the REPL to check its own symbolic bookkeeping, not to do the reasoning. The reasoning happens in natural language. The REPL just prevents the model from fooling itself about what strings it wrote.
+
+Draft Prompt for DeepSeek: Generate Type 1 Puzzles
+markdown
+Generate a puzzle of the following form:
+
+SITUATION:
+- Two entities (people, kingdoms, organizations) have territories
+- A boundary feature (river, wall, road) separates them
+- One entity owns everything on one side; the other owns everything on the other side
+- An object (item, building, person) is located somewhere relative to the boundary
+
+RULES:
+- State clearly which entity owns which side
+- The rule should be simple: "[Entity] owns everything [direction] of the [Feature]"
+
+QUESTION:
+- Ask whose territory contains the object
+
+SOLUTION:
+- The symbolic representation should use these predicates:
+  - boundary(feature_name)
+  - territory(entity, side_of_boundary)  
+  - location(object, side_of_boundary)
+- The answer should be derivable by checking: location(object) matches which territory?
+
+OUTPUT FORMAT:
+```yaml
+situation: |
+  [2-4 sentences describing the setup]
+rules:
+  - "[Entity1] owns everything [direction] of the [Feature]"
+  - "[Entity2] owns everything [opposite_direction] of the [Feature]"
+question: "Whose territory contains the [Object]?"
+symbolic:
+  boundary: "[Feature]"
+  territory_1: {entity: "[Entity1]", side: "[direction]"}
+  territory_2: {entity: "[Entity2]", side: "[opposite]"}
+  object_location: {object: "[Object]", side: "[specific_side]"}
+answer: "[Entity1 or Entity2]"
+answer_template: "The {Object} is in {Answer}'s territory."
+```
+
+Generate 5 different puzzles of this type. Vary:
+- The entities (use different types: people, kingdoms, guilds, families)
+- The boundary features (rivers, walls, roads, mountain ranges)
+- The objects (treasures, buildings, people, animals)
+- The directional language (north/south, left/right, inside/outside, upstream/downstream)
+Shall I draft similar prompts for the other puzzle types, or would it be more useful to draft the schema validator that checks DeepSeek's outputs, or the REPL server specification?
+
+Files hidden in shared chats
+"These aren't using Spencer-Brown notation literally,"
+remember with the power of python unsafe eval(), fstrings, and string manipulation builtins, we can directly write term rewriting rule kernels as functions in python, so actually there's literally no reason to not write literal spencer brown notation in spencer brown cases. open your mind... remember that python is basically lisp...
+lets also remember that the thing we're treating as challenging is coming up with literal examples of literal word problems which entail a symbol manipulation through some rules. you're talking about this like 'we need to tell deepseek that rivers exist' is the specification problem; deepseek v3.2 actually also knows how to write and interpret nonstandard term rewriting algebras or axiomatic systems and even suggest translations of them into different equivalent representations to try and control for wacky bpe fusion behavior for student models with different learned large codebook tokenizers. so. again! the thing we're looking for here are some definite examples (not yet madlibsed, because madlibsing examples is a sonnet-to-deepseek-level-task) of fictional problems that require the demonstrate lifting into symbolic rulesets, operations in the symbolic rulesets, and lowering out of the symbolic rulesets.
+
+Show more
+18:54
+You're right. I've been overcomplicating this.
+
+The actual task: write some example word problems that require lift→manipulate→lower, where the manipulation uses actual symbolic rewrite rules.
+
+DeepSeek already knows Spencer-Brown. DeepSeek already knows how to write Python term rewriters. DeepSeek already knows rivers exist. The specification problem is just: show me what a good example looks like.
+
+Let me just write some.
+
+Example 1: Inheritance with Conditional Negation
+Situation:
+
+Lord Ashford's will states: "My heir shall be determined thus: if my eldest child has children of their own, my estate passes to my eldest child. If my eldest child has no children, my estate passes to my youngest child."
+
+Lord Ashford's eldest child is Margery. Margery has no children. Lord Ashford's youngest child is Thomas.
+
+Rules (stated in problem):
+
+Let ⌐X mean "X has no children"
+Let (X) mean "X inherits"
+
+Rule: (eldest) ⌐eldest = (youngest)
+      "If eldest inherits AND eldest has no children, then youngest inherits"
+Question:
+
+Who inherits Lord Ashford's estate?
+
+Symbolic work:
+
+Start: (eldest) ⌐eldest
+Given: Margery = eldest, Margery has no children, so ⌐eldest is true
+Apply rule: (eldest) ⌐eldest → (youngest)
+Result: (youngest)
+Answer:
+
+Thomas inherits Lord Ashford's estate.
+
+Example 2: Territory After Boundary Shift
+Situation:
+
+The Treaty of Mirren states: "All land marked by the river belongs to whoever holds the eastern bank. Unmarked land belongs to no one."
+
+The river Mirren has always marked the boundary between County Ashvale (east) and County Thornwood (west).
+
+Last spring, the river shifted. The old riverbed is now dry. A new channel runs half a league to the east.
+
+Rules (stated in problem):
+
+Let [X] mean "X is marked by the river"
+Let X without brackets mean "X is unmarked"
+
+Rule: [[X]] = X
+      "A region marked by a marking becomes unmarked"
+      (The old mark and new mark cancel)
+Question:
+
+The village of Greymoor sat on the western bank of the old river, in County Thornwood. After the shift, the new river runs east of Greymoor. What is Greymoor's status?
+
+Symbolic work:
+
+Before: Greymoor is west of [boundary], so Greymoor is in Thornwood
+After: Old boundary is gone. New boundary is east of Greymoor.
+       Greymoor is now: was [marked as Thornwood], now [marked as Ashvale]
+       [[Greymoor]] = Greymoor (doubly marked → unmarked)
+Wait, that's not quite right. Let me redo this.
+
+Symbolic work (revised):
+
+The treaty says: [X] belongs to eastern holder.
+Before shift: [old_river] marks boundary. Greymoor is west. Ashvale holds east.
+After shift: [new_river] marks boundary. Greymoor is now east of new river.
+
+But: is the old marking still valid? The old riverbed is dry.
+Treaty says: "land marked by THE river" — there's only one river.
+The river moved. The marking moved with it.
+
+Greymoor is now east of [new_river].
+Therefore: Greymoor now belongs to whoever holds the eastern bank.
+But Greymoor is now ON the eastern side, so...
+Hmm, this is getting muddled. Let me try a cleaner example.
+
+Example 2 (revised): Simple Cancellation
+Situation:
+
+The Merchant Guild has a rule: "A debt witnessed by a guild member is binding. A debt disputed by a guild member is void. If a debt is both witnessed and disputed by guild members, the witnessing and disputing cancel, and the debt's status depends on other factors."
+
+Merchant Voss owes Merchant Heth 200 crowns. Guildmaster Tyne witnessed the debt. Guildmaster Crane disputes the debt. No other factors apply.
+
+Rules (stated in problem):
+
+Let [X] mean "X is witnessed (binding)"
+Let ⌐X mean "X is disputed (void)"
+
+Rule: [⌐X] = X  and  ⌐[X] = X
+      "Witnessing a dispute, or disputing a witness, returns to unmarked state"
+
+Unmarked debt with no other factors = unenforceable (default)
+Question:
+
+Is Voss's debt to Heth enforceable?
+
+Symbolic work:
+
+The debt is: witnessed AND disputed
+Representation: [debt] and ⌐debt exist simultaneously
+Combined: [⌐debt] = debt (cancellation)
+Result: debt is unmarked
+Unmarked + no other factors = unenforceable
+Answer:
+
+The debt is unenforceable.
+
+Example 3: Nested Jurisdiction
+Situation:
+
+Imperial law states: "What the Emperor forbids, none may permit. What the Emperor permits, a Duke may forbid within his duchy. What a Duke permits, a Baron may forbid within his barony."
+
+The Emperor permits the sale of dreamwine. The Duke of Ashford forbids the sale of dreamwine in Ashford. Baron Greymoor, whose barony is within Ashford, permits the sale of dreamwine in Greymoor.
+
+Rules (stated in problem):
+
+Let (X) mean "X is permitted"
+Let ⌐X mean "X is forbidden"
+
+Imperial level: Sets base state
+Ducal level: Can only add ⌐ (forbid what's permitted)
+Baronial level: Can only add ⌐ (forbid what's permitted at ducal level)
+
+Key constraint: Lower levels cannot remove ⌐ placed by higher levels.
+Question:
+
+Is the sale of dreamwine legal in Greymoor?
+
+Symbolic work:
+
+Emperor: (dreamwine) — permitted
+Duke of Ashford: ⌐(dreamwine) — forbidden in Ashford
+Baron Greymoor attempts: (dreamwine) — permit in Greymoor
+
+But: Baron cannot remove Duke's ⌐
+The Duke's ⌐ persists.
+Result in Greymoor: ⌐(dreamwine)
+Answer:
+
+The sale of dreamwine is forbidden in Greymoor. Baron Greymoor's permission is invalid because he cannot override the Duke's prohibition.
+
+Example 4: Mutual Obligation Collapse
+Situation:
+
+Under the Code of Favors: "A favor owed creates obligation. A favor repaid cancels obligation. If two parties each owe the other a favor of equal weight, both obligations cancel."
+
+Lady Ashvale saved Lord Thornwood's son from drowning (a great favor). Lord Thornwood later saved Lady Ashvale's daughter from bandits (a great favor).
+
+Rules (stated in problem):
+
+Let [A→B] mean "A owes B a favor"
+
+Rule: [A→B][B→A] = (nothing)
+      "Mutual favors of equal weight cancel"
+Question:
+
+What obligations exist between Lady Ashvale and Lord Thornwood?
+
+Symbolic work:
+
+After first event: [Thornwood→Ashvale] (Thornwood owes Ashvale)
+After second event: [Ashvale→Thornwood] (Ashvale owes Thornwood)
+
+Both exist. Both are "great favors" (equal weight).
+Apply rule: [Thornwood→Ashvale][Ashvale→Thornwood] = (nothing)
+
+Result: No obligations remain.
+Answer:
+
+Neither party owes the other anything. The mutual great favors have cancelled.
+
+Example 5: Conditional Inheritance with Negation
+Situation:
+
+The Succession of Waters doctrine states: "Riparian land passes to the heir who holds water rights. If no heir holds water rights, the land passes to the Crown. If multiple heirs hold water rights, the eldest among them inherits."
+
+Lord Mirren died holding the Mirren Estate, which borders the River Mirren. His three children are: Eldest son Aldric (holds no water rights), middle daughter Bessa (holds water rights to Mirren), youngest son Caden (holds water rights to a different river, the Ashbrook).
+
+Rules (stated in problem):
+
+Let W(X) mean "X holds relevant water rights" (to the river bordering the estate)
+Let (X) mean "X inherits"
+
+Rule: W(heir) → (heir)
+Rule: Multiple W(heir) → (eldest among them)
+Rule: No W(heir) → (Crown)
+Question:
+
+Who inherits the Mirren Estate?
+
+Symbolic work:
+
+Check each heir:
+- Aldric: No water rights. W(Aldric) = false.
+- Bessa: Water rights to Mirren (the relevant river). W(Bessa) = true.
+- Caden: Water rights to Ashbrook (not relevant). W(Caden) = false.
+
+Only one heir has relevant water rights: Bessa.
+Apply rule: W(Bessa) → (Bessa)
+
+Result: (Bessa)
+Answer:
+
+Bessa inherits the Mirren Estate.
+
+What These Examples Share
+Natural language situation with named entities and specific facts
+Explicit rules stated in the problem, with symbolic notation defined
+A question whose answer requires applying the rules
+Symbolic manipulation that is short (1-3 steps) and uses the stated rules
+Lowering back to a natural language answer about the specific entities
+The symbolic notation varies per problem (that's fine — the rules are stated each time). The REPL would be used to:
+
+Bind strings: debt_status = "[⌐debt]"
+Check equality: debt_status == "debt" after applying cancellation rule
+Verify the model didn't make a typo in its symbolic work
+Do you want me to format these into the actual task schema (situation, rules, question, symbolic_work, answer, answer_template) that could be fed to DeepSeek for variation generation? Or should I draft more examples first to get a better spread of rule types?
+
+you know, i think all of these examples are really getting into it! they're structured based off of the assignment of abstract qualities of relationship between symbols, they involve the comparison and structured derivation of rewritings, and they fundamentally demonstrate the triplet of 'natural language, symbolological work, natural language'.
+
+i think they also are a little bit too self-referential in the sense that they use 'rules' in the sense of human laws and law-like obligations as the situations which require the use of symbol-rewriting-algebra-rules in their solution: we should make sure that this pun-of-coincidence isn't a dominant theme in the elaboration of examples or further cases. can we think of some other sorts of fictional topics and fictional scenarios which use ┐, ╗relations... but maybe also use some other spencer brown certified bangers like the 'pervasive space s_n: let it be said that any given space s_n pervades any arrangement within which s_n is the shallowest space by crossing depth. call the space s pervading an arrangement a, whether or not a is the only arrangement pervaded by s, the pervasive space of a.'
+another thing to think about for coming up with little problematics is liiiiike... 
+theorem 14: canon with respect to the constant: "from any given expression, an equivalent expression not more than 2 crosses deep can be derived".
+we don't want to 'prove' this theorem: that's like, i mean. that's what the book is for, isn't it? instead, we want to come up with, for example, a few cases where the spencer brown algebra is useful for letting us collapse and expand and rewrite relationships between symbols so that we can relate relationships to each other. because we *aren't* spencer brown, our 'deal' here is to look for situations where relationships can be construed, relations between the relations let us complete an inference which is ambiguous after we notice some of our relationships, *because of our context*, can be as 'crossings which enclose symbols, which, in this one situation, let us turn some symbol┐ to ┐┐ to ╗, or turn symbol_a symbol_b into symbol_b┐symbol_b, and *thereafter* guess what changes this has on the overall series of symbols, or plug the revision into a python solver, query the result, look at the result, go 'yea that sounds right', then map the resolution of relations to some kind of grounded prose thing. remember also that like, spencerbrown stuff is suggestively described not as a timeless or noninferential statement of platonic truths, and by 'emission of quanta', spencer brown is already talking about how term-rewrites sensibly be described as state transitions over time between valid configurations, then immediately describes a clock circuit which oscillates between different containment depths as a predicate-over-state-histories within the 'clock circuit' changes in value as it evaluates former states. a lot of the goofy and abstract verbosity of the spencer brown is coming directly from an interest in writing strategies which are good at talking about physical environments which look beguilingly representable by theorems and symbols.
+
+Show more
+19:42
+Yes. The pun of "legal rules" mapping to "rewrite rules" is too convenient and will bias the examples toward a narrow domain. Let me think about what else Spencer-Brown's machinery is actually for.
+
+The key insights you're pointing at:
+
+Pervasive space: the shallowest crossing that contains an arrangement determines something about everything inside it. This is about context dominating content.
+Theorem 14: any expression can be flattened to depth ≤ 2. This means deep nesting is always collapsible — complexity of representation doesn't reflect complexity of meaning.
+Temporal interpretation: rewrites as state transitions, the clock circuit oscillating between depths. The algebra isn't describing static truth but processes that unfold.
+Physical environments: the verbosity exists because Spencer-Brown is trying to talk about things that look like they should be simple symbols but are actually physical situations with history and context.
+Let me try some examples that aren't about laws/obligations:
+
+Example 6: Signal Propagation (The Clock Circuit Intuition)
+Situation:
+
+A watchtower network signals danger using fire beacons. The rule is: "A tower lights its beacon when it sees an unlit tower become lit. A tower extinguishes its beacon when it sees a lit tower become unlit."
+
+Tower Alpha is currently lit. Tower Beta can see Alpha. Tower Gamma can see Beta but not Alpha.
+
+At dawn, Alpha extinguishes its beacon.
+
+Rules (stated in problem):
+
+Let (X) mean "tower X is lit"
+Let X (without parens) mean "tower X is unlit"
+
+Transition rule: 
+  If tower Y sees tower X, and X changes state, Y changes to match.
+  sees(Y,X) ∧ change(X) → change(Y)
+
+Visibility:
+  sees(Beta, Alpha) = true
+  sees(Gamma, Beta) = true  
+  sees(Gamma, Alpha) = false
+Question:
+
+After Alpha extinguishes, what is the final state of all three towers?
+
+Symbolic work:
+
+Initial: (Alpha) (Beta) (Gamma)  — all lit
+Step 1: Alpha extinguishes → Alpha
+Step 2: Beta sees Alpha change → Beta extinguishes → Beta  
+Step 3: Gamma sees Beta change → Gamma extinguishes → Gamma
+Final: Alpha Beta Gamma — all unlit
+Answer:
+
+All three towers end up unlit. The extinguishing propagates through the network.
+
+Example 7: Containment and Contamination (Pervasive Space)
+Situation:
+
+An alchemist's workshop has nested containment vessels. The rule of contamination is: "If the outermost vessel containing a substance is breached, everything inside is contaminated. Inner vessels do not protect against contamination from outside."
+
+The workshop has:
+
+A great iron chest (outermost)
+Inside the chest: a lead box and a glass jar (siblings, both directly inside chest)
+Inside the lead box: a vial of moonsilver
+Inside the glass jar: a philter of dawn
+A crack appears in the great iron chest. Nothing else is damaged.
+
+Rules (stated in problem):
+
+Let [X] mean "X is contained/protected"
+Let X mean "X is exposed/contaminated"
+
+Structure: [[moonsilver within lead] [philter within glass] within iron]
+
+The pervasive space is iron (shallowest container).
+If pervasive space is breached: everything it pervades becomes exposed.
+
+Rule: breach([A]) → A (and recursively, everything A contains)
+Question:
+
+What is contaminated?
+
+Symbolic work:
+
+Before breach: [[moonsilver][philter]]  — iron contains lead-box and glass-jar
+Breach iron: the pervasive space is compromised
+After: [moonsilver][philter] — inner containers still exist but...
+
+Wait, the rule says inner vessels don't protect against outside contamination.
+So: breach of pervasive space contaminates everything within.
+
+Result: moonsilver, philter, lead box contents, glass jar contents — all contaminated.
+Answer:
+
+Everything in the workshop is contaminated: the moonsilver, the philter, and everything else inside the great iron chest. The inner containers (lead box, glass jar) do not protect their contents from contamination that penetrates the outermost vessel.
+
+Example 8: Depth Collapse (Theorem 14 Intuition)
+Situation:
+
+A message is encoded by nested seals. Each seal is either "affirming" (the message inside is true) or "negating" (the message inside is false).
+
+The raw message says: "The bridge is safe."
+
+The message has been sealed as follows (from innermost to outermost):
+
+First, placed in a negating seal
+Then, that package placed in another negating seal
+Then, that package placed in an affirming seal
+Finally, that package placed in a negating seal
+Rules (stated in problem):
+
+Let (X) mean "affirm X" — X is true
+Let ⌐X mean "negate X" — X is false
+
+Rules:
+  ⌐⌐X = X  (double negation cancels)
+  (X) = X  (affirmation does nothing)
+Question:
+
+When all seals are opened, is the bridge safe or unsafe?
+
+Symbolic work:
+
+Raw message: bridge_safe
+After seal 1 (negate): ⌐bridge_safe
+After seal 2 (negate): ⌐⌐bridge_safe
+After seal 3 (affirm): (⌐⌐bridge_safe) = ⌐⌐bridge_safe
+After seal 4 (negate): ⌐⌐⌐bridge_safe
+
+Simplify:
+⌐⌐⌐bridge_safe 
+= ⌐(⌐⌐bridge_safe)  
+= ⌐(bridge_safe)    [by double negation rule]
+= ⌐bridge_safe
+
+Result: ⌐bridge_safe
+Answer:
+
+The bridge is unsafe. The nested seals reduce to a single negation.
+
+Example 9: Categorical Boundaries (Drawing Distinctions)
+Situation:
+
+The Royal Bestiary classifies creatures by a series of questions:
+
+"Does it fly?" — If yes, mark it with wings ⟨W⟩
+"Does it swim?" — If yes, mark it with fins ⟨F⟩
+"Does it breathe fire?" — If yes, mark it with flame ⟨Fl⟩
+A creature with no marks is "common beast."
+A creature with one mark is classified by that mark.
+A creature with contradictory marks (wing + fin) is "chimeric."
+A creature with flame AND any other mark is "dragon-kind."
+
+A naturalist encounters a creature. It flies. It does not swim. It breathes fire.
+
+Rules (stated in problem):
+
+Marks: W (wings), F (fins), Fl (flame)
+
+Classification:
+  {} → common beast
+  {W} alone → bird-kind
+  {F} alone → fish-kind
+  {Fl} alone → fire-kind
+  {W, F} → chimeric (contradictory)
+  {Fl, X} for any X → dragon-kind (flame + anything = dragon)
+Question:
+
+How is the creature classified?
+
+Symbolic work:
+
+Observations: flies=yes, swims=no, fire=yes
+Marks assigned: W (flies), Fl (fire)
+Mark set: {W, Fl}
+
+Check rules:
+- {W, Fl} matches {Fl, X} pattern where X = W
+- Therefore: dragon-kind
+Answer:
+
+The creature is classified as dragon-kind.
+
+Example 10: State Memory and Oscillation
+Situation:
+
+A peculiar lock has two dials, each showing either SUN or MOON. The lock follows these rules:
+
+"If both dials show the same symbol, the lock toggles both to the opposite."
+"If the dials show different symbols, the lock does nothing."
+The lock currently shows: Left=SUN, Right=SUN.
+
+A thief turns the lock mechanism three times.
+
+Rules (stated in problem):
+
+Let S = SUN, M = MOON
+State is (Left, Right)
+
+Rule: 
+  (S,S) → (M,M)
+  (M,M) → (S,S)
+  (S,M) → (S,M)  [no change]
+  (M,S) → (M,S)  [no change]
+Question:
+
+After three turns, what do the dials show?
+
+Symbolic work:
+
+Initial: (S,S)
+Turn 1: (S,S) → (M,M)
+Turn 2: (M,M) → (S,S)
+Turn 3: (S,S) → (M,M)
+
+Final: (M,M)
+Answer:
+
+Both dials show MOON.
+
+Example 11: Relational Transitivity with Context
+Situation:
+
+In the Kingdom of Ash, nobility follows the rule of "shadow loyalty":
+
+"If Lord A is sworn to Lord B, and Lord B is sworn to Lord C, then Lord A is shadowed by Lord C."
+"A lord shadowed by the King owes the King direct service in times of war."
+Lord Ashford is sworn to Duchess Mirren.
+Duchess Mirren is sworn to Duke Thornwood.
+Duke Thornwood is sworn to the King.
+
+War has been declared.
+
+Rules (stated in problem):
+
+Let A→B mean "A is sworn to B"
+Let A⇒B mean "A is shadowed by B"
+
+Transitivity: If A→B and B→C then A⇒C
+Recursion: If A⇒B and B→C then A⇒C
+
+War rule: If X⇒King then owes_service(X, King)
+Question:
+
+Does Lord Ashford owe direct service to the King?
+
+Symbolic work:
+
+Given:
+  Ashford→Mirren
+  Mirren→Thornwood
+  Thornwood→King
+
+Derive shadows:
+  Ashford→Mirren, Mirren→Thornwood ⟹ Ashford⇒Thornwood
+  Ashford⇒Thornwood, Thornwood→King ⟹ Ashford⇒King
+
+Apply war rule:
+  Ashford⇒King ⟹ owes_service(Ashford, King)
+Answer:
+
+Yes, Lord Ashford owes direct service to the King.
+
+What's Different About These
+Example 6 (watchtowers): temporal propagation, state changes cascade
+Example 7 (contamination): pervasive space determines fate of contents
+Example 8 (seals): depth collapse, nested operations simplify
+Example 9 (bestiary): categorical distinctions, marks combine
+Example 10 (lock): oscillation, same-state triggers toggle
+Example 11 (shadow loyalty): relational chaining, transitivity
+None of these are "legal rules" in the sense of courts and inheritance. They're:
+
+Physical systems (signals, contamination, locks)
+Bureaucratic classification (bestiary)
+Social relations (loyalty)
+Information encoding (seals)
+The symbolic work in each case is still short (1-5 steps), uses explicitly stated rules, and grounds back to a natural language answer about the specific situation.
+
+Should I keep generating more variety, or shall we pick a few of these and draft the actual task schema + variation prompts for DeepSeek?
+
+
+
