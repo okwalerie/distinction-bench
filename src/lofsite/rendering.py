@@ -52,7 +52,8 @@ def render_all_dialects(form_string: str) -> DialectFanOut:
         constructible entry in `list_renderers()`, sorted order) whose
         `.skipped` attribute lists registry keys that raised on
         construction (e.g. `"composed"`, which requires a `DialectSpec` or
-        spec kwargs).
+        spec kwargs) *or* on render (a spatial dialect whose rasterisation
+        path isn't landed yet).
     """
     panels = []
     skipped = []
@@ -66,7 +67,21 @@ def render_all_dialects(form_string: str) -> DialectFanOut:
             # keep them visible in `skipped` so the fan-out stays honest.
             skipped.append(key)
             continue
-        result = renderer.render(form_string)
+        try:
+            result = renderer.render(form_string)
+        except NotImplementedError:
+            # A registered dialect whose spatial rasterisation path isn't
+            # landed yet (DB-4 M5 / DB-9's spatial-archetype activation).
+            # lofbench.renderers.pipeline.emit's own docstring calls
+            # reaching a spatial BaseRender before the rasteriser lands "a
+            # programming error, not a silent no-op" for the pipeline's
+            # internal callers -- but the sandbox fans out over every
+            # zero-arg-constructible dialect on ordinary user input, so a
+            # not-yet-ready spatial dialect appearing in list_renderers()
+            # must degrade the same way a construction-time skip does:
+            # honest and visible in `skipped`, never a 500.
+            skipped.append(key)
+            continue
         kind = "image" if result.metadata.get("format") == "image" else "text"
         panels.append(
             DialectPanel(

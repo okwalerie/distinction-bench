@@ -6,7 +6,7 @@ polish (per the binding design-decisions note).
 
 from __future__ import annotations
 
-from fasthtml.common import A, Div, Footer, Nav, Style, Titled
+from fasthtml.common import A, Div, Footer, Nav, Strong, Style, Titled
 
 _NAV_ITEMS = (
     ("/", "Sandbox"),
@@ -57,6 +57,49 @@ _STYLE = Style("""
     form.sandbox-form button {
         margin-top: 0.5rem; padding: 0.5rem 1.25rem; font-size: 1rem; cursor: pointer;
     }
+    .pilot-banner {
+        background: #fff8e1; border: 1px solid #eda100; border-radius: 6px;
+        padding: 0.75rem 1rem; margin-bottom: 1.5rem; font-size: 0.9rem;
+    }
+    .pilot-banner strong { color: #8a5c00; }
+    .status-badge {
+        display: inline-block; padding: 0.1rem 0.5rem; border-radius: 4px;
+        font-size: 0.8rem; font-weight: 600; color: #fff;
+    }
+    .status-badge.correct { background: #0ca30c; }
+    .status-badge.incorrect { background: #d03b3b; }
+    table.data-table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    table.data-table th, table.data-table td {
+        border: 1px solid #e1e0d9; padding: 0.4rem 0.6rem; text-align: left;
+        font-size: 0.9rem;
+    }
+    table.data-table th { background: #f9f9f7; }
+    .transcript-block {
+        white-space: pre-wrap; word-break: break-word; background: #fafafa;
+        border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem 1rem;
+        font-family: ui-monospace, monospace; font-size: 0.85rem; max-height: 16rem;
+        overflow-y: auto;
+    }
+    /* Chart color roles -- see the dataviz skill's reference palette.
+       Light defaults here; dark steps override via prefers-color-scheme,
+       validated against the same palette (blue/red diverging pair,
+       single-hue blue sequential ramp). */
+    .viz-root {
+        --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+        --muted: #898781; --gridline: #e1e0d9; --baseline: #c3c2b7;
+        --diverging-pos: #e34948; --diverging-neg: #2a78d6;
+        --seq-light: #cde2fb; --seq-dark: #0d366b;
+    }
+    @media (prefers-color-scheme: dark) {
+        .viz-root {
+            --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+            --muted: #898781; --gridline: #2c2c2a; --baseline: #383835;
+            --diverging-pos: #e66767; --diverging-neg: #3987e5;
+            --seq-light: #184f95; --seq-dark: #cde2fb;
+        }
+    }
+    .viz-root text { fill: var(--text-primary); }
+    .viz-root .muted-text { fill: var(--text-secondary); }
 """)
 
 
@@ -90,3 +133,26 @@ def page(title: str, active: str, *content):
 def placeholder(message: str):
     """Placeholder shown in place of a DB-5-dependent chart/page."""
     return Div(message, cls="placeholder")
+
+
+def pilot_banner(suite_version: str):
+    """Prominent, honest caveat for every DB-5-backed page.
+
+    All 47 real logs the pipeline can read today are pilot data (pre-DB-4,
+    pre-frozen-suite) -- see the pipeline module's own docstring. Per the
+    design-decisions note, "suite v1 is a clean break from all previous
+    findings. Prior runs become pilot data (v0), cited in the writeup as
+    motivation, not compared against." Charts baked from this data must say
+    so on the page, not just in a code comment, so nobody mistakes a pilot
+    number for a suite v1 score.
+    """
+    return Div(
+        "PILOT DATA (",
+        Strong(suite_version),
+        "). This is ",
+        Strong("not"),
+        " the frozen suite v1 -- these numbers are from pre-DB-4 pilot runs, "
+        "shown for illustration only. Suite v1 scores are never compared "
+        "against pilot data; see the design-decisions note.",
+        cls="pilot-banner",
+    )
