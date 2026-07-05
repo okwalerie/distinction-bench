@@ -128,3 +128,10 @@ def list_renderers() -> list[str]:
         ['canonical', 'noisy_parens']
     """
     return sorted(_RENDERER_REGISTRY.keys())
+
+
+# Concrete archetypes and injectors (M5 migration) register themselves into
+# ARCHETYPE_REGISTRY/INJECTOR_REGISTRY and DIALECT_SPECS at import time via
+# register_named_dialect, which does `from .. import register_renderer` --
+# so this import must come after register_renderer is defined above.
+from . import archetypes, injectors  # noqa: E402, F401

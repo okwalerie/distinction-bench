@@ -248,3 +248,135 @@ class TestInjectorApplicabilityShape:
         assert isinstance(fixture, Injector)
         assert "parens" in fixture.applicability
         assert "rooms" not in fixture.applicability
+
+
+class TestTextReaderThreading:
+    """M1/M2 review handoff F1: text_reader must actually reach verify() via
+    the archetype, not just exist as an unused induced_relation parameter.
+    """
+
+    def test_verify_without_text_reader_uses_canonical_default(self):
+        root = form_to_nodes("(()())")
+        base = BaseRender(modality="text", payload="(()())", node_map={})
+        ok, _ = verify(base, root, pred=lambda p, c: False)
+        assert ok is True
+
+    def test_verify_with_custom_text_reader_is_used(self):
+        # A payload the canonical reader cannot parse ("[[]]" has no literal
+        # parens, so form_to_nodes would see zero marks), but a custom
+        # reader that treats "[" "]" as the bracket glyphs recovers it.
+        from lofbench.renderers.pipeline.nodes import nodes_from_parsed
+
+        def bracket_reader(s: str) -> object:
+            stack: list[list] = [[]]
+            for char in s:
+                if char == "[":
+                    new_level: list = []
+                    stack[-1].append(new_level)
+                    stack.append(new_level)
+                elif char == "]":
+                    stack.pop()
+            return nodes_from_parsed(stack[0])
+
+        root = form_to_nodes("(())")
+        base = BaseRender(modality="text", payload="[[]]", node_map={})
+
+        # Without the custom reader, the canonical default sees no marks at
+        # all in "[[]]" and fails verification.
+        ok_default, _ = verify(base, root, pred=lambda p, c: False)
+        assert ok_default is False
+
+        ok_custom, _ = verify(base, root, pred=lambda p, c: False, text_reader=bracket_reader)
+        assert ok_custom is True
+
+    def test_composed_renderer_uses_archetype_text_reader(self):
+        # parens.noisy-v1's bracket_swap output is unparseable by the
+        # canonical "()"-only reader, but ParensArchetype.text_reader (the
+        # bracket-agnostic reader) makes it verify. If ComposedRenderer.render
+        # stopped forwarding archetype.text_reader to verify(), this dialect
+        # would fail verification on almost every non-trivial form.
+        renderer = get_renderer("parens.noisy-v1")
+        result = renderer.render("(()())")
+        assert result.metadata["structure_verified"] is True
+
+
+class TestNodeMapCompleteChecker:
+    """M1/M2 review handoff F2: a shared, exported checker for archetype
+    authors, not just test-local asserts.
+    """
+
+    def test_complete_map_does_not_raise(self):
+        from lofbench.renderers.pipeline.archetype import assert_node_map_complete
+
+        root = form_to_nodes("(()())")
+        node_map = {
+            nid: Primitive(node_id=nid, kind="token", geom={}) for nid in iter_node_ids(root)
+        }
+        assert_node_map_complete(root, node_map)  # no raise
+
+    def test_missing_id_raises_with_detail(self):
+        from lofbench.renderers.pipeline.archetype import assert_node_map_complete
+
+        root = form_to_nodes("(()())")
+        all_ids = list(iter_node_ids(root))
+        node_map = {nid: Primitive(node_id=nid, kind="token", geom={}) for nid in all_ids}
+        node_map.pop(all_ids[0])
+        with pytest.raises(AssertionError, match="missing="):
+            assert_node_map_complete(root, node_map)
+
+    def test_extra_id_raises_with_detail(self):
+        from lofbench.renderers.pipeline.archetype import assert_node_map_complete
+
+        root = form_to_nodes("()")
+        node_map = {
+            nid: Primitive(node_id=nid, kind="token", geom={}) for nid in iter_node_ids(root)
+        }
+        node_map["not-a-real-id"] = Primitive(node_id="not-a-real-id", kind="token", geom={})
+        with pytest.raises(AssertionError, match="extra="):
+            assert_node_map_complete(root, node_map)
+
+
+class TestRegisterRendererErrorBranches:
+    """M1/M2 review handoff F3: register_renderer's guard branches were
+    exercised only by the acceptance path (a callable factory resolves), not
+    by their own negative arms.
+    """
+
+    def test_non_callable_raises_type_error(self):
+        from lofbench.renderers import register_renderer
+
+        with pytest.raises(TypeError, match="must be callable"):
+            register_renderer("not-callable-test", object())
+
+    def test_duplicate_name_raises_value_error(self):
+        from lofbench.renderers import get_renderer, register_renderer
+
+        register_renderer("dup-name-test", lambda **kw: get_renderer("canonical", **kw))
+        try:
+            with pytest.raises(ValueError, match="already registered"):
+                register_renderer("dup-name-test", lambda **kw: get_renderer("canonical", **kw))
+        finally:
+            from lofbench.renderers import _RENDERER_REGISTRY
+
+            _RENDERER_REGISTRY.pop("dup-name-test", None)
+
+
+class TestCompositeProvenance:
+    """Headline acceptance criterion 9: a composite-task Sample's metadata
+    carries the same full render_provenance chain a single-task sample does,
+    instead of dropping it.
+    """
+
+    def test_composite_dataset_carries_render_metadata_per_expression(self):
+        from lofbench.datasets.factory import create_composite_dataset
+
+        dataset = create_composite_dataset(
+            n_groups=1, group_size=3, seed=1, renderer=get_renderer("parens.noisy-v1")
+        )
+        sample = dataset.samples[0]
+        render_metadata = sample.metadata["render_metadata"]
+        assert len(render_metadata) == 3
+        for entry in render_metadata:
+            assert entry["structure_verified"] is True
+            assert "injectors" in entry
+            assert entry["dialect_id"] == "parens.noisy-v1"
