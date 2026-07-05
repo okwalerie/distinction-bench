@@ -1,8 +1,9 @@
 {
-  "default_actor": "human:walerie",
+  "default_actor": "human:valerie",
   "default_priority": "medium",
   "default_status": "backlog",
-  "instance_id": "inst_01KJB54NNR87FFG3FRNFERJ5CP",
+  "instance_id": "inst_01KWQKWG2KY5CRH03V319ZX31F",
+  "model": "claude-fable-5",
   "project_code": "DB",
   "project_name": "distinction-bench",
   "schema_version": 1,
@@ -23,6 +24,17 @@
       "needs_human": "A human decision, approval, or input is required before work can continue.",
       "planned": "Plan is written and approved. Ready for implementation but work has not started.",
       "review": "Implementation is complete. Work is being reviewed before it can ship."
+    },
+    "display_names": {
+      "backlog": "thinking about it",
+      "blocked": "stuck",
+      "cancelled": "never mind",
+      "done": "shipped",
+      "in_planning": "figuring it out",
+      "in_progress": "on it",
+      "needs_human": "ask flesh",
+      "planned": "ready to go",
+      "review": "check my work"
     },
     "roles": [
       "review"
@@ -94,5 +106,5 @@
       "review": 5
     }
   },
-  "workflow_preset": "classic"
+  "workflow_preset": "opinionated"
 }

@@ -1,0 +1,60 @@
+{
+  "assigned_to": "agent:claire-impl-db6",
+  "branch_links": [
+    {
+      "branch": "feat/DB-6-site-phase1",
+      "linked_at": "2026-07-05T00:56:20Z",
+      "linked_by": "agent:claire-impl-db6",
+      "repo": null
+    },
+    {
+      "branch": "feat/DB-6-site-phase2",
+      "linked_at": "2026-07-05T03:06:51Z",
+      "linked_by": "agent:claire-impl-db6b",
+      "repo": null
+    }
+  ],
+  "comment_count": 8,
+  "complexity": "high",
+  "created_at": "2026-07-04T22:28:33Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Read .lattice/notes/design-decisions-2026-07-04.md first. It binds this task.\n\nBuild a small Python web app (fasthtml or fastapi with datastar or htmx) that Valerie hosts on her own server. Not a static site. It imports lofbench directly, which keeps one source of truth for rendering.\n\nThe site needs:\n1. the sandbox as centrepiece: type or pick a form, see it rendered in every dialect at once, server-rendered on request\n2. headline chart: per-model sensitivity score from the frozen suite, baked from DB-5 parquet artifacts at deploy\n3. a model-by-dialect matrix and paired-delta charts as second-level detail\n4. a short axioms explainer (calling, crossing) using the CMY colour-cue pedagogy from the reference image\n5. transcript walkthroughs, correct and failed\n6. links out to the external writeup per release\n\nAudience is eval researchers; rigour and legibility before polish. State the DB-5 artifact fields this site needs as requirements in the plan; DB-5 owns the schema. Deployment target is Valerie's server; keep ops light (one service, systemd or a container).",
+  "done_at": "2026-07-05T03:49:46Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWQXGCYYB3R1DWZEFYNDDPQ5",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KWR60S1GXRYVZH5FVV4MKQEG",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQKYVHJ790ZW07VNH8MPMA6",
+  "last_event_id": "ev_01KWR6B0MA5TJAC7KEGQXRYH0E",
+  "last_status_changed_at": "2026-07-05T03:49:46Z",
+  "priority": "medium",
+  "relationships_out": [
+    {
+      "created_at": "2026-07-04T22:28:40Z",
+      "created_by": "human:valerie",
+      "note": null,
+      "target_task_id": "task_01KWQKYVADQNEXNR6HSBPEVFBV",
+      "type": "depends_on"
+    }
+  ],
+  "reopened_count": 2,
+  "schema_version": 1,
+  "short_id": "DB-6",
+  "status": "done",
+  "tags": [
+    "site"
+  ],
+  "title": "Site: python htmx/datastar server with dialect sandbox",
+  "type": "task",
+  "updated_at": "2026-07-05T03:49:46Z",
+  "urgency": null
+}
