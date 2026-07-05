@@ -135,3 +135,15 @@ def list_renderers() -> list[str]:
 # register_named_dialect, which does `from .. import register_renderer` --
 # so this import must come after register_renderer is defined above.
 from . import archetypes, injectors  # noqa: E402, F401
+
+# DB-3: importing this registers every visual archetype family (trees,
+# blocks, graph, map, map-centred, rooms, rna_arc, paths_lite) into the
+# pipeline's ARCHETYPE_REGISTRY and DIALECT_SPECS. It deliberately does
+# NOT yet add them to this module's _RENDERER_REGISTRY via register_renderer
+# above -- see lofbench.renderers.archetypes's module docstring for why
+# (DB-4 M5's spatial emit() isn't landed, and registering the renderer
+# entry today breaks lofsite's sandbox fan-out). Placed last, after
+# register_renderer is defined, since a future un-deferral would call it
+# from here. One import line, append-only, to keep this file's
+# merge-conflict surface with DB-4's parallel pipeline work minimal.
+from . import archetypes as _archetypes  # noqa: E402, F401
