@@ -63,8 +63,18 @@ from __future__ import annotations
 
 from ..pipeline.registry import ARCHETYPE_REGISTRY
 from ..pipeline.spec import DIALECT_SPECS, DialectSpec
-from . import parens, pattern  # noqa: F401  (import for registration side effect)
-from . import blocks, graph, map_centred, map_rect, paths_lite, rna_arc, rooms, trees
+from . import (  # noqa: F401  (import for registration side effect)
+    blocks,
+    graph,
+    map_centred,
+    map_rect,
+    parens,
+    paths_lite,
+    pattern,
+    rna_arc,
+    rooms,
+    trees,
+)
 
 __all__: list[str] = []
 
