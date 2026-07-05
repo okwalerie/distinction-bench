@@ -1,0 +1,24 @@
+# Example systemd unit for lofsite (DB-6, phase 1).
+#
+# Illustrative only -- deployment itself is out of this task's scope.
+# Adjust User, WorkingDirectory, and the uv binary path for the actual host
+# before installing. Install at /etc/systemd/system/lofsite.service, then:
+#   systemctl daemon-reload
+#   systemctl enable --now lofsite
+
+[Unit]
+Description=distinction-bench site (lofsite)
+After=network.target
+
+[Service]
+Type=simple
+User=lofsite
+WorkingDirectory=/opt/distinction-bench
+Environment=PORT=5001
+Environment=LOFSITE_DATA_DIR=/opt/distinction-bench/data/suite_v1
+ExecStart=/usr/local/bin/uv run --extra site python -m lofsite.app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
