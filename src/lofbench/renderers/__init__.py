@@ -46,10 +46,17 @@ __all__ = [
 # Widened from type[FormRenderer] to Callable[..., FormRenderer]: a named
 # composed dialect registers a factory function, not a class (see
 # lofbench.renderers.pipeline.spec.make_named_dialect_factory).
+#
+# "circle" is deliberately absent: DB-4 M5-rest migrates SVGCircleRenderer
+# to the enclosure@1 archetype and registers "circle" (plus
+# "enclosure.canonical-v1") as composed named dialects instead --
+# lofbench.renderers.archetypes's module docstring and enclosure.py's own
+# docstring have the detail. SVGCircleRenderer/SVGCircleConfig stay
+# imported and exported below (no renderer is deleted until parity is
+# tested), just no longer wired to a registry key directly.
 _RENDERER_REGISTRY: dict[str, Callable[..., FormRenderer]] = {
     "canonical": CanonicalRenderer,
     "noisy_parens": NoisyParensRenderer,
-    "circle": SVGCircleRenderer,
     "nested_list": NestedListRenderer,
     "sexpr": SExprRenderer,
     "composed": ComposedRenderer,
@@ -133,21 +140,14 @@ def list_renderers() -> list[str]:
 # Concrete archetypes and injectors (M5 migration) register themselves into
 # ARCHETYPE_REGISTRY/INJECTOR_REGISTRY and DIALECT_SPECS at import time via
 # register_named_dialect, which does `from .. import register_renderer` --
-# so this import must come after register_renderer is defined above.
+# so this import must come after register_renderer is defined above. This
+# single import also now registers every DB-3 visual archetype family
+# (trees, blocks, graph, map, map-centred, rooms, rna_arc, paths_lite) as a
+# full renderer-registry entry (DB-4 M5-rest flip: their deferred
+# registration is active now that pipeline.emit has a real spatial path --
+# see lofbench.renderers.archetypes's module docstring).
 # isort: off
 from . import archetypes, injectors  # noqa: E402, F401
-
-# DB-3: importing this registers every visual archetype family (trees,
-# blocks, graph, map, map-centred, rooms, rna_arc, paths_lite) into the
-# pipeline's ARCHETYPE_REGISTRY and DIALECT_SPECS. It deliberately does
-# NOT yet add them to this module's _RENDERER_REGISTRY via register_renderer
-# above -- see lofbench.renderers.archetypes's module docstring for why
-# (DB-4 M5's spatial emit() isn't landed, and registering the renderer
-# entry today breaks lofsite's sandbox fan-out). Placed last, after
-# register_renderer is defined, since a future un-deferral would call it
-# from here. One import line, append-only, to keep this file's
-# merge-conflict surface with DB-4's parallel pipeline work minimal.
-from . import archetypes as _archetypes  # noqa: E402, F401
 
 # DB-2 phase B (task_01KWQKYTN19RZN2BFKAAGQCFKA): register the five text
 # dialect archetypes, their injectors, and their named DialectSpecs.

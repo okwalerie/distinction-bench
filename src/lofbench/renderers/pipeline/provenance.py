@@ -5,6 +5,13 @@ Full schema per ``.lattice/notes/rendering-architecture-2026-07-04.md``,
 schema notes reaches ``RenderedForm.metadata`` from the task layer (M8,
 ``Task.metadata``/sample metadata stamping), not from ``ComposedRenderer``,
 which only ever sees a bare form string, never an assigned id.
+
+``payload_hash`` (M5-rest/M7 addition, not in the doc's original schema
+listing but required by its "Frozen forms and payload hashing" section): a
+blake2b of ``Emission.symbolic_source`` -- the emitted string for text, the
+symbolic SVG scene for spatial, never rasterised pixels. Computed uniformly
+at render time so the M7 suite freezer and its rerun gate can read it
+straight from provenance rather than reconstructing it independently.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ def stamp_provenance(
     structure_verified: bool,
     roundtrip_ok: bool | None,
     renderer_lib_version: str | None,
+    payload_hash: str,
 ) -> dict[str, Any]:
     return {
         "suite_version": suite_version,
@@ -43,4 +51,5 @@ def stamp_provenance(
         "structure_verified": structure_verified,
         "roundtrip_ok": roundtrip_ok,
         "renderer_lib_version": renderer_lib_version,
+        "payload_hash": payload_hash,
     }
