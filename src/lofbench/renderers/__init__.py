@@ -134,6 +134,7 @@ def list_renderers() -> list[str]:
 # ARCHETYPE_REGISTRY/INJECTOR_REGISTRY and DIALECT_SPECS at import time via
 # register_named_dialect, which does `from .. import register_renderer` --
 # so this import must come after register_renderer is defined above.
+# isort: off
 from . import archetypes, injectors  # noqa: E402, F401
 
 # DB-3: importing this registers every visual archetype family (trees,
@@ -147,3 +148,13 @@ from . import archetypes, injectors  # noqa: E402, F401
 # from here. One import line, append-only, to keep this file's
 # merge-conflict surface with DB-4's parallel pipeline work minimal.
 from . import archetypes as _archetypes  # noqa: E402, F401
+
+# DB-2 phase B (task_01KWQKYTN19RZN2BFKAAGQCFKA): register the five text
+# dialect archetypes, their injectors, and their named DialectSpecs.
+# Append-only hook to minimise merge surface with DB-4's parallel M3-M5
+# branch -- see lofbench.dialects_text.register_text_dialects.
+from lofbench import dialects_text as _dialects_text  # noqa: E402
+
+# isort: on
+
+_dialects_text.register_text_dialects()

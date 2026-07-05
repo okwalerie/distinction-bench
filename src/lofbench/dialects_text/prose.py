@@ -75,6 +75,25 @@ from __future__ import annotations
 import random
 
 from lofbench.core import string_to_form
+from lofbench.dialects_text._common import TextArchetypeMixin, oxford_join_spanned
+from lofbench.renderers.pipeline.archetype import BaseRender, Primitive
+from lofbench.renderers.pipeline.nodes import FormNode, nodes_from_parsed
+
+# `synonym_jitter` (Phase B) vocabulary. `parse_prose`'s reader below is
+# widened to accept this whole closed set (not just the base "box"/
+# "holding") so it round-trips jittered output too; the base render
+# (`render_prose`/`_render_singular`/`_render_group`, unchanged from Phase
+# A) still only ever emits "box"/"holding"/"boxes", so this widening is
+# additive and does not change Phase A's own test outcomes.
+NOUN_SYNONYMS = ("box", "container", "vessel", "crate")
+NOUN_PLURALS = {
+    "box": "boxes",
+    "container": "containers",
+    "vessel": "vessels",
+    "crate": "crates",
+}
+VERB_SYNONYMS = ("holding", "containing", "enclosing")
+_ALL_PLURALS = frozenset(NOUN_PLURALS.values())
 
 NUMERAL_WORDS = (
     "zero",
@@ -134,9 +153,19 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _parse_singular(tokens: list[str], pos: int) -> tuple[list, int]:
-    if tokens[pos : pos + 3] == ["an", "empty", "box"]:
+    if (
+        pos + 2 < len(tokens)
+        and tokens[pos] == "an"
+        and tokens[pos + 1] == "empty"
+        and tokens[pos + 2] in NOUN_SYNONYMS
+    ):
         return [], pos + 3
-    if tokens[pos : pos + 3] == ["a", "box", "holding"]:
+    if (
+        pos + 2 < len(tokens)
+        and tokens[pos] == "a"
+        and tokens[pos + 1] in NOUN_SYNONYMS
+        and tokens[pos + 2] in VERB_SYNONYMS
+    ):
         return _parse_group(tokens, pos + 3)
     snippet = tokens[pos : pos + 5]
     raise ValueError(f"cannot parse prose singular description at token {pos}: {snippet!r}")
@@ -147,7 +176,7 @@ def _parse_group(tokens: list[str], pos: int) -> tuple[list, int]:
         pos + 2 < len(tokens)
         and tokens[pos] in NUMERAL_WORDS
         and tokens[pos + 1] == "empty"
-        and tokens[pos + 2] in ("box", "boxes")
+        and tokens[pos + 2] in _ALL_PLURALS
     ):
         n = NUMERAL_WORDS.index(tokens[pos])
         return [[] for _ in range(n)], pos + 3
@@ -182,3 +211,105 @@ def parse_prose(rendered: str) -> list:
     tokens = _tokenize(rendered)
     marks, pos = _parse_group(tokens, 0)
     return marks
+
+
+# =============================================================================
+# Phase B: Archetype + Injector wrapping (task_01KWQKYTN19RZN2BFKAAGQCFKA, Phase B)
+# =============================================================================
+#
+# `_render_singular_spanned`/`_render_group_spanned` mirror
+# `_render_singular`/`_render_group` above exactly (same grammar, same
+# string output with `jitter=False`), but thread a `FormNode` (for its
+# `id`) through the recursion and return a `{node_id: (start, end)}` span
+# dict alongside the text, computed incrementally as strings are
+# concatenated. When two or more leaf siblings collapse to one shared
+# phrase ("two empty boxes"), every one of those sibling ids maps to the
+# *same* span -- the text genuinely does not distinguish them further, so
+# this is not a loss of information, just an honest reflection of what the
+# rendered string can support.
+
+
+def _render_singular_spanned(
+    node: FormNode, rng: random.Random, jitter: bool
+) -> tuple[str, dict[str, tuple[int, int]]]:
+    noun = rng.choice(NOUN_SYNONYMS) if jitter else "box"
+    if not node.children:
+        text = f"an empty {noun}"
+        return text, {node.id: (0, len(text))}
+    verb = rng.choice(VERB_SYNONYMS) if jitter else "holding"
+    prefix = f"a {noun} {verb} "
+    group_text, group_spans = _render_group_spanned(node.children, rng, jitter)
+    text = prefix + group_text
+    offset = len(prefix)
+    spans = {nid: (s + offset, e + offset) for nid, (s, e) in group_spans.items()}
+    spans[node.id] = (0, len(text))
+    return text, spans
+
+
+def _render_group_spanned(
+    nodes: tuple[FormNode, ...], rng: random.Random, jitter: bool
+) -> tuple[str, dict[str, tuple[int, int]]]:
+    n = len(nodes)
+    if n == 1:
+        return _render_singular_spanned(nodes[0], rng, jitter)
+    if all(not nd.children for nd in nodes):
+        noun_plural = NOUN_PLURALS[rng.choice(NOUN_SYNONYMS)] if jitter else "boxes"
+        text = f"{NUMERAL_WORDS[n]} empty {noun_plural}"
+        spans = {nd.id: (0, len(text)) for nd in nodes}
+        return text, spans
+    items = [_render_singular_spanned(nd, rng, jitter) for nd in nodes]
+    joined, joined_spans = oxford_join_spanned(items)
+    prefix = f"{NUMERAL_WORDS[n]} things: "
+    offset = len(prefix)
+    spans = {nid: (s + offset, e + offset) for nid, (s, e) in joined_spans.items()}
+    text = prefix + joined
+    return text, spans
+
+
+def _build_spanned(root: FormNode, rng: random.Random, *, jitter: bool = False) -> BaseRender:
+    if not root.children:
+        return BaseRender(modality="text", payload="nothing.", node_map={})
+    text, spans = _render_group_spanned(root.children, rng, jitter)
+    payload = text + "."
+    node_map = {
+        nid: Primitive(node_id=nid, kind="span", geom={"start": s, "end": e})
+        for nid, (s, e) in spans.items()
+    }
+    return BaseRender(modality="text", payload=payload, node_map=node_map)
+
+
+class ProseArchetype(TextArchetypeMixin):
+    """``prose@1``, family ``prose``. Wraps this module's render/parse pair;
+    parse-back (``parse_prose``) is the structure verification.
+    """
+
+    name = "prose@1"
+    version = "1"
+    family = "prose"
+
+    # M4: `parse_prose`'s closed-vocabulary reader recognises this
+    # dialect's own English grammar, not literal parens -- without this,
+    # the default canonical-parens reader sees zero marks in a prose
+    # payload and `structure_verified` is always False.
+    text_reader = staticmethod(lambda s: nodes_from_parsed(parse_prose(s)))
+
+    def build(self, root: FormNode, rng: random.Random) -> BaseRender:
+        return _build_spanned(root, rng, jitter=False)
+
+
+class SynonymJitterInjector:
+    """``synonym_jitter``: swap "box"/"holding" for a closed-vocabulary
+    synonym at every occurrence. Rebuilds fresh from ``root`` via
+    ``_build_spanned(jitter=True)``; ``parse_prose``'s widened vocabulary
+    (see module docstring note above `NOUN_SYNONYMS`) still round-trips it.
+    """
+
+    name = "synonym_jitter"
+    version = "1"
+    modalities = frozenset({"text"})
+    applicability = frozenset({"prose@1"})
+
+    def apply(
+        self, base: BaseRender, root: FormNode, rng: random.Random, **params: object
+    ) -> BaseRender:
+        return _build_spanned(root, rng, jitter=True)
