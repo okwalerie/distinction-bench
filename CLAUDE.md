@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **I1 (Calling)**: `()() → ()` — Adjacent marks condense to one
 - **I2 (Crossing)**: `(()) → void` — Nested mark cancels to void
 
-Every expression reduces to either `()` (marked) or void (unmarked).
+Every expression reduces to either `()` (marked) or void (unmarked). The benchmark runs as inspect-ai tasks, and presents each form through one of several rendering "dialects" (not just canonical parens) — see Architecture below.
 
 ## Development Commands
 
@@ -18,30 +18,35 @@ Every expression reduces to either `()` (marked) or void (unmarked).
 uv sync                    # Install dependencies
 uv run pytest              # Run tests
 uv run pytest -x -v        # Run tests, stop on first failure, verbose
-uv run pytest tests/test_form.py::test_name  # Run single test
+uv run pytest tests/test_core.py::test_name  # Run single test
 
 # Linting
 uv run ruff check .        # Lint
 uv run ruff format .       # Format
 
-# CLI (after package is built)
-uv run bench generate --n 1000 --seed 2025 --out data/cases.jsonl
-uv run bench validate --in data/cases.jsonl
+# Evaluation (inspect-ai)
+uv run inspect eval src/lofbench/tasks/single.py --model <provider/model> -T n=10
+uv run inspect eval src/lofbench/tasks/composite.py --model <provider/model> -T n_groups=20
+uv run inspect eval src/lofbench/tasks/single.py --model <provider/model> -T renderer=noisy_parens
+uv run inspect view         # Browse eval logs
 
 # Pre-commit
 pre-commit install         # Install hooks
 pre-commit run --all-files # Run manually
 ```
 
+A live evaluation run needs a provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) set in the environment. Without one, the command fails at model init, not at task construction — that is expected, not a docs bug.
+
 ## Architecture
 
-### Core Library (`src/`)
+### Core Library (`src/lofbench/`)
 
-- `form.py` — Canonical Form representation (nested lists), parsing (`string_to_form`, `form_to_string`), JSON conversion, validation, `depth()`, `size()`
-- `simplify.py` — Ground-truth simplifier applying I1/I2 until normal form; `simplify()`, `evaluate()`, `simplify_parens()`
-- `generate.py` — Deterministic random form generator with depth/width/marks controls
-- `dataset.py` — Dataclasses for test cases (single + composite), JSONL I/O
-- `cli.py` — CLI entry points for generate/validate commands
+- `core.py` — form representation, parsing, simplification, generation, `DIFFICULTY_CONFIGS`
+- `renderers/` — dialect renderer registry (`canonical`, `noisy_parens`, `circle`, `nested_list`, `sexpr`); `get_renderer`/`list_renderers`/`register_renderer` in `renderers/__init__.py`; `FormRenderer` ABC in `renderers/base.py`
+- `datasets/factory.py` — builds inspect-ai `Sample`s for text and image dialects (`create_single_dataset`, `create_composite_dataset`)
+- `tasks/` — inspect-ai task definitions: `single.py` (`single_lof_task`), `composite.py` (`composite_lof_task`), `prompts.py` (system/user prompt templates)
+- `scorers/lof_scorer.py` — `lof_single_scorer`, `lof_composite_scorer`
+- `analysis.py` — loads inspect eval logs into pandas for post-hoc analysis
 
 ### Representation
 
@@ -53,10 +58,16 @@ Normal forms:
 
 ### Test Structure (`tests/`)
 
-- Parsing roundtrips (string ↔ form ↔ JSON)
-- Simplification correctness on known examples
-- Generator well-formedness and constraint adherence
-- Evaluation matches expected outputs
+- `test_core.py` — parsing, simplification, generation
+- `test_renderers.py` — renderer registry and output correctness
+- `test_scorers.py` — scoring logic
+
+### Rendering Architecture (design, not yet built)
+
+A dialect-renderer rewrite is designed but not yet implemented: a two-layer archetype/injector model, containment-relation verification, and content-addressed seeding. This design is binding for the DB-1/DB-2/DB-3 rendering work. The current registry (`canonical`, `noisy_parens`, `circle`, `nested_list`, `sexpr`) is what exists in code today; the notes below specify the target, not the present state:
+
+- [`.lattice/notes/design-decisions-2026-07-04.md`](.lattice/notes/design-decisions-2026-07-04.md) — the interview decisions binding all DB tasks (what the benchmark measures, dialect families, task/prompt design, measurement design, budget)
+- [`.lattice/notes/rendering-architecture-2026-07-04.md`](.lattice/notes/rendering-architecture-2026-07-04.md) — the binding architecture design for the renderer rewrite (`ComposedRenderer`, `Archetype`/`Injector`, `DialectSpec`, seed threading, provenance schema)
 
 ## Constraints
 
