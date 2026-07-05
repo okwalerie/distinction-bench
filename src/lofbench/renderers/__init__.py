@@ -6,12 +6,15 @@ in various notations while preserving their structural meaning.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .base import FormRenderer, RenderedForm
 from .canonical import CanonicalConfig, CanonicalRenderer
 from .nested_list import NestedListConfig, NestedListRenderer
 from .noisy_parens import BRACKET_PAIRS, NoisyParensConfig, NoisyParensRenderer
+from .pipeline.composed import ComposedRenderer
+from .pipeline.spec import DialectSpec
 from .sexpr import PRESETS as SEXPR_PRESETS
 from .sexpr import SExprConfig, SExprRenderer
 from .svg_circle_renderer import SVGCircleConfig, SVGCircleRenderer
@@ -31,19 +34,25 @@ __all__ = [
     "SExprRenderer",
     "SExprConfig",
     "SEXPR_PRESETS",
+    "ComposedRenderer",
+    "DialectSpec",
     "get_renderer",
     "register_renderer",
     "list_renderers",
 ]
 
 
-# Registry mapping renderer names to their classes
-_RENDERER_REGISTRY: dict[str, type[FormRenderer]] = {
+# Registry mapping renderer names to a callable that returns a FormRenderer.
+# Widened from type[FormRenderer] to Callable[..., FormRenderer]: a named
+# composed dialect registers a factory function, not a class (see
+# lofbench.renderers.pipeline.spec.make_named_dialect_factory).
+_RENDERER_REGISTRY: dict[str, Callable[..., FormRenderer]] = {
     "canonical": CanonicalRenderer,
     "noisy_parens": NoisyParensRenderer,
     "circle": SVGCircleRenderer,
     "nested_list": NestedListRenderer,
     "sexpr": SExprRenderer,
+    "composed": ComposedRenderer,
 }
 
 
@@ -72,17 +81,22 @@ def get_renderer(name: str, **kwargs: Any) -> FormRenderer:
     return renderer_cls(**kwargs)
 
 
-def register_renderer(name: str, renderer_cls: type[FormRenderer]) -> None:
-    """Register a new renderer class.
+def register_renderer(name: str, renderer: Callable[..., FormRenderer]) -> None:
+    """Register a new renderer factory.
 
-    This allows users to add custom renderers to the system.
+    Accepts any callable that returns a FormRenderer: a FormRenderer
+    subclass (the common case), or a plain factory function such as the
+    named-dialect factories the composed pipeline registers (see
+    ``lofbench.renderers.pipeline.spec.make_named_dialect_factory``). The
+    guard is a callability check, not an issubclass check, so a named
+    factory goes through this guarded path rather than a raw dict write.
 
     Args:
         name: The unique name to register the renderer under
-        renderer_cls: The FormRenderer subclass to register
+        renderer: A FormRenderer subclass, or a callable returning one
 
     Raises:
-        TypeError: If renderer_cls is not a subclass of FormRenderer
+        TypeError: If renderer is not callable
         ValueError: If the name is already registered
 
     Examples:
@@ -94,15 +108,13 @@ def register_renderer(name: str, renderer_cls: type[FormRenderer]) -> None:
         ...         return RenderedForm(form_string, form_string, self.name, {})
         >>> register_renderer("my_renderer", MyRenderer)
     """
-    if not isinstance(renderer_cls, type) or not issubclass(renderer_cls, FormRenderer):
-        raise TypeError(
-            f"renderer_cls must be a subclass of FormRenderer, got {type(renderer_cls)}"
-        )
+    if not callable(renderer):
+        raise TypeError(f"renderer must be callable, got {type(renderer)}")
 
     if name in _RENDERER_REGISTRY:
         raise ValueError(f"Renderer {name!r} is already registered")
 
-    _RENDERER_REGISTRY[name] = renderer_cls
+    _RENDERER_REGISTRY[name] = renderer
 
 
 def list_renderers() -> list[str]:
