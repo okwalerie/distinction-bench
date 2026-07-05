@@ -46,6 +46,9 @@ from __future__ import annotations
 import random
 
 from lofbench.core import string_to_form
+from lofbench.dialects_text._common import TextArchetypeMixin
+from lofbench.renderers.pipeline.archetype import BaseRender, Primitive
+from lofbench.renderers.pipeline.nodes import FormNode
 
 INDENT_WIDTH = 4
 LABEL = "mark"
@@ -98,3 +101,109 @@ def parse_tree_indent(rendered: str) -> list:
         stack.append((indent, new_mark))
 
     return root
+
+
+# =============================================================================
+# Phase B: Archetype + Injector wrapping (task_01KWQKYTN19RZN2BFKAAGQCFKA, Phase B)
+# =============================================================================
+#
+# ``_build_spanned`` tracks absolute indent *columns* rather than
+# `depth * INDENT_WIDTH`, so the per-level increment can vary under jitter
+# (a different width at every level, even every line) while every child's
+# column still stays strictly deeper than its parent's -- safe by
+# construction under the off-side-rule reader, exactly per the grammar
+# pin's injector-safety argument. With ``jitter=False`` the increment is
+# always ``INDENT_WIDTH`` and the label is always ``LABEL``, reproducing
+# ``render_tree_indent``'s output byte-for-byte (no randomness drawn).
+
+LABEL_CHOICES = (LABEL, "node", "item")
+COMMENT_WORDS = ("note", "todo", "fixme", "context")
+
+
+def _emit(
+    node: FormNode,
+    col: int,
+    lines: list[str],
+    spans: dict[str, tuple[int, int]],
+    *,
+    jitter: bool,
+    rng: random.Random,
+) -> None:
+    start = len(lines)
+    label = rng.choice(LABEL_CHOICES) if jitter else LABEL
+    lines.append(" " * col + label)
+    # Siblings must share one indent column (the off-side rule), so the
+    # increment is drawn once per *parent*, not once per child -- drawing
+    # it inside the loop would let two siblings land at different columns,
+    # which the reader would then (correctly, per the off-side rule) read
+    # as parent/child instead of siblings.
+    child_col = col + (rng.randint(1, 6) if jitter else INDENT_WIDTH)
+    for i, child in enumerate(node.children):
+        if jitter and i > 0 and rng.random() < 0.4:
+            if rng.random() < 0.5:
+                lines.append("")
+            else:
+                lines.append(" " * child_col + "# " + rng.choice(COMMENT_WORDS))
+        _emit(child, child_col, lines, spans, jitter=jitter, rng=rng)
+    spans[node.id] = (start, len(lines))
+
+
+def _build_spanned(root: FormNode, rng: random.Random, *, jitter: bool = False) -> BaseRender:
+    lines: list[str] = []
+    spans: dict[str, tuple[int, int]] = {}
+    for i, child in enumerate(root.children):
+        if jitter and i > 0 and rng.random() < 0.4:
+            if rng.random() < 0.5:
+                lines.append("")
+            else:
+                lines.append("# " + rng.choice(COMMENT_WORDS))
+        _emit(child, 0, lines, spans, jitter=jitter, rng=rng)
+
+    payload = "\n".join(lines)
+
+    line_starts: list[int] = []
+    pos = 0
+    for line in lines:
+        line_starts.append(pos)
+        pos += len(line) + 1
+
+    node_map: dict[str, Primitive] = {}
+    for node_id, (start_line, end_line) in spans.items():
+        char_start = line_starts[start_line]
+        char_end = line_starts[end_line - 1] + len(lines[end_line - 1])
+        node_map[node_id] = Primitive(
+            node_id=node_id, kind="span", geom={"start": char_start, "end": char_end}
+        )
+    return BaseRender(modality="text", payload=payload, node_map=node_map)
+
+
+class TreeIndentArchetype(TextArchetypeMixin):
+    """``tree_indent@1``, family ``trees``. Wraps this module's render/parse
+    pair; parse-back (``parse_tree_indent``) is the structure verification.
+    """
+
+    name = "tree_indent@1"
+    version = "1"
+    family = "trees"
+
+    def build(self, root: FormNode, rng: random.Random) -> BaseRender:
+        return _build_spanned(root, rng, jitter=False)
+
+
+class IndentStyleJitterInjector:
+    """``indent_style_jitter``: vary the label word, spaces-per-level, and
+    insert blank/comment lines between siblings. Rebuilds fresh from
+    ``root`` via ``_build_spanned(jitter=True)``, which only ever deepens
+    a child's column relative to its parent's, never violates the
+    off-side rule, and is therefore safe by construction.
+    """
+
+    name = "indent_style_jitter"
+    version = "1"
+    modalities = frozenset({"text"})
+    applicability = frozenset({"tree_indent@1"})
+
+    def apply(
+        self, base: BaseRender, root: FormNode, rng: random.Random, **params: object
+    ) -> BaseRender:
+        return _build_spanned(root, rng, jitter=True)

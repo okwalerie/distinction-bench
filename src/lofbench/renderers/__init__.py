@@ -128,3 +128,12 @@ def list_renderers() -> list[str]:
         ['canonical', 'noisy_parens']
     """
     return sorted(_RENDERER_REGISTRY.keys())
+
+
+# DB-2 phase B (task_01KWQKYTN19RZN2BFKAAGQCFKA): register the five text
+# dialect archetypes, their injectors, and their named DialectSpecs.
+# Append-only hook to minimise merge surface with DB-4's parallel M3-M5
+# branch -- see lofbench.dialects_text.register_text_dialects.
+from lofbench import dialects_text as _dialects_text  # noqa: E402
+
+_dialects_text.register_text_dialects()

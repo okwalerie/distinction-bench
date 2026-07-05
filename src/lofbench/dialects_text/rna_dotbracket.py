@@ -49,6 +49,9 @@ from __future__ import annotations
 import random
 
 from lofbench.core import string_to_form
+from lofbench.dialects_text._common import TextArchetypeMixin
+from lofbench.renderers.pipeline.archetype import BaseRender, Primitive
+from lofbench.renderers.pipeline.nodes import FormNode
 
 NUCLEOTIDES = ("A", "C", "G", "U")
 
@@ -86,3 +89,103 @@ def parse_rna_dotbracket(rendered: str) -> list:
     remainder = struct_line[len("structure:") :]
     cleaned = remainder.replace(" ", "").replace(".", "")
     return string_to_form(cleaned)
+
+
+# =============================================================================
+# Phase B: Archetype + Injector wrapping (task_01KWQKYTN19RZN2BFKAAGQCFKA, Phase B)
+# =============================================================================
+#
+# ``_build_spanned`` is the single implementation behind both the archetype's
+# no-jitter ``build`` and the ``unpaired_filler`` injector's jittered
+# rebuild: it walks the ``FormNode`` tree once, producing the two-line
+# payload and a per-node character-offset ``node_map`` in the same pass.
+# With ``filler=False`` it draws exactly one nucleotide per bracket
+# character in the same left-to-right order as ``render_rna_dotbracket``'s
+# ``[rng.choice(NUCLEOTIDES) for _ in structure_chars]``, so it reproduces
+# that function's output byte-for-byte given the same seed (see
+# ``tests/test_text_dialects_pipeline.py``'s cross-check).
+
+
+def _emit_mark(
+    node: FormNode,
+    columns: list[tuple[str, str]],
+    rng: random.Random,
+    filler: bool,
+    spans: dict[str, tuple[int, int]],
+) -> None:
+    start = len(columns)
+    columns.append((rng.choice(NUCLEOTIDES), "("))
+    for i, child in enumerate(node.children):
+        if filler and i > 0:
+            columns.append((rng.choice(NUCLEOTIDES), "."))
+        _emit_mark(child, columns, rng, filler, spans)
+    columns.append((rng.choice(NUCLEOTIDES), ")"))
+    spans[node.id] = (start, len(columns))
+
+
+def _build_spanned(root: FormNode, rng: random.Random, *, filler: bool = False) -> BaseRender:
+    """Build the two-line payload plus a node_map of character spans.
+
+    A node's span covers its own opening-through-closing bracket pair in
+    the ``structure:`` line -- i.e. its whole subtree's region -- mapped
+    into the full payload's character offsets. Filler dots (``filler``
+    True, one at each sibling boundary at every depth, matching the plan's
+    "sibling boundaries in both lines") get ``node_id = None`` and are
+    never part of any real node's span, so they cannot affect
+    ``induced_relation`` by construction.
+    """
+    columns: list[tuple[str, str]] = []
+    spans: dict[str, tuple[int, int]] = {}
+    for i, child in enumerate(root.children):
+        if filler and i > 0:
+            columns.append((rng.choice(NUCLEOTIDES), "."))
+        _emit_mark(child, columns, rng, filler, spans)
+
+    seq_chars = [c[0] for c in columns]
+    struct_chars = [c[1] for c in columns]
+    seq_line = "sequence: " + " ".join(seq_chars)
+    struct_line = "structure: " + " ".join(struct_chars)
+    payload = f"{seq_line}\n{struct_line}"
+
+    struct_prefix = len(seq_line) + 1 + len("structure: ")
+    node_map: dict[str, Primitive] = {}
+    for node_id, (start_col, end_col) in spans.items():
+        start_char = struct_prefix + start_col * 2
+        end_char = struct_prefix + (end_col - 1) * 2 + 1
+        node_map[node_id] = Primitive(
+            node_id=node_id, kind="span", geom={"start": start_char, "end": end_char}
+        )
+    return BaseRender(modality="text", payload=payload, node_map=node_map)
+
+
+class RnaDotbracketArchetype(TextArchetypeMixin):
+    """``rna_dotbracket@1``, family ``biopolymer``. Wraps this module's
+    render/parse pair; parse-back (``parse_rna_dotbracket``) is the
+    structure verification, per the module docstring's round-trip recipe.
+    """
+
+    name = "rna_dotbracket@1"
+    version = "1"
+    family = "biopolymer"
+
+    def build(self, root: FormNode, rng: random.Random) -> BaseRender:
+        return _build_spanned(root, rng, filler=False)
+
+
+class UnpairedFillerInjector:
+    """``unpaired_filler``: insert decorative ``.`` linker columns at
+    sibling boundaries in both lines. Rebuilds fresh from ``root`` (ignores
+    the incoming ``base``) via the same ``_build_spanned`` the archetype
+    uses, which keeps the inserted fillers structurally inert by
+    construction rather than by post-hoc string surgery.
+    """
+
+    name = "unpaired_filler"
+    version = "1"
+    modalities = frozenset({"text"})
+    applicability = frozenset({"rna_dotbracket@1"})
+
+    def apply(
+        self, base: BaseRender, root: FormNode, rng: random.Random, **params: object
+    ) -> BaseRender:
+        return _build_spanned(root, rng, filler=True)

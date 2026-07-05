@@ -82,10 +82,27 @@ from __future__ import annotations
 import random
 
 from lofbench.core import string_to_form
+from lofbench.dialects_text._common import TextArchetypeMixin, oxford_join_spanned
+from lofbench.renderers.pipeline.archetype import BaseRender, Primitive
+from lofbench.renderers.pipeline.nodes import FormNode
 
 NOUN = "creature"
 TRANS_VERB = "watches"
 INTRANS_VERB = "sleeps"
+
+# `vocabulary_jitter` (Phase B) vocabulary. `parse_clause_embedding`'s
+# reader below is widened to accept this whole closed set (not just the
+# base "creature") so it round-trips jittered output too; the base render
+# (`render_clause_embedding`/`_render_clause_parts`, unchanged from Phase
+# A) still only ever emits "creature", so this widening is additive and
+# does not change Phase A's own test outcomes. Verb identity was already
+# never checked by the parser (only consumed positionally), so no verb
+# vocabulary needs threading through here.
+NOUN_SYNONYMS = ("creature", "animal", "being")
+NOUN_PLURALS = {"creature": "creatures", "animal": "animals", "being": "beings"}
+TRANS_VERB_SYNONYMS = ("watches", "observes", "tracks")
+INTRANS_VERB_SYNONYMS = ("sleeps", "rests", "waits")
+_ALL_PLURALS = frozenset(NOUN_PLURALS.values())
 
 NUMERAL_WORDS = (
     "zero",
@@ -156,7 +173,7 @@ def _parse_full_clause(tokens: list[str], pos: int) -> tuple[list, int]:
     Returns the mark it represents (a nested list) and the position right
     after the trailing verb token.
     """
-    if tokens[pos : pos + 2] != ["the", NOUN]:
+    if not (pos + 1 < len(tokens) and tokens[pos] == "the" and tokens[pos + 1] in NOUN_SYNONYMS):
         raise ValueError(f"expected 'the {NOUN}' at token {pos}: {tokens[pos : pos + 5]!r}")
     pos += 2
 
@@ -165,7 +182,7 @@ def _parse_full_clause(tokens: list[str], pos: int) -> tuple[list, int]:
         if (
             pos + 2 < len(tokens)
             and tokens[pos] in NUMERAL_WORDS
-            and tokens[pos + 1] == "creatures"
+            and tokens[pos + 1] in _ALL_PLURALS
             and tokens[pos + 2] == "namely"
         ):
             n = NUMERAL_WORDS.index(tokens[pos])
@@ -205,3 +222,115 @@ def parse_clause_embedding(rendered: str) -> list:
         pos += 1
         marks.append(mark)
     return marks
+
+
+# =============================================================================
+# Phase B: Archetype + Injector wrapping (task_01KWQKYTN19RZN2BFKAAGQCFKA, Phase B)
+# =============================================================================
+#
+# `_render_clause_parts_spanned` mirrors `_render_clause_parts` above
+# exactly (same grammar, same string output with `jitter=False`), but
+# threads a `FormNode` (for its `id`) through the recursion and returns a
+# `{node_id: (start, end)}` span dict alongside `(np, verb)`, computed
+# incrementally. Each node's own span covers its whole clause -- `np`
+# through the trailing verb -- 0-relative to that clause's own start; a
+# parent shifts a child's spans by the child's position within the
+# parent's own np string.
+
+
+def _render_clause_parts_spanned(
+    node: FormNode, rng: random.Random, jitter: bool
+) -> tuple[str, str, dict[str, tuple[int, int]]]:
+    noun = rng.choice(NOUN_SYNONYMS) if jitter else NOUN
+
+    if not node.children:
+        verb = rng.choice(INTRANS_VERB_SYNONYMS) if jitter else INTRANS_VERB
+        np = f"the {noun}"
+        full = f"{np} {verb}"
+        return np, verb, {node.id: (0, len(full))}
+
+    trans_verb = rng.choice(TRANS_VERB_SYNONYMS) if jitter else TRANS_VERB
+
+    if len(node.children) == 1:
+        child_np, child_verb, child_spans = _render_clause_parts_spanned(
+            node.children[0], rng, jitter
+        )
+        prefix = f"the {noun} that "
+        np = f"{prefix}{child_np} {child_verb}"
+        offset = len(prefix)
+        spans = {nid: (s + offset, e + offset) for nid, (s, e) in child_spans.items()}
+        full = f"{np} {trans_verb}"
+        spans[node.id] = (0, len(full))
+        return np, trans_verb, spans
+
+    child_items = []
+    for child in node.children:
+        c_np, c_verb, c_spans = _render_clause_parts_spanned(child, rng, jitter)
+        child_items.append((f"{c_np} {c_verb}", c_spans))
+    n = len(node.children)
+    plural = NOUN_PLURALS[noun] if jitter else "creatures"
+    prefix = f"the {noun} that {NUMERAL_WORDS[n]} {plural} namely "
+    joined, joined_spans = oxford_join_spanned(child_items)
+    offset = len(prefix)
+    spans = {nid: (s + offset, e + offset) for nid, (s, e) in joined_spans.items()}
+    np = f"{prefix}{joined}"
+    full = f"{np} {trans_verb}"
+    spans[node.id] = (0, len(full))
+    return np, trans_verb, spans
+
+
+def _build_spanned(root: FormNode, rng: random.Random, *, jitter: bool = False) -> BaseRender:
+    if not root.children:
+        return BaseRender(modality="text", payload="nothing.", node_map={})
+
+    node_map: dict[str, Primitive] = {}
+    sentences: list[str] = []
+    pos = 0
+    for i, mark in enumerate(root.children):
+        np, verb, spans = _render_clause_parts_spanned(mark, rng, jitter)
+        full = f"{np} {verb}"
+        sentence = full + "."
+        for nid, (s, e) in spans.items():
+            node_map[nid] = Primitive(
+                node_id=nid, kind="span", geom={"start": pos + s, "end": pos + e}
+            )
+        sentences.append(sentence)
+        pos += len(sentence)
+        if i < len(root.children) - 1:
+            pos += 1  # separating space
+
+    payload = " ".join(sentences)
+    return BaseRender(modality="text", payload=payload, node_map=node_map)
+
+
+class ClauseEmbeddingArchetype(TextArchetypeMixin):
+    """``clause_embedding@1``, family ``embedding``. Wraps this module's
+    render/parse pair; parse-back (``parse_clause_embedding``) is the
+    structure verification.
+    """
+
+    name = "clause_embedding@1"
+    version = "1"
+    family = "embedding"
+
+    def build(self, root: FormNode, rng: random.Random) -> BaseRender:
+        return _build_spanned(root, rng, jitter=False)
+
+
+class VocabularyJitterInjector:
+    """``vocabulary_jitter``: swap nouns and verbs within their transitivity
+    class. Rebuilds fresh from ``root`` via ``_build_spanned(jitter=True)``;
+    ``parse_clause_embedding``'s widened noun vocabulary (see module
+    docstring note above `NOUN_SYNONYMS`) still round-trips it, and verb
+    identity was never checked by the parser to begin with.
+    """
+
+    name = "vocabulary_jitter"
+    version = "1"
+    modalities = frozenset({"text"})
+    applicability = frozenset({"clause_embedding@1"})
+
+    def apply(
+        self, base: BaseRender, root: FormNode, rng: random.Random, **params: object
+    ) -> BaseRender:
+        return _build_spanned(root, rng, jitter=True)
