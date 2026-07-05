@@ -23,13 +23,15 @@ from lofbench.renderers.pipeline.nodes import (
 )
 from lofbench.renderers.pipeline.verify import verify
 
-# Renderer names the M5 migration has not touched yet.
+# Renderer names the M5 migration has not touched (canonical/noisy_parens/
+# sexpr keep their original classes registered as-is); "circle" is migrated
+# below to the enclosure@1 composed dialect.
 LEGACY_RENDERER_NAMES = ["canonical", "noisy_parens", "circle", "nested_list", "sexpr"]
-# Registry key equals renderer.name for every legacy name except "circle": the
-# doc calls out the "circle" (registry key) vs "svg_circle" (renderer.name)
-# asymmetry by name and defers fixing it to M5's registry-key-equals-name
-# enforcement, alongside the SVGCircleRenderer -> enclosure@1 migration.
-KEY_EQUALS_NAME_RESOLVED_IN_M5 = {"circle"}
+# M5-rest closes the "circle" (registry key) vs "svg_circle" (renderer.name)
+# asymmetry the doc called out by name: "circle" now resolves to a composed
+# enclosure@1 dialect whose ComposedRenderer.name equals the registry key,
+# so key-equals-name holds for every legacy name with no exception.
+KEY_EQUALS_NAME_RESOLVED_IN_M5: set[str] = set()
 
 
 class TestNodeRoundTrip:

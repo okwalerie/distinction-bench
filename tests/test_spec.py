@@ -84,9 +84,10 @@ LEGACY_RENDERER_NAMES = ["canonical", "noisy_parens", "circle", "nested_list", "
 class TestLegacyNamesUnaffectedByWidening:
     @pytest.mark.parametrize("name", LEGACY_RENDERER_NAMES)
     def test_still_resolves(self, name):
-        # "circle" resolves to a renderer named "svg_circle" -- the doc's known
-        # asymmetry, fixed in M5. M2's acceptance is only that resolution still
-        # works after the registry value type widens.
+        # M2's acceptance is only that resolution still works after the
+        # registry value type widens -- "circle" is migrated in M5-rest to
+        # the enclosure@1 composed dialect (see tests/test_pipeline.py's
+        # TestRegistryKeyEqualsName for the key-equals-name assertion).
         get_renderer(name)
 
 

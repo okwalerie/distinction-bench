@@ -10,10 +10,12 @@ abstractions", "Determinism and seed threading" (M3), and
 from __future__ import annotations
 
 import random
+from hashlib import blake2b
 from typing import Any
 
 from ..base import FormRenderer, RenderedForm
-from .emit import emit
+from .admission import validate_applicability
+from .emit import CAIROSVG_VERSION, emit
 from .injector import Injector
 from .nodes import containment_relation, form_to_nodes, relation_hash
 from .provenance import stamp_provenance
@@ -61,6 +63,9 @@ class ComposedRenderer(FormRenderer):
             # KeyError on "dialect_id".
             raise ValueError("composed requires a DialectSpec or spec kwargs")
         self.spec = spec if spec is not None else DialectSpec.from_dict(kwargs)
+        # M6: reject an unsupported archetype-injector pairing at
+        # construction, before any render or model spend.
+        validate_applicability(self.spec)
 
     @property
     def name(self) -> str:
@@ -146,7 +151,11 @@ class ComposedRenderer(FormRenderer):
                 }
             )
 
-        emission = emit(base, self.spec.style)
+        # M5-rest: a spatial archetype supplies its own BaseRender -> str
+        # scene builder (duck-typed, same convention as `text_reader`) since
+        # there is no one generic way to draw an arbitrary Primitive tree.
+        to_svg = getattr(archetype, "to_svg", None)
+        emission = emit(base, self.spec.style, to_svg=to_svg)
         # `structure_verified` from the archetype-level check stays accurate
         # for the final `base` here: every injector either passed its own
         # verify (so `base` moved forward to an equally-verified state) or
@@ -155,6 +164,10 @@ class ComposedRenderer(FormRenderer):
         # line is reached -- the alternative (archetype-level failure) raises
         # above rather than falling through.
         roundtrip_ok = structure_verified if base.modality == "text" else None
+        # Payload hash: blake2b of the symbolic source (the emitted string
+        # for text, the pre-rasterisation SVG scene for spatial), never
+        # rasterised pixels -- see provenance.py's module docstring.
+        payload_hash = blake2b(emission.symbolic_source.encode("utf-8"), digest_size=16).hexdigest()
         metadata = stamp_provenance(
             suite_version=self.spec.suite_version,
             dialect_id=self.spec.dialect_id,
@@ -169,7 +182,8 @@ class ComposedRenderer(FormRenderer):
             render_relation_hash=render_relation_hash,
             structure_verified=structure_verified,
             roundtrip_ok=roundtrip_ok,
-            renderer_lib_version=None,
+            renderer_lib_version=f"cairosvg=={CAIROSVG_VERSION}" if emission.is_image else None,
+            payload_hash=payload_hash,
         )
         return RenderedForm(
             original=form_string,

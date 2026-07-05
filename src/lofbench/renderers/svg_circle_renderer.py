@@ -7,7 +7,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Literal
 
-from .base import FormRenderer, RenderedForm
+from .base import FormRenderer, RenderedForm, merge_config_kwargs
 
 
 @dataclass
@@ -26,17 +26,18 @@ class SVGCircleConfig:
 class SVGCircleRenderer(FormRenderer):
     """Renders LoF expressions as SVG concentric circles with proper containment.
 
-    Uses the circlify library (inspired by d3.pack()) to ensure proper
-    hierarchical circle packing with correct containment geometry.
+    Legacy renderer, superseded by ``lofbench.renderers.archetypes.enclosure``
+    (DB-4 M5) as the "circle" registry key's active implementation. Kept
+    unmodified and importable -- no renderer is deleted until parity is
+    tested -- but no longer wired to any registry key.
+
+    Uses a hand-rolled radial packer (no circlify or other packing
+    dependency, despite what an earlier version of this docstring claimed).
     """
 
     def __init__(self, config: SVGCircleConfig | None = None, **kwargs):
         self.config = config or SVGCircleConfig()
-
-        # Allow kwargs override (for CLI usage)
-        for key, value in kwargs.items():
-            if hasattr(self.config, key):
-                setattr(self.config, key, value)
+        merge_config_kwargs(self.config, kwargs)
 
     @property
     def name(self) -> str:

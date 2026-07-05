@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from .base import FormRenderer, RenderedForm
+from .base import FormRenderer, RenderedForm, merge_config_kwargs
 
 # Various bracket pairs for substitution
 BRACKET_PAIRS = [
@@ -75,11 +75,7 @@ class NoisyParensRenderer(FormRenderer):
                      Useful for CLI usage with inspect eval -T mismatched=true
         """
         self.config = config or NoisyParensConfig()
-
-        # kwargs override config values
-        for key, value in kwargs.items():
-            if hasattr(self.config, key):
-                setattr(self.config, key, value)
+        merge_config_kwargs(self.config, kwargs)
 
     @property
     def name(self) -> str:

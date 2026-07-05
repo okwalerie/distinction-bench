@@ -3,17 +3,19 @@ a ``DIALECT_SPECS`` entry, matching the plan's acceptance criterion.
 
 The renderer-registry step (what makes ``-T renderer=<dialect_id>`` and
 ``list_renderers()`` resolve a dialect, matching the ``circle`` precedent)
-is deliberately deferred -- see ``lofbench.renderers.archetypes``'s module
-docstring: registering it today makes every family reachable through
-``lofsite``'s eager render-all-dialects sandbox, which calls ``.render()``
-on every zero-arg-constructible renderer and has no guard for DB-4 M5's
-not-yet-landed spatial ``emit()``, so five ``tests/test_lofsite.py`` tests
-fail. Both files that would close that gap (``pipeline/emit.py``,
-``lofsite/rendering.py``) are outside this task's boundary, so the gap is
-flagged as a new lattice task rather than silently edited around.
+was deliberately deferred pending DB-4 M5-rest's pinned rasteriser and
+spatial ``emit()`` path -- see ``lofbench.renderers.archetypes``'s module
+docstring for the history. That gap is now closed: M5-rest lands
+``cairosvg`` and wires each DB-3 family's own ``to_svg`` into
+``pipeline.emit``'s spatial branch, so ``_register_named_dialect_when_ready``
+delegates straight to ``register_named_dialect`` and every family below
+resolves via ``get_renderer``/``-T renderer=<dialect_id>`` and renders a
+real PNG data URI through ``lofsite``'s sandbox fan-out (verified: the
+``tests/test_lofsite.py`` fan-out tests pass with all eight families
+registered).
 
-Enclosure is out of scope (DB-4's M5 migration), so it is not asserted
-here.
+Enclosure is out of scope here (DB-4's own M5 migration) -- see
+``tests/archetypes/test_enclosure.py``.
 """
 
 from __future__ import annotations
@@ -62,26 +64,27 @@ class TestDialectSpecs:
 
     @pytest.mark.parametrize("dialect_id", sorted(EXPECTED_DIALECT_IDS))
     def test_dialect_id_constructs_a_working_composed_renderer(self, dialect_id):
-        # The renderer-registry step is deferred (module docstring), so
-        # this constructs directly from the checked-in spec rather than
-        # through get_renderer/-T -- exercising the same ComposedRenderer
-        # path that a future registration would use.
-        from lofbench.renderers import ComposedRenderer
+        from lofbench.renderers import ComposedRenderer, get_renderer
 
         spec = DIALECT_SPECS[dialect_id]
         renderer = ComposedRenderer(spec)
         assert renderer.name == dialect_id
+        # The renderer-registry step is active now (M5-rest flip): the same
+        # dialect_id also resolves through the normal get_renderer/-T path.
+        assert get_renderer(dialect_id).name == dialect_id
 
 
-class TestSpatialEmitNotYetWired:
-    """M5 (the pinned rasteriser and emit's spatial path) has not landed;
-    calling ``render()`` on a spatial composed dialect must fail loudly,
-    not silently. This documents the current, expected boundary, and is
-    exactly why the renderer-registry step is deferred above."""
+class TestSpatialEmitWired:
+    """M5-rest lands the pinned rasteriser and emit's spatial path: a
+    spatial composed dialect now renders a real PNG data URI instead of
+    raising ``NotImplementedError``."""
 
-    def test_render_raises_not_implemented_pending_m5(self):
+    @pytest.mark.parametrize("dialect_id", sorted(EXPECTED_DIALECT_IDS))
+    def test_render_produces_png_data_uri(self, dialect_id):
         from lofbench.renderers import ComposedRenderer
 
-        renderer = ComposedRenderer(DIALECT_SPECS["trees.canonical-v1"])
-        with pytest.raises(NotImplementedError):
-            renderer.render("(())")
+        renderer = ComposedRenderer(DIALECT_SPECS[dialect_id])
+        result = renderer.render("(()(()))")
+        assert result.metadata["format"] == "image"
+        assert result.rendered.startswith("data:image/png;base64,")
+        assert result.metadata["structure_verified"] is True

@@ -106,16 +106,22 @@ class TestRenderAllDialects:
         panels = render_all_dialects("(()())")
         by_key = {p.registry_key: p for p in panels}
         assert by_key["circle"].kind == "image"
-        assert by_key["circle"].content.startswith("data:image/svg+xml")
+        # DB-4 M5: circle is now the enclosure@1 composed dialect, emitted
+        # through the pinned rasteriser as a PNG data URI -- most
+        # multimodal providers reject the image/svg+xml mime type the
+        # legacy SVGCircleRenderer used to emit.
+        assert by_key["circle"].content.startswith("data:image/png;base64,")
         for key in ("canonical", "noisy_parens", "sexpr", "nested_list"):
             assert by_key[key].kind == "text"
 
-    def test_circle_registry_key_vs_renderer_name_asymmetry(self):
-        # Known asymmetry (flagged in plan review): registry key is "circle"
-        # but SVGCircleRenderer.name is "svg_circle".
+    def test_circle_registry_key_equals_renderer_name(self):
+        # DB-4 M5 fix: "circle" used to alias SVGCircleRenderer, whose own
+        # .name was "svg_circle" -- a registry-key-vs-name asymmetry flagged
+        # in plan review. "circle" is now a composed enclosure@1 named
+        # dialect whose ComposedRenderer.name equals the registry key.
         panels = render_all_dialects("(())")
         circle = next(p for p in panels if p.registry_key == "circle")
-        assert circle.renderer_name == "svg_circle"
+        assert circle.renderer_name == "circle"
 
 
 # ---------------------------------------------------------------------------
