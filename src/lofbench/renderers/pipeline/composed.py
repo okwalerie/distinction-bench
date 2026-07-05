@@ -42,6 +42,13 @@ class ComposedRenderer(FormRenderer):
         # get_renderer splats renderer_config as kwargs, so accept both paths:
         # a named factory passes spec directly; the ad-hoc -T path passes a
         # flat spec dict rebuilt here via DialectSpec.from_dict.
+        if spec is None and not kwargs:
+            # Zero-arg construction (e.g. a generic registry fan-out that
+            # instantiates every entry with no arguments) has no spec to
+            # build from. Fail with a clear message here rather than
+            # falling through to DialectSpec.from_dict({})'s internal
+            # KeyError on "dialect_id".
+            raise ValueError("composed requires a DialectSpec or spec kwargs")
         self.spec = spec if spec is not None else DialectSpec.from_dict(kwargs)
 
     @property

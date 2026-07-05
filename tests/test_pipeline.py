@@ -220,6 +220,13 @@ class TestComposedRendererConstruction:
         assert isinstance(renderer, ComposedRenderer)
         assert renderer.name == "adhoc.ctor-v1"
 
+    def test_construct_with_neither_spec_nor_kwargs_raises_value_error(self):
+        # A generic zero-arg registry fan-out (e.g. lofsite's sandbox) must
+        # get a clear ValueError here, not an internal KeyError from
+        # DialectSpec.from_dict({}) reaching for "dialect_id".
+        with pytest.raises(ValueError, match="composed requires a DialectSpec or spec kwargs"):
+            ComposedRenderer()
+
 
 class _FixtureInjector:
     """A minimal Injector fixture -- just the data shape, no real transform."""

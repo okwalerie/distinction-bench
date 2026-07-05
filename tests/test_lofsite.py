@@ -92,8 +92,15 @@ class TestRenderAllDialects:
     def test_covers_every_registered_renderer(self):
         from lofbench.renderers import list_renderers
 
-        panels = render_all_dialects("(()())")
-        assert {p.registry_key for p in panels} == set(list_renderers())
+        fan_out = render_all_dialects("(()())")
+        # "composed" cannot be zero-arg constructed (it needs a caller-
+        # supplied DialectSpec) -- a degraded fan-out that silently drops a
+        # renderer that *can* be zero-arg constructed must still fail this,
+        # so assert both halves explicitly rather than just set equality.
+        rendered_keys = {p.registry_key for p in fan_out}
+        zero_arg_renderers = set(list_renderers()) - {"composed"}
+        assert rendered_keys == zero_arg_renderers
+        assert fan_out.skipped == ["composed"]
 
     def test_circle_panel_is_image_others_are_text(self):
         panels = render_all_dialects("(()())")
