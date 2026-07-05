@@ -22,8 +22,9 @@ def axioms_page():
         P(
             "Laws of Form (Spencer-Brown) defines a minimal calculus on a single "
             "distinction, the mark. Two axioms reduce every ground expression to "
-            "either marked (", Pre("()", style="display:inline; padding:0 0.3em;"),
-            ") or unmarked (void)."
+            "either marked (",
+            Pre("()", style="display:inline; padding:0 0.3em;"),
+            ") or unmarked (void).",
         ),
         H2("I1 -- Calling"),
         P(
