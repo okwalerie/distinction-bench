@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 from inspect_ai.log import EvalLog, EvalLogInfo, list_eval_logs, read_eval_log
 
+from lofbench.pricing import compute_cost_usd
 
 # =============================================================================
 # Log Loading Utilities
@@ -58,16 +59,142 @@ def load_curated_logs(
     return result
 
 
+def _sample_render_metadata(sample: Any) -> dict[str, Any] | None:
+    """The ``render_metadata`` off one sample, composed-pipeline-aware.
+
+    Single-task samples carry a bare dict. Composite-task samples carry a
+    *list* (one dict per expression in the group, per ``create_composite_dataset``
+    routing per-expression provenance through the same emit path -- DB-4 M3).
+    One renderer instance renders every expression in a composite group, so
+    the first list entry is representative for run-level derivation. Returns
+    ``None`` when the key is absent entirely (every real pre-DB-4 composite
+    log) or empty.
+    """
+    metadata = sample.metadata or {}
+    rm = metadata.get('render_metadata')
+    if isinstance(rm, list):
+        return rm[0] if rm and isinstance(rm[0], dict) else None
+    return rm or None
+
+
+def _find_composed_provenance(log: EvalLog) -> dict[str, Any] | None:
+    """The first sample-level ``render_metadata`` carrying a composed-pipeline
+    ``dialect_id``, or ``None`` if no sample has one.
+
+    One renderer instance renders every sample in a task, so a log is either
+    fully composed (``ComposedRenderer``, DB-4) or fully legacy -- the first
+    hit is representative of the whole log.
+    """
+    for sample in log.samples or []:
+        rm = _sample_render_metadata(sample)
+        if rm and 'dialect_id' in rm:
+            return rm
+    return None
+
+
+# Legacy (pre-DB-4) dialect labels, derived from a renderer name plus its
+# `mismatched` flag. Used ONLY on the task_args fallback path below -- a
+# composed-pipeline log carries its own `dialect_id` and never touches this.
+# Deliberately does NOT special-case renderer == "parens": no renderer is
+# ever registered under that literal name in this repo (the actual identity
+# renderer is "canonical"), so the old `if renderer == 'parens': dialect =
+# 'canonical'` branch matched nothing real and is not reproduced here. See
+# the M8 section of .lattice/plans/task_01KWQKYV35TN175DJQSAEKK5AJ.md.
+_LEGACY_DIALECT_LABELS: dict[tuple[str, bool], str] = {
+    ('noisy_parens', False): 'noisy-balanced',
+    ('noisy_parens', True): 'noisy-mismatch',
+}
+
+
+def _legacy_dialect(renderer: str, mismatched: bool) -> str:
+    """Old string-branch dialect labels, preserved only for legacy logs."""
+    return _LEGACY_DIALECT_LABELS.get((renderer, mismatched), renderer)
+
+
+def _sum_log_cost_usd(log: EvalLog) -> float | None:
+    """Sum ``cost_usd`` across every sample in a log via the DB-5 pricing
+    table (``lofbench.pricing.compute_cost_usd``).
+
+    Mirrors ``compute_cost_usd``'s own None-vs-0.0 contract: ``None`` when no
+    sample in the log could be priced (e.g. an unrecognised model), never a
+    silent 0.0 that would look like a free run in a budget rollup against the
+    $100-150 gate. A log with at least one priced sample sums only the priced
+    ones (an unpriced sample contributes nothing, rather than poisoning the
+    whole log to None).
+    """
+    total = 0.0
+    any_priced = False
+    for sample in log.samples or []:
+        usage = sample.output.usage if getattr(sample, 'output', None) else None
+        if usage is None:
+            continue
+        cost = compute_cost_usd(
+            log.eval.model,
+            input_tokens=getattr(usage, 'input_tokens', 0) or 0,
+            output_tokens=getattr(usage, 'output_tokens', 0) or 0,
+            cache_read_tokens=getattr(usage, 'input_tokens_cache_read', None) or 0,
+            cache_write_tokens=getattr(usage, 'input_tokens_cache_write', None) or 0,
+        )
+        if cost is None:
+            continue
+        total += cost
+        any_priced = True
+    return total if any_priced else None
+
+
 def get_log_metadata(log: EvalLog) -> dict[str, Any]:
     """Extract key metadata from an eval log.
 
-    Returns dict with: model, renderer, mismatched, dialect, thinking_tokens,
-                       reasoning_effort, n_samples, epochs
+    Rewritten for DB-4 M8 (breaking migration, not a patch): dialect,
+    family, and per-injector params now come from sample-level provenance
+    (``sample.metadata.render_metadata``, stamped by ``ComposedRenderer`` --
+    see ``.lattice/notes/rendering-architecture-2026-07-04.md``'s
+    "Provenance metadata schema") rather than ``task_args``. The old
+    top-level ``config.get('mismatched')`` lookup is gone: under the composed
+    scheme, ``mismatched`` lives inside a ``bracket_swap`` injector entry
+    (``["bracket_swap", {"mismatched": true}]``), not a top-level
+    ``renderer_config`` key, so that lookup always read False for a composed
+    log and silently lost the balanced-versus-mismatched distinction. The
+    ``renderer == 'parens'``/``'noisy_parens'`` string branches and the
+    ``'parens'`` default are also gone; the new baseline id is
+    ``parens.canonical``.
+
+    A legacy-log fallback path (``task_args``-only, no sample provenance) is
+    kept so the 48 pre-DB-4 pilot logs in ``logs/`` still load, with their
+    historical dialect labels. ``provenance_source`` records which path a
+    given log took: ``"sample_provenance"`` or ``"legacy_task_args"``, so a
+    mixed run of old-string and new-id logs never silently mislabels
+    dialects -- the two populations stay distinguishable in any downstream
+    join.
+
+    Returns dict with: model, renderer, mismatched, dialect, family,
+                       provenance_source, thinking_tokens, reasoning_effort,
+                       n_samples, epochs, total_cost_usd
     """
     task_args = log.eval.task_args or {}
-    renderer = task_args.get('renderer', 'parens')
-    config = task_args.get('renderer_config') or {}
-    mismatched = config.get('mismatched', False) if config else False
+    renderer = task_args.get('renderer', 'canonical')
+
+    composed_prov = _find_composed_provenance(log)
+    if composed_prov is not None:
+        dialect = composed_prov.get('dialect_id', renderer)
+        family = composed_prov.get('family')
+        injector_params = {
+            entry['name']: entry.get('params', {})
+            for entry in composed_prov.get('injectors', [])
+            if isinstance(entry, dict) and 'name' in entry
+        }
+        mismatched = bool(injector_params.get('bracket_swap', {}).get('mismatched', False))
+        provenance_source = 'sample_provenance'
+    else:
+        # Legacy log: task_args is the only source. Some pre-DB-4 logs used
+        # `renderer_kwargs` rather than `renderer_config` for the same
+        # payload (confirmed against tests/fixtures/logs/*.eval) -- check
+        # both rather than silently missing the older key name.
+        config = task_args.get('renderer_config') or task_args.get('renderer_kwargs') or {}
+        mismatched = bool(config.get('mismatched', False))
+        dialect = _legacy_dialect(renderer, mismatched)
+        family = None
+        provenance_source = 'legacy_task_args'
 
     gen_config = log.eval.model_generate_config
     thinking = gen_config.reasoning_tokens if gen_config else 0
@@ -86,25 +213,18 @@ def get_log_metadata(log: EvalLog) -> dict[str, Any]:
         else:
             reasoning_effort = raw_effort
 
-    # Determine dialect name
-    if renderer == 'parens':
-        dialect = 'canonical'
-    elif renderer == 'noisy_parens' and not mismatched:
-        dialect = 'noisy-balanced'
-    elif renderer == 'noisy_parens' and mismatched:
-        dialect = 'noisy-mismatch'
-    else:
-        dialect = renderer
-
     return {
         'model': log.eval.model,
         'renderer': renderer,
         'mismatched': mismatched,
         'dialect': dialect,
+        'family': family,
+        'provenance_source': provenance_source,
         'thinking_tokens': thinking,
         'reasoning_effort': reasoning_effort,
         'n_samples': log.eval.dataset.samples if log.eval.dataset else None,
         'epochs': log.eval.config.epochs if log.eval.config else 1,
+        'total_cost_usd': _sum_log_cost_usd(log),
     }
 
 
