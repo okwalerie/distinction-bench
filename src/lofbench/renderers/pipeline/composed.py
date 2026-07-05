@@ -14,6 +14,7 @@ from hashlib import blake2b
 from typing import Any
 
 from ..base import FormRenderer, RenderedForm
+from .admission import validate_applicability
 from .emit import CAIROSVG_VERSION, emit
 from .injector import Injector
 from .nodes import containment_relation, form_to_nodes, relation_hash
@@ -62,6 +63,9 @@ class ComposedRenderer(FormRenderer):
             # KeyError on "dialect_id".
             raise ValueError("composed requires a DialectSpec or spec kwargs")
         self.spec = spec if spec is not None else DialectSpec.from_dict(kwargs)
+        # M6: reject an unsupported archetype-injector pairing at
+        # construction, before any render or model spend.
+        validate_applicability(self.spec)
 
     @property
     def name(self) -> str:
