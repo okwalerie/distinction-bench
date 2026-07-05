@@ -42,10 +42,23 @@ def _build_children(marks: list, prefix: str) -> tuple[FormNode, ...]:
     return tuple(nodes)
 
 
+def nodes_from_parsed(parsed: list) -> FormNode:
+    """Build a node tree directly from an already-parsed nested-list structure
+    (the shape ``string_to_form`` returns), skipping the string-parsing step.
+
+    Used by parse-back readers that recognise a different bracket grammar
+    than the canonical parens grammar -- for example the parens family's
+    bracket-agnostic reader (see ``lofbench.renderers.archetypes.parens``),
+    which parses with its own bracket-glyph set and then hands the resulting
+    nested list here to build a real ``FormNode`` tree (M4/M5, handoff F1).
+    """
+    return FormNode(id="", children=_build_children(parsed, ""))
+
+
 def form_to_nodes(form_string: str) -> FormNode:
     """Parse ``form_string`` into a stable node tree. Wraps ``string_to_form``."""
     parsed = string_to_form(form_string)
-    return FormNode(id="", children=_build_children(parsed, ""))
+    return nodes_from_parsed(parsed)
 
 
 def _node_to_list(node: FormNode) -> list:

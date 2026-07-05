@@ -10,7 +10,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from .nodes import FormNode, NodeId, containment_relation, form_to_nodes
+from .nodes import FormNode, NodeId, containment_relation, form_to_nodes, iter_node_ids
 
 Modality = Literal["text", "spatial"]
 
@@ -64,6 +64,28 @@ class Archetype(Protocol):
     def build(self, root: FormNode, rng: random.Random) -> BaseRender: ...
 
     def predicate(self, parent: Primitive, child: Primitive) -> bool: ...
+
+
+def assert_node_map_complete(root: FormNode, node_map: dict[NodeId, Primitive]) -> None:
+    """Shared node-map exactly-once checker (M1/M2 review handoff F2).
+
+    Every real node id from ``root``'s parsed tree must appear in
+    ``node_map`` exactly once. Decorative primitives are keyed by
+    ``node_id=None`` and are never required to be reachable through
+    ``node_map`` at all, so they play no part in this check. Raises
+    ``AssertionError`` naming the missing and/or extra ids, so an archetype
+    author gets a precise failure instead of a silently wrong-shaped map
+    that would make ``verify`` untrustworthy.
+    """
+    expected = set(iter_node_ids(root))
+    actual = set(node_map.keys())
+    missing = expected - actual
+    extra = actual - expected
+    if missing or extra:
+        raise AssertionError(
+            "node_map does not cover every node id exactly once: "
+            f"missing={sorted(missing)!r} extra={sorted(extra)!r}"
+        )
 
 
 def induced_relation(
