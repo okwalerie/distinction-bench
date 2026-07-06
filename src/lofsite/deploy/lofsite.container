@@ -1,0 +1,38 @@
+# lofsite -- distinction-bench site (podman QUADLET, systemd USER unit).
+#
+# Install to: ~/.config/containers/systemd/lofsite.container  (user `core` on waler)
+# `systemctl --user daemon-reload` generates lofsite.service from this file.
+#
+# Mirrors the existing explorer-gallery / walerie-gallery rootless pattern on waler:
+#   - loopback-only publish (127.0.0.1:8094), fronted for the tailnet by
+#     `tailscale serve --bg --https=8094 http://127.0.0.1:8094`
+#     -> https://waler.fawn-augmented.ts.net:8094  (tailnet only, TLS by tailscale)
+#   - distinct ContainerName + port; 8094 was free at deploy time (DB-13 survey)
+#
+# The app binds 0.0.0.0:5001 inside the container; the quadlet maps host
+# 127.0.0.1:8094 -> container 5001. The pilot-v0 data artifacts are baked into
+# the image at /data (LOFSITE_DATA_DIR), so there is no volume to mount and no
+# SELinux relabel to worry about.
+[Unit]
+Description=distinction-bench site (lofsite) on 127.0.0.1:8094
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=lofsite
+Image=localhost/lofsite:latest
+# Loopback-only publish; tailscale serve reaches it via http://127.0.0.1:8094.
+PublishPort=127.0.0.1:8094:5001
+# Redundant with the image ENV, but explicit here documents the contract and
+# lets an operator override the served suite without rebuilding.
+Environment=LOFSITE_DATA_DIR=/data
+Environment=LOFSITE_SUITE_VERSION=pilot-v0
+Environment=HOST=0.0.0.0
+Environment=PORT=5001
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

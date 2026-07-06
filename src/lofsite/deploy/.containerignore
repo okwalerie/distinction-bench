@@ -1,0 +1,19 @@
+# Build-context ignore for the lofsite image (DB-13).
+# Pass explicitly at build time: `podman build --ignorefile src/lofsite/deploy/.containerignore ...`
+# because the build context is the repo root, not this directory.
+.git
+.claude
+.lattice
+.mcp
+logs
+notebooks
+data
+dist
+build
+**/__pycache__
+*.pyc
+*.pyo
+.venv
+.pytest_cache
+.ruff_cache
+*.eval

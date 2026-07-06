@@ -1,0 +1,64 @@
+# lofsite container image (DB-13).
+#
+# Serves the distinction-bench site (sandbox, gallery, charts, matrix,
+# walkthroughs, axioms) with the pilot-v0 data artifacts baked in.
+#
+# Build context is the REPO ROOT. The baked artifacts are supplied as a named
+# build context so the 348MB transcripts.jsonl never enters the repo tree:
+#
+#   uv run python -m lofbench.pipeline logs/ /tmp/deploy-artifacts --suite-version pilot-v0
+#   podman build -f src/lofsite/deploy/Containerfile \
+#     --ignorefile src/lofsite/deploy/.containerignore \
+#     --build-context artifacts=/tmp/deploy-artifacts \
+#     -t localhost/lofsite:latest .
+#
+# See src/lofsite/deploy/DEPLOY.md for the full deploy + redeploy procedure.
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+# cairosvg (via cairocffi) resolves its native libs at runtime, not build time:
+# libcairo2 for the drawing backend, pango/gdk-pixbuf for text + raster fallback,
+# libffi for the cffi bridge. Without these the gallery/rendering pages that
+# rasterize SVG raise OSError at request time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libcairo2 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        libffi8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv, pinned from the official image.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# Project metadata + lockfile first for a cache-friendly dependency layer.
+COPY pyproject.toml uv.lock README.org ./
+COPY src ./src
+# Checked-in frozen suite: the gallery page reads /app/suites/v1.json via
+# lofbench.suites.load_suite (SUITES_DIR = <repo>/suites). Without it /gallery 500s.
+COPY suites ./suites
+
+# Full main deps + the `site` extra. main deps are not optional: lofsite.data
+# imports lofbench.pipeline (-> inspect_ai, pandas, pyarrow) and lofsite.rendering
+# imports lofbench.renderers (-> cairosvg). --frozen honors uv.lock exactly.
+RUN uv sync --frozen --extra site
+
+# Baked DB-5 artifacts -> /data/pilot-v0/{items,calls,sensitivity}.parquet + transcripts.jsonl
+COPY --from=artifacts . /data/
+
+ENV LOFSITE_DATA_DIR=/data \
+    LOFSITE_SUITE_VERSION=pilot-v0 \
+    HOST=0.0.0.0 \
+    PORT=5001
+
+EXPOSE 5001
+
+# Run straight from the synced venv (no network / re-resolve at boot).
+CMD ["/app/.venv/bin/python", "-m", "lofsite.app"]
