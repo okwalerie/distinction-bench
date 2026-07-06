@@ -14,9 +14,18 @@ _NAV_ITEMS = (
     ("/charts", "Charts"),
     ("/matrix", "Matrix"),
     ("/walkthroughs", "Walkthroughs"),
+    ("/gallery", "Gallery"),
 )
 
-_STYLE = Style("""
+# Raw CSS text, held as a plain string precisely so a caller that needs the
+# text itself (not a wrapped FastHTML `Style` node) has a real accessor --
+# see `style_css()` below. Grepped: no other module reached into `_STYLE` by
+# name before this change, so exposing it is a small, in-scope refactor
+# (DB-12 gallery plan's "layout._STYLE privacy" risk note). The static
+# gallery export (`lofsite.export_gallery`) does not go through
+# `layout.page`/the live app at all, so it needs this text to inline into
+# its own hand-built `<style>` tag.
+_STYLE_CSS = """
     body {
         font-family: system-ui, sans-serif; max-width: 960px; margin: 0 auto;
         padding: 1rem 1.5rem 3rem; color: #1a1a1a;
@@ -100,7 +109,18 @@ _STYLE = Style("""
     }
     .viz-root text { fill: var(--text-primary); }
     .viz-root .muted-text { fill: var(--text-secondary); }
-""")
+"""
+
+_STYLE = Style(_STYLE_CSS)
+
+
+def style_css() -> str:
+    """The site's inline CSS text, verbatim -- the public accessor
+    `export_gallery.py` uses to inline the same styling into its
+    hand-built document shell, without reaching into `_STYLE` (a
+    FastHTML node, not a string) by a private name.
+    """
+    return _STYLE_CSS
 
 
 def nav(active: str) -> Nav:
