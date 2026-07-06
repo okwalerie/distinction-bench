@@ -1,0 +1,42 @@
+{
+  "assigned_to": null,
+  "branch_links": [
+    {
+      "branch": "feat/DB-12-gallery",
+      "linked_at": "2026-07-05T05:05:04Z",
+      "linked_by": "agent:claire-impl-db12",
+      "repo": null
+    }
+  ],
+  "comment_count": 2,
+  "complexity": "medium",
+  "created_at": "2026-07-05T04:31:53Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Valerie wants to see the rendering system in action: one HTML page showcasing every dialect family, the variation injectors, the form generators and generated samples.\n\nBuild a /gallery page in lofsite, generated from real code output, never mockups. Content:\n1. Per dialect family: the archetype rendering of one or two exemplar forms (text dialects as formatted text, visual dialects as the actual SVG or PNG), then the same form under 2 or 3 variation seeds or injector settings, side by side, so the archetype-versus-variation idea is visible.\n2. The generator: sampled forms from each of the 5 difficulty tiers with their depth and step counts.\n3. Suite v1: headline numbers (120 forms, 29 dialects, 3,480 cells) and a sampled row of cells.\n4. A static export mode so the same page can be saved as one self-contained HTML file and shared.\n\nDesign follows Tufte: the gallery is small multiples; direct labels on every panel; no decorative ink; monospace for form strings; a single accent colour for the one thing each section wants the eye on. Sentence-case headings, GOV.UK prose.\n\nThe page must render every registered dialect by iterating the registry, so future dialects appear without editing the gallery.",
+  "done_at": "2026-07-06T15:16:05Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWW006EC0R7Y8BF9YK9NC8QD",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWR8R3VAVCBF9YETBHZZ6C7S",
+  "last_event_id": "ev_01KWW00DQE7X5H28W8FCAC00SK",
+  "last_status_changed_at": "2026-07-06T15:16:05Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-12",
+  "status": "done",
+  "tags": [
+    "site",
+    "gallery"
+  ],
+  "title": "Rendering showcase gallery: every dialect, variation and generator, live",
+  "type": "task",
+  "updated_at": "2026-07-06T15:16:05Z",
+  "urgency": null
+}

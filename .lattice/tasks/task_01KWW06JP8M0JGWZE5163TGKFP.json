@@ -1,0 +1,35 @@
+{
+  "assigned_to": "agent:claire-impl-deploy",
+  "branch_links": [],
+  "comment_count": 2,
+  "complexity": "medium",
+  "created_at": "2026-07-06T15:19:27Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Valerie asked to see the site live: deploy lofsite (with the gallery, charts and sandbox) to her server, reachable as core@waler (uCore/Fedora CoreOS, podman, Tailscale). Package the app as a container, bake the pilot-v0 artifacts in (parquets are small; the 600MB logs stay local), install a quadlet unit, and report the URL. Must not disturb existing services on the box. Deployment config files are committed to the repo so redeploys are repeatable; the bench-release skill's site-refresh step should reference them.",
+  "done_at": "2026-07-06T15:39:14Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWW1AN5075TEEXJZ3Q0KRTQR",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWW06JP8M0JGWZE5163TGKFP",
+  "last_event_id": "ev_01KWW1ASXF8TE6WQ0541RJYADV",
+  "last_status_changed_at": "2026-07-06T15:39:14Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-13",
+  "status": "done",
+  "tags": [
+    "site",
+    "ops"
+  ],
+  "title": "Deploy lofsite to waler as a podman quadlet service",
+  "type": "task",
+  "updated_at": "2026-07-06T15:39:14Z",
+  "urgency": null
+}
