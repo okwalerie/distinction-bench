@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from hashlib import blake2b
 from typing import TYPE_CHECKING
 
 from inspect_ai.dataset import MemoryDataset, Sample
@@ -14,6 +15,25 @@ if TYPE_CHECKING:
     from inspect_ai.dataset import Dataset
 
     from lofbench.renderers import FormRenderer
+
+
+def _item_rng(render_seed: int | None, key: str) -> random.Random | None:
+    """Content-addressed per-item ``random.Random`` (DB-4 M3).
+
+    Both ``create_single_dataset`` and ``create_composite_dataset`` used to
+    build one ``random.Random(render_seed)`` and pass it to every ``render``
+    call, so subsetting or reordering the case list shifted every subsequent
+    draw. This derives a fresh generator per item from a digest of
+    ``render_seed`` and ``key`` (the form string), so the same key always
+    starts from the same state regardless of its position in the batch, and
+    distinct items still draw independently. Returns ``None`` when
+    ``render_seed`` is ``None``, matching the prior default-Random behaviour
+    exactly.
+    """
+    if render_seed is None:
+        return None
+    digest = blake2b(f"{render_seed}\x00{key}".encode(), digest_size=8).digest()
+    return random.Random(int.from_bytes(digest, "big"))
 
 
 def create_single_dataset(
@@ -40,9 +60,9 @@ def create_single_dataset(
     cases = generate_test_cases(n=n, seed=seed)
 
     samples = []
-    rng = random.Random(render_seed) if render_seed is not None else None
 
     for case in cases:
+        rng = _item_rng(render_seed, case["input"])
         rendered = renderer.render(case["input"], rng)
 
         # Handle image vs text rendering
@@ -113,11 +133,13 @@ def create_composite_dataset(
     )
 
     samples = []
-    rng = random.Random(render_seed) if render_seed is not None else None
 
     for case in cases:
-        # Render each expression
-        rendered_exprs = [renderer.render(expr, rng) for expr in case["expressions"]]
+        # Render each expression with its own content-addressed generator
+        # (M3): no shared, order-dependent Random across the group or batch.
+        rendered_exprs = [
+            renderer.render(expr, _item_rng(render_seed, expr)) for expr in case["expressions"]
+        ]
 
         # Check if rendering as images
         is_image = rendered_exprs[0].metadata.get("format") == "image"
@@ -137,7 +159,9 @@ def create_composite_dataset(
             formatted_input = f"[{len(rendered_exprs)} images]"
         else:
             # For text, format as numbered list
-            formatted_input = "\n".join(f"E{i + 1}. {r.rendered}" for i, r in enumerate(rendered_exprs))
+            formatted_input = "\n".join(
+                f"E{i + 1}. {r.rendered}" for i, r in enumerate(rendered_exprs)
+            )
             input_content = "Evaluate the expressions"  # Placeholder, template provides real prompt
 
         samples.append(
@@ -153,6 +177,11 @@ def create_composite_dataset(
                     "targets": case["targets"],  # Per-expression targets
                     "renderer": renderer.name,
                     "rendered_expressions": [r.rendered for r in rendered_exprs],
+                    # M3/acceptance-9: route per-expression provenance through
+                    # the same emit path so a composite Sample carries the
+                    # same render_metadata chain a single-task Sample does,
+                    # instead of dropping it entirely.
+                    "render_metadata": [r.metadata for r in rendered_exprs],
                 },
             )
         )

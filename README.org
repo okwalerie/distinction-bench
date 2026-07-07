@@ -47,9 +47,9 @@ uv run inspect view
 |---------------+-----------+--------------------------------------+---------|
 | =n=           | single    | Number of test cases                 |     100 |
 | =n_groups=    | composite | Number of expression groups          |     100 |
-| =group_size=  | composite | Expressions per group                |       8 |
+| =group_size=  | composite | Expressions per group                |       4 |
 | =seed=        | both      | Random seed for reproducibility      |    2025 |
-| =renderer=    | both      | Renderer name (canonical, noisy_parens) | canonical |
+| =renderer=    | both      | Renderer name (canonical, noisy_parens, circle, nested_list, sexpr) | canonical |
 | =render_seed= | both      | Seed for renderer randomness         |    None |
 
 ** Laws of Form

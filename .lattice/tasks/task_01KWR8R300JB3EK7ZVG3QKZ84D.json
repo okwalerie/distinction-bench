@@ -1,0 +1,36 @@
+{
+  "assigned_to": null,
+  "branch_links": [
+    {
+      "branch": "chore/DB-11-test-consolidation",
+      "linked_at": "2026-07-05T05:10:37Z",
+      "linked_by": "agent:claire-impl-db11",
+      "repo": null
+    }
+  ],
+  "comment_count": 2,
+  "complexity": "medium",
+  "created_at": "2026-07-05T04:31:52Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "The suite reports 7,444 tests. Most are parametrization cells: a few hundred test functions expanded over form-count by dialect by difficulty grids. Valerie wants consolidation via property-based and parametric tests.\n\nApproach: replace the fixed 200-generated-forms-per-dialect grids with hypothesis property tests. The universal properties are: parse(render(form)) == form; same seed and spec give identical output; containment relation preserved through every archetype and injector; admission rejects undeclared pairings. Hypothesis generates and shrinks counterexamples, which finds edge cases a fixed sample cannot. Keep a small set of hand-picked example tests per dialect for readability. Keep the frozen-suite rerun test but mark it slow so the default run stays fast.\n\nTargets: same or better behavioural coverage; reported test count down to the hundreds; default suite runtime well under a minute; hypothesis added as a dev-only dependency (a justified exception to the stdlib preference, since it never ships in the library).\n\nConstraint: this is a refactor of test code only. Source behaviour must not change. Coverage must be argued, not asserted: the plan must list each deleted grid and the property that replaces it.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWR8R300JB3EK7ZVG3QKZ84D",
+  "last_event_id": "ev_01KWVZHES4WNN4QN5VXAEKH99G",
+  "last_status_changed_at": "2026-07-06T15:07:55Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-11",
+  "status": "blocked",
+  "tags": [
+    "tests",
+    "hygiene"
+  ],
+  "title": "Consolidate tests with property-based and parametric testing",
+  "type": "chore",
+  "updated_at": "2026-07-06T15:07:55Z",
+  "urgency": null
+}

@@ -1,0 +1,2 @@
+Deploy plan: build container image from lattice tip (uv sync --extra site); bake pilot-v0 parquet artifacts at image build from a local pipeline run copied in; quadlet unit per the podman-quadlet skill conventions (SELinux labels, Environment quoting, Tailscale-internal exposure); commit Containerfile + quadlet to the repo; deploy over ssh core@waler; verify all six routes over the tailnet; do not disturb existing services.
+marker: plan-deploy-20260706

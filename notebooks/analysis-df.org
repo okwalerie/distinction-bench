@@ -87,12 +87,26 @@ MODEL_LOGS = {
     'Sonnet 4.5': 'cdqvjYE5bHa9MzbbSoLB2d',       # parens, 10 samples
 }
 
+# Gemini 3 Flash Preview Sweep (reasoning_effort: low vs high, 3 dialects)
+# reasoning_effort mapping: minimal/low -> 'low', medium -> 'high'
+GEMINI3_FLASH_LOGS = {
+    # Low reasoning (minimal/low collapsed)
+    ('canonical', 'low'): ['N7YUPRby6AhTG7mb2kNVMY', 'LnnKac52EEjw7cjDvkfGnv'],
+    ('noisy-balanced', 'low'): ['3iqm9U2aCJgHesBLcgqpyt', '3hxa68FaXiJm88kPSUZgvB'],
+    ('noisy-mismatch', 'low'): ['idtENrPoxyLpG7gCjkQwt3', 'Cawr2CiVRpbTbGtJSt5qTz'],
+    # High reasoning (medium)
+    ('canonical', 'high'): ['EVJcSNYcZDcHHgmcUbw4X7'],
+    ('noisy-balanced', 'high'): ['E4prMw6VbSeEtPWDEbp6s8'],
+    ('noisy-mismatch', 'high'): ['Y3xNCpDSRKYP9YsKoYCPJB'],
+}
+
 # Gemini 2.5 Flash Sweep (most recent 15 logs)
 # Will be loaded dynamically from recent logs
 
 print("Log IDs defined.")
 print(f"Notation logs: {len(NOTATION_LOGS)}")
 print(f"Model logs: {len(MODEL_LOGS)}")
+print(f"Gemini 3 Flash logs: {sum(len(v) for v in GEMINI3_FLASH_LOGS.values())}")
 #+end_src
 
 #+RESULTS:
@@ -192,9 +206,9 @@ print("More thinking tokens doesn't help - Flash simply can't do this task.")
 #+begin_example
 
 === Summary by Dialect ===
-               per_item             structure      
+               per_item             structure
                    mean   max   min      mean   max
-dialect                                            
+dialect
 canonical         0.070  0.12  0.02     0.136  0.14
 noisy-balanced    0.050  0.07  0.02     0.002  0.01
 noisy-mismatch    0.036  0.07  0.01     0.000  0.00
@@ -207,6 +221,59 @@ Noisy-mismatch: 1-7% accuracy
 Structure accuracy near 0% for noisy dialects shows parsing failure.
 More thinking tokens doesn't help - Flash simply can't do this task.
 #+end_example
+
+* Gemini 3 Flash Preview Dialect/Reasoning Sweep
+:PROPERTIES:
+:CUSTOM_ID: gemini3-sweep
+:END:
+
+Gemini 3 Flash Preview shows dramatic improvement over 2.5 Flash. With high reasoning
+effort, noisy-balanced achieves 95% accuracy. Low reasoning still struggles but
+outperforms 2.5 Flash on canonical notation.
+
+#+begin_src python
+# Load Gemini 3 Flash logs and extract results
+gemini3_data = []
+
+all_g3_ids = [log_id for ids in GEMINI3_FLASH_LOGS.values() for log_id in ids]
+g3_logs = load_curated_logs(all_g3_ids, log_dir=str(log_dir), header_only=False)
+
+for (dialect, reasoning), log_ids in GEMINI3_FLASH_LOGS.items():
+    for log_id in log_ids:
+        if log_id in g3_logs:
+            log = g3_logs[log_id]
+            results = get_log_results(log)
+            gemini3_data.append({
+                'model': 'google/gemini-3-flash-preview',
+                'dialect': dialect,
+                'reasoning_effort': reasoning,
+                'per_item': results['per_item_accuracy'],
+                'all_correct': results['all_correct'],
+                'structure': results['structure_accuracy'],
+            })
+
+gemini3_df = pd.DataFrame(gemini3_data)
+print("Gemini 3 Flash Preview Dialect/Reasoning Sweep:")
+print("=" * 80)
+print(gemini3_df.to_string(index=False))
+#+end_src
+
+#+begin_src python
+# Summary by dialect and reasoning level
+print("\n=== Summary by Dialect and Reasoning ===")
+g3_summary = gemini3_df.groupby(['dialect', 'reasoning_effort']).agg({
+    'per_item': ['mean', 'max'],
+    'structure': ['mean', 'max'],
+}).round(3)
+print(g3_summary)
+
+print("\n=== Key Finding ===")
+print("High reasoning + noisy-balanced: 95% accuracy (vs 7% for 2.5 Flash)")
+print("High reasoning + noisy-mismatch: 59% accuracy")
+print("High reasoning + canonical: 34% accuracy")
+print("\nLow reasoning shows similar pattern but lower overall (~20% canonical, 3% mismatch)")
+print("Gemini 3 Flash represents a generational leap in LoF reasoning capability.")
+#+end_src
 
 * Notation Comparison (Opus 4.5)
 :PROPERTIES:
@@ -282,6 +349,19 @@ for name, log_id in MODEL_LOGS.items():
             'structure': results['structure_accuracy'],
         })
 
+# Add best Gemini 3 Flash results (high reasoning, noisy-balanced)
+g3_best = gemini3_df[(gemini3_df['reasoning_effort'] == 'high') & (gemini3_df['dialect'] == 'noisy-balanced')]
+if len(g3_best) > 0:
+    model_results.append({
+        'model': 'Gemini 3 Flash (high)',
+        'dialect': 'noisy-balanced',
+        'thinking': 'high',  # reasoning_effort instead of tokens
+        'n_samples': 100,
+        'per_item': g3_best['per_item'].max(),
+        'all_correct': g3_best['all_correct'].max(),
+        'structure': g3_best['structure'].max(),
+    })
+
 model_df = pd.DataFrame(model_results)
 print("=== Model Comparison ===")
 print(model_df.to_string(index=False))
@@ -353,7 +433,7 @@ metadata_difficulty     mean      std  count
 # Create summary table for blog post
 summary_rows = []
 
-# Add Gemini sweep summary
+# Add Gemini 2.5 Flash sweep summary
 for dialect in ['canonical', 'noisy-balanced', 'noisy-mismatch']:
     subset = sweep_df[sweep_df['dialect'] == dialect]
     summary_rows.append({
@@ -363,7 +443,29 @@ for dialect in ['canonical', 'noisy-balanced', 'noisy-mismatch']:
         'All-Correct (max)': f"{subset['all_correct'].max():.1%}",
     })
 
-# Add notation comparison
+# Add Gemini 3 Flash Preview (low reasoning)
+for dialect in ['canonical', 'noisy-balanced', 'noisy-mismatch']:
+    subset = gemini3_df[(gemini3_df['dialect'] == dialect) & (gemini3_df['reasoning_effort'] == 'low')]
+    if len(subset) > 0:
+        summary_rows.append({
+            'Model': 'Gemini 3 Flash (low)',
+            'Dialect': dialect,
+            'Per-Item (max)': f"{subset['per_item'].max():.1%}",
+            'All-Correct (max)': f"{subset['all_correct'].max():.1%}",
+        })
+
+# Add Gemini 3 Flash Preview (high reasoning)
+for dialect in ['canonical', 'noisy-balanced', 'noisy-mismatch']:
+    subset = gemini3_df[(gemini3_df['dialect'] == dialect) & (gemini3_df['reasoning_effort'] == 'high')]
+    if len(subset) > 0:
+        summary_rows.append({
+            'Model': 'Gemini 3 Flash (high)',
+            'Dialect': dialect,
+            'Per-Item (max)': f"{subset['per_item'].max():.1%}",
+            'All-Correct (max)': f"{subset['all_correct'].max():.1%}",
+        })
+
+# Add Opus 4.5 notation comparison
 for _, row in notation_df.iterrows():
     summary_rows.append({
         'Model': 'Opus 4.5',
@@ -475,9 +577,14 @@ Key findings:
 1. *Dialect matters*: Balanced noisy notation outperforms canonical and mismatched
    for capable models (Opus 4.5: 96.7% vs 86.7% vs 71.7%)
 
-2. *Flash struggles*: Gemini 2.5 Flash achieves at most 12% per-item accuracy
-   regardless of thinking budget. Structure accuracy near 0% for noisy dialects
-   indicates fundamental parsing failure.
+2. *Gemini 2.5 Flash struggles*: Achieves at most 12% per-item accuracy regardless
+   of thinking budget. Structure accuracy near 0% for noisy dialects indicates
+   fundamental parsing failure.
 
-3. *Thinking budget effects vary*: For capable models, more thinking helps. For
-   Flash, additional thinking tokens provide no benefit on this task.
+3. *Gemini 3 Flash Preview is a leap*: With high reasoning effort, achieves 95% on
+   noisy-balanced (vs 7% for 2.5 Flash), 59% on noisy-mismatch, 34% on canonical.
+   Even low reasoning outperforms 2.5 Flash at ~20% on canonical.
+
+4. *Thinking budget effects vary*: For capable models, more thinking helps. For
+   Gemini 2.5 Flash, additional thinking tokens provide no benefit. Gemini 3 Flash
+   shows clear benefit from high vs low reasoning effort.

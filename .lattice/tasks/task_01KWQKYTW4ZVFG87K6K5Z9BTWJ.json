@@ -1,0 +1,48 @@
+{
+  "assigned_to": "agent:claire-impl-db3",
+  "branch_links": [
+    {
+      "branch": "feat/DB-3-visual-archetypes",
+      "linked_at": "2026-07-05T01:55:50Z",
+      "linked_by": "agent:claire-impl-db3",
+      "repo": null
+    }
+  ],
+  "comment_count": 9,
+  "complexity": "medium",
+  "created_at": "2026-07-04T22:28:33Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Read .lattice/notes/design-decisions-2026-07-04.md first. It binds this task.\n\nBuild most-abstracted archetype renderers for the visual families in the taxonomy: enclosure (nested ovals \u2014 the existing circle renderer is close), blocks (isometric stacking), trees, graph (nodes on a ring), map (centred), map, rooms (floor plan with door gaps), paths (re-entrant wiring). Plan all; sequence by rendering cost \u2014 enclosure, trees, blocks and graph are cheap; maps and rooms need planar layout; paths is hardest and may defer.\n\nRules:\n- the dataset factory already handles image samples (the format=image path in datasets/factory.py); emit images the same way\n- structure preservation must be machine-verified, for example by generating the image from a verified intermediate and parsing SVG back where possible\n- colour cues that mark isomorphisms are for the site only; model stimuli stay uncued\n- no evaluation runs in this task; the budget (100 to 150 US dollars per release) is spent elsewhere\n\nDesign renderers as archetype generators the DB-4 variation pipeline can wrap; read the DB-4 description before designing.",
+  "done_at": "2026-07-05T03:49:46Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWR0CR5DGFZ9G8031W0T57T6",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KWR6B05PAG2GYJ43NPZNA3KX",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQKYTW4ZVFG87K6K5Z9BTWJ",
+  "last_event_id": "ev_01KWR6B0D1Q1YZAE9HQZMFPZKT",
+  "last_status_changed_at": "2026-07-05T03:49:46Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-3",
+  "status": "done",
+  "tags": [
+    "dialects",
+    "renderers",
+    "vision"
+  ],
+  "title": "Visual dialect families: archetype renderers for the taxonomy",
+  "type": "task",
+  "updated_at": "2026-07-05T03:49:46Z",
+  "urgency": null
+}

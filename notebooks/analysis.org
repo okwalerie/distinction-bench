@@ -743,6 +743,9 @@ uv run inspect eval src/lofbench/tasks/composite.py \
 -T 'renderer_config={"mismatched": True}' \
 #+end_example
 
+*** Gemini 2.5 Flash
+
+n=100 k=3
 
 | variant \ reason | 0 | 512 | 2048 | 8192 | 24576 |
 |------------------+---+-----+------+------+-------|
@@ -758,6 +761,56 @@ uv run inspect eval src/lofbench/tasks/composite.py \
 
 Spent $127 so far 😰 on the three. Not wiling to risk more spending at the moment.
 wondering if I need to try another example or this is fine. i don't need to introduce new dimensions to the data right now... okay.
+
+*** Gemini 3 Flash
+Oh shoot.
+
+:cost:
+Input: ~639
+Output: 32000
+
+100 samples * 3 epochs * 4 thinking * 3 variants * 32000 output tokens
+
+High cost $0.096 vs. ARC's $0.174
+Medium ARC's $0.061, or 35% of the HIGH cost
+
+My medium task cost 8300 output tokens or 26% of the HIGH cost
+Low 2200 output, or 6.9% of HIGH
+Minimal: 704 output, or 2.2% of HIGH
+
+ARC's total cost is 1.5 for a sweep vs. HIGH
+My total cost for a sweep: 43204 tokens (most of it is HIGH)
+
+Without HIGH: 11204 tokens per row
+
+Okay, so basically, fuck High
+
+| thinking | my cost | ARC cost |
+| high     |   0.096 |    0.174 |
+| medium   |  0.0249 |    0.061 |
+| low      |  0.0066 |    0.016 |
+| minimal  |   0.002 |    0.012 |
+
+:end:
+
+#+begin_example bash
+uv run inspect eval src/lofbench/tasks/composite.py --model google/gemini-3-flash-preview -T n_groups=100 -T renderer=canonical --reasoning-effort minimal --cache
+
+uv run inspect eval src/lofbench/tasks/composite.py --model google/gemini-3-flash-preview -T n_groups=100 -T renderer=noisy_parens --reasoning-effort minimal --cache
+
+uv run inspect eval src/lofbench/tasks/composite.py --model google/gemini-3-flash-preview -T n_groups=100 -T renderer=noisy_parens --reasoning-effort minimal -T 'renderer_config={"mismatched": True}' \ --cache 
+#+end_example
+
+| variant \ reason | minimal | low | medium |
+|------------------+---------+-----+--------|
+| output count avg |         |     |        |
+|------------------+---------+-----+--------|
+| canonical        | o       | o   | o      |
+| noisy            | o       | o   | o      |
+| noisy-mismatch   | o       | o   | o      |
+|------------------+---------+-----+--------|
+Is my structure_accuracy scorer inaccurate??
+
 
 ** Launch Interactive Viewer
 

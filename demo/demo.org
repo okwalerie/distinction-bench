@@ -1,0 +1,153 @@
+* Same problem, different outfit
+
+These inputs encode the SAME structure, but the model answers them differently.
+
+
+* Can we trust AI to be consistent?
+
+1. What is two plus two?
+                                                          🆚
+2. Please answer: 2 + 2
+
+
+
+* Distinction Bench: isolating abstraction
+Most benchmarks are about translating between similar formats, or increasingly /tangled/ rules.
+  
+A simple idea: test *simple rules* in *many different representations*.
+
+- /Abstraction/ :: the act of ignoring *irrelevant details* and *focusing on the relevant parts.*
+  Can the model apply the same simple rules when only the encoding changes?
+  
+  
+  : accuracy (Γ) + invariance drop across dialects (∆rep)
+
+
+* Why Distinction Bench?
+If a model can't stay consistent across equivalent encodings, you can’t trust it to:
+- follow specs across formats
+- generalize across UI / tools
+- be audited (evals lie)
+
+* What I'm doing next
+
+Ccaling DistinctionBench in =inspect-ai=:
+- more dialect families (text, 2d, images)
+- per-model invariance profiles (∆rep)
+
+if you want a *simple* benchmark that’s *hard* to overfit:
+let’s talk.
+
+
+* COMMENT Experiment Samples :ARCHIVE:
+
+** Parens
+
+: 
+: === Canonical Rendering ===
+: (Standard parentheses)
+: 
+:   ()              → ()
+:   (())            → ( () )
+:   ()()            → () ()
+:   ((())())        → ((())())
+:   (())(())        → (())(() )
+
+
+: 
+: === Canonical Rendering ===
+: (Standard parentheses)
+: 
+:   ()              → ()
+:   (())            → ( () )
+:   ()()            → () ()
+:   ((())())        → ( ( () )())
+:   (())(())        → (())(() )
+
+** Brackets
+
+: 
+: === Noisy Bracket Rendering ===
+: (Random bracket substitution)
+: 
+:   ()              → []
+:   (())            → (⟨⟩)
+:   ()()            → <><>
+:   ((())())        → <{[]}{}>
+:   (())(())        → 「[]」「[]」
+
+
+: 
+: === Mismatched Bracket Mode ===
+: (Opening and closing chosen independently)
+: 
+:   ()              → (⟩
+:   (())            → [〈⟩]
+:   ()()            → (〉「」
+:   ((())())        → 〈〈(}}〈」〉
+
+
+* COMMENT Data :ARCHIVE:
+
+** Summary: Strange Performance Differences??
+
+#+RESULTS:
+: === Summary Table for Blog ===
+:            Model        Dialect Per-Item (max) All-Correct (max)
+: 
+: Gemini 2.5 Flash      canonical          12.0%             12.0%
+: Gemini 2.5 Flash noisy-balanced           7.0%              7.0%
+: Gemini 2.5 Flash noisy-mismatch           7.0%              7.0%
+: 
+:         Opus 4.5      canonical          60.0%             60.0%
+:         Opus 4.5 noisy-balanced         100.0%            100.0%
+:         Opus 4.5 noisy-mismatch          40.0%             40.0%
+
+: |-----------+----------------+----------------|
+: | canonical | noisy-balanced | noisy-mismatch |
+: | (())()()  |   (⟨⟩)<><>      | [〈 ⟩ ]  ( 〉「」|
+: |-----------+----------------+----------------|
+
+
+** This Data Cost $1000 💸
+
+: === Opus 4.5 Detailed Analysis ===
+: Total samples: 2055
+: Unique sample IDs: 991
+: 
+: K=1 Per-item accuracy: 94.4%
+: 
+: === By Difficulty ===
+: metadata_difficulty     mean      std  count
+:             1. easy 0.992771 0.045400    415
+:           2. medium 0.973236 0.086681    411
+:             3. hard 0.947619 0.146336    420
+:          4. lunatic 0.922264 0.186904    402
+:            5. extra 0.884521 0.218861    407
+
+** Opus 4.5 on different brackets
+#+RESULTS:
+: === Opus 4.5 Notation Comparison (10k thinking) ===
+:       notation  per_item  all_correct structure  thinking
+: noisy-mismatch       0.4          0.4      None     10000
+: noisy-balanced       1.0          1.0      None     10000
+:      canonical       0.6          0.6      None     10000
+
+
+** Some Messy Data
+
+#+RESULTS:
+: === Model Comparison ===
+:          model        dialect  thinking  n_samples  per_item  all_correct  structure
+: Opus 4.5 (64k) noisy-mismatch     63999       1000  0.944404     0.854501   0.209367
+:        GPT 5.2 noisy-balanced     10000         10  0.800000     0.800000   0.600000
+:   Gemini 3 Pro noisy-mismatch         0         30  0.733333     0.733333   0.066667
+:     Sonnet 4.5      canonical     10000         10  0.000000     0.000000   0.100000
+
+
+* COMMENT Failure Examples
+
+* COMMENT Scratch :ARCHIVE:
+
+A diagnostic eval for *representation-invariant execution* on a minimal ruleset.
+

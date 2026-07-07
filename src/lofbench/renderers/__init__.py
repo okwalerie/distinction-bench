@@ -6,12 +6,15 @@ in various notations while preserving their structural meaning.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .base import FormRenderer, RenderedForm
 from .canonical import CanonicalConfig, CanonicalRenderer
 from .nested_list import NestedListConfig, NestedListRenderer
 from .noisy_parens import BRACKET_PAIRS, NoisyParensConfig, NoisyParensRenderer
+from .pipeline.composed import ComposedRenderer
+from .pipeline.spec import DialectSpec
 from .sexpr import PRESETS as SEXPR_PRESETS
 from .sexpr import SExprConfig, SExprRenderer
 from .svg_circle_renderer import SVGCircleConfig, SVGCircleRenderer
@@ -31,19 +34,32 @@ __all__ = [
     "SExprRenderer",
     "SExprConfig",
     "SEXPR_PRESETS",
+    "ComposedRenderer",
+    "DialectSpec",
     "get_renderer",
     "register_renderer",
     "list_renderers",
 ]
 
 
-# Registry mapping renderer names to their classes
-_RENDERER_REGISTRY: dict[str, type[FormRenderer]] = {
+# Registry mapping renderer names to a callable that returns a FormRenderer.
+# Widened from type[FormRenderer] to Callable[..., FormRenderer]: a named
+# composed dialect registers a factory function, not a class (see
+# lofbench.renderers.pipeline.spec.make_named_dialect_factory).
+#
+# "circle" is deliberately absent: DB-4 M5-rest migrates SVGCircleRenderer
+# to the enclosure@1 archetype and registers "circle" (plus
+# "enclosure.canonical-v1") as composed named dialects instead --
+# lofbench.renderers.archetypes's module docstring and enclosure.py's own
+# docstring have the detail. SVGCircleRenderer/SVGCircleConfig stay
+# imported and exported below (no renderer is deleted until parity is
+# tested), just no longer wired to a registry key directly.
+_RENDERER_REGISTRY: dict[str, Callable[..., FormRenderer]] = {
     "canonical": CanonicalRenderer,
     "noisy_parens": NoisyParensRenderer,
-    "circle": SVGCircleRenderer,
     "nested_list": NestedListRenderer,
     "sexpr": SExprRenderer,
+    "composed": ComposedRenderer,
 }
 
 
@@ -72,17 +88,22 @@ def get_renderer(name: str, **kwargs: Any) -> FormRenderer:
     return renderer_cls(**kwargs)
 
 
-def register_renderer(name: str, renderer_cls: type[FormRenderer]) -> None:
-    """Register a new renderer class.
+def register_renderer(name: str, renderer: Callable[..., FormRenderer]) -> None:
+    """Register a new renderer factory.
 
-    This allows users to add custom renderers to the system.
+    Accepts any callable that returns a FormRenderer: a FormRenderer
+    subclass (the common case), or a plain factory function such as the
+    named-dialect factories the composed pipeline registers (see
+    ``lofbench.renderers.pipeline.spec.make_named_dialect_factory``). The
+    guard is a callability check, not an issubclass check, so a named
+    factory goes through this guarded path rather than a raw dict write.
 
     Args:
         name: The unique name to register the renderer under
-        renderer_cls: The FormRenderer subclass to register
+        renderer: A FormRenderer subclass, or a callable returning one
 
     Raises:
-        TypeError: If renderer_cls is not a subclass of FormRenderer
+        TypeError: If renderer is not callable
         ValueError: If the name is already registered
 
     Examples:
@@ -94,15 +115,13 @@ def register_renderer(name: str, renderer_cls: type[FormRenderer]) -> None:
         ...         return RenderedForm(form_string, form_string, self.name, {})
         >>> register_renderer("my_renderer", MyRenderer)
     """
-    if not isinstance(renderer_cls, type) or not issubclass(renderer_cls, FormRenderer):
-        raise TypeError(
-            f"renderer_cls must be a subclass of FormRenderer, got {type(renderer_cls)}"
-        )
+    if not callable(renderer):
+        raise TypeError(f"renderer must be callable, got {type(renderer)}")
 
     if name in _RENDERER_REGISTRY:
         raise ValueError(f"Renderer {name!r} is already registered")
 
-    _RENDERER_REGISTRY[name] = renderer_cls
+    _RENDERER_REGISTRY[name] = renderer
 
 
 def list_renderers() -> list[str]:
@@ -116,3 +135,26 @@ def list_renderers() -> list[str]:
         ['canonical', 'noisy_parens']
     """
     return sorted(_RENDERER_REGISTRY.keys())
+
+
+# Concrete archetypes and injectors (M5 migration) register themselves into
+# ARCHETYPE_REGISTRY/INJECTOR_REGISTRY and DIALECT_SPECS at import time via
+# register_named_dialect, which does `from .. import register_renderer` --
+# so this import must come after register_renderer is defined above. This
+# single import also now registers every DB-3 visual archetype family
+# (trees, blocks, graph, map, map-centred, rooms, rna_arc, paths_lite) as a
+# full renderer-registry entry (DB-4 M5-rest flip: their deferred
+# registration is active now that pipeline.emit has a real spatial path --
+# see lofbench.renderers.archetypes's module docstring).
+# isort: off
+from . import archetypes, injectors  # noqa: E402, F401
+
+# DB-2 phase B (task_01KWQKYTN19RZN2BFKAAGQCFKA): register the five text
+# dialect archetypes, their injectors, and their named DialectSpecs.
+# Append-only hook to minimise merge surface with DB-4's parallel M3-M5
+# branch -- see lofbench.dialects_text.register_text_dialects.
+from lofbench import dialects_text as _dialects_text  # noqa: E402
+
+# isort: on
+
+_dialects_text.register_text_dialects()

@@ -1,0 +1,41 @@
+{
+  "assigned_to": "agent:claire-orchestrator",
+  "branch_links": [
+    {
+      "branch": "chore/DB-1-docs-refresh",
+      "linked_at": "2026-07-05T00:50:07Z",
+      "linked_by": "agent:claire-impl-db1",
+      "repo": null
+    }
+  ],
+  "comment_count": 3,
+  "complexity": "low",
+  "created_at": "2026-07-04T22:28:32Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "CLAUDE.md describes files that no longer exist: form.py, simplify.py, generate.py, dataset.py, cli.py and a 'bench generate' command. Agents that read it look for the wrong files.\n\nThe real package is src/lofbench/. It contains:\n- core.py: form representation, simplification, generation and DIFFICULTY_CONFIGS\n- renderers/: a registry of dialect renderers (canonical, noisy_parens, circle, nested_list, sexpr)\n- datasets/factory.py: builds inspect-ai samples for text and image dialects\n- tasks/: inspect-ai task definitions (single.py, composite.py, prompts.py)\n- scorers/lof_scorer.py: scoring\n- analysis.py: loads inspect logs into pandas\n\nRewrite the overview, architecture and commands sections of CLAUDE.md to match this. Keep the Lattice section unchanged. Check README.org examples against the current exports in __init__.py. Check agents.md for the same staleness. Every command listed must actually run.",
+  "done_at": "2026-07-05T01:12:53Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWQXBR3R7QTJ3EDVQ0CKEBA9",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQKYTDKAS6CZM0VEGV2GP3G",
+  "last_event_id": "ev_01KWQXBRBXA28KYX9KQ8F0ARFX",
+  "last_status_changed_at": "2026-07-05T01:12:53Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-1",
+  "status": "done",
+  "tags": [
+    "docs"
+  ],
+  "title": "Refresh CLAUDE.md and README to match actual lofbench architecture",
+  "type": "chore",
+  "updated_at": "2026-07-05T01:12:53Z",
+  "urgency": null
+}

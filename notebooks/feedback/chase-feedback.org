@@ -1,0 +1,281 @@
+user avatar
+Chase Brower
+@ChaseBrowe32432
+Joined June 2023
+Yesterday
+beep!
+9:56 PM
+9:56 PM
+yo
+attachment
+acer sent me this; very very very neat idea
+9:57 PM
+9:57 PM
+Oh, hell yeah! I've been obsessing over this system called Laws of Form for the last couple years
+9:58 PM
+9:58 PM
+Is that book where this comes from
+attachment
+
+** Chase
+This is very interesting to me; this topic seems like a rather succinct description of human advantage & LLM deficiency (human spatial representation generalizes to highly abstract visual rule systems, and does so well)
+And at the same time these ideas were made in the absence of any LLM/VLM to critique
+10:03 PM
+10:03 PM
+** Val
+I agree
+I realized just recently that I could actually possibly get into a big AI lab with this
+10:04 PM
+
+** Chase
+10:04 PM
+So they just identified all this from first principles
+#Walerie
+: I agree
+Oh yeah, you'd be surprised how much contact I've had with labs over my extremely simplistic VPCT
+If you can come up with a lot of these ideas/enumerate them in RL envs, I think many labs would be interested
+esp. google/openai
+10:05 PM
+
+** Val
+Yes, even deeper first principles actually
+
+The central concept is "distinction", which is at the root of all concepts. Laws of Form goes into detail, but tldr; you require "distinction" in order to create any concept; and distinction itself is a self-referential definition and also a triple-action: the drawing of a boundary; the assigning of a value; the labeling of a name
+So unlike most formal systems which perform axiomatics, this system is based purely on the concept of how the very first inklings of meaning comes into being
+But that's getting quite philosophical
+
+the point is, this is a very foundational concept and extremely simple formal system and can be depicted in many ways because of its foundational & simple nature
+it is morphic to boolean algebra, and extensions to this system are morphic to other logical systems like modal logic or paraconsistent logic
+10:07 PM
+10:07 PM
+I just got started on making an eval suite for this system, and I'm wondering what further steps I need to take to iterate on what I have atm
+10:08 PM
+10:08 PM
+And also if you want to explore this idea too, I'm more than happy to talk about it :P
+
+I know that there are a lot of variations to be made; a combinatorial explosion tbqh that I doubt that all expressions of this can be fully fine tuned
+** Chase
+In my mind the general process for evals is:
+1) design eval
+2) create data for eval
+3) de-bias (ensure labels are equal, i.e. same amount of void and circle on the first problem I sent)
+4) sample models, evaluate performance (+metadata like cost/token usage/latency, if you want)
+5) analyze model responses and draw qualitative conclusions
+6) [optional] organize the above into a paper
+7) publish results
+10:11 PM
+10:11 PM
+#Walerie
+And also if you want to explore this idea too, I'm more than happy to talk about it :P
+
+I know that there are a lot of variations to be made
+well my fundamentals here are somewhat embarrassingly primitive; i know a bit about boolean algebra and propositional and first order logic from some of my cs master's courses
+
+but I am very interested in the subject, if there are any materials you recommend I would try to read them
+10:13 PM
+
+** Val
+
+The answer is ~50/50 with random guess (technically not, for reasons), so I felt it was necessary to constrain the output to require intermediary steps, but that just resulted in me giving the models a lot of scaffolding in order to make that work
+10:13 PM
+10:13 PM
+youtube.com/playlist?list=PLoK3NtWr5NbqEOdjQrWaq1sDweF7NJ5NB&si=03-C5jGj7wbS4HIE
+Here's a video walkthrough of the original book
+
+** Chase
+i think my knowledge representation course is about the deepest I ever got into logic, had first-order logic, propositional logic, but mostly focused on programming formalizations of those
+10:16 PM
+10
+
+** Val
+I don't think people need advanced logic to appreciate what this system is
+When I first encountered it I was actually surprised at how simple it was for its supposed seminal influence on something I wanted to learn called "second order cybernetics"
+
+I thought it was so simple that it was stupid
+10:17 PM
+10
+
+** Chase
+very cool, i've bookmarked it
+10:18 PM
+
+** Val
+10:18 PM
+www.markability.net/index.htm
+
+IDK if you want to learn the system itself or read discussion about its significance
+#Walerie
+http://www.markability.net/index.htm
+This one is a fable-retelling of the formal system without reference to logic
+10:19 PM
+10:19 PM
+www.tydecks.info/online/themen_e_spencer_brown_logik.html
+
+
+This is a fairly dense philosophy of math / programming / electrical engineering essay about laws of form
+But if you find it difficult, well, you know where to find me :p
+
+I've been obsessing over it for the last 2.5-3 years honestly
+There's been some significant things done with it by William Bricken in particular
+
+in the 80s he tried to make a startup that used it for the purpose of semiconductor optimization
+
+because the Circle you see there is actually a NOR gate
+10:23 PM
+
+** Chase
+well funnily enough AI is becoming central for semiconductor optimization (particularly EUV patterning) 45 years later
+10:25 PM
+
+** Val
+Bricken is getting quite old
+I hope I can carry on his legacy
+I want to see his work through
+10:26 PM
+10:26 PM
+❤️
+same with Spencer-Brown
+10:26 PM
+10:26 PM
+How did you get started with publicizing your work with VPCT? I definitely need to start posting more about this one
+
+the name should have something to do with "distinction", hmmm
+10:27 PM
+
+** Chase
+I think I just posted on my twitter and that was it lol
+i kept posting new results for each model that came out and it just gained traction on its own
+
+people love seeing the slop graphs with numbers going up
+i've been somewhat distant from academia for a bit, but if I was still involved I would have written papers instead of just posting model results
+in fact I sometimes consider writing a paper about it
+10:29 PM
+10:29 PM
+
+user avatar
+Chase Brower
+Jan 30
+Version 1 of my visual physics benchmark, VPCT.
+Media content
+this is when i published it first, it got 3 likes
+user avatar
+Chase Brower
+Nov 18
+Gemini 3 Pro (preview) scores 91% on VPCT (spatial reasoning)
+
+Uhhhh jesus christ
+Media content
+my most recent model results got 1700 likes and 250k views
+how you want to publicize depends on what you want, though
+if you want impact/views, spend some time having claude and chatgpt make you different graphics until you find something that looks nice
+if you want to affect research at a sincere level, communicate with labs or publish a paper
+
+** Val
+Hmm
+
+I also saw Victor Taelin realize that he just needs to make a benchmark
+
+I don't understand linear combinators like he does but maybe I should reach out since this is already adjacent
+10:35 PM
+
+** Chase
+i love victor taelin's stuff
+i think his fixation is everything lambda calc
+10:36 PM
+10:36 PM
+
+** Val
+Linear Combinators as well, which I really want to research eventually
+
+James Algebra and linear combinators are soooo similar I swear there is something super elegant that bridges between the two
+And then we'd really be cooking
+10:38 PM
+I need to slide into this Anthropic guy's DMs hmmm
+user avatar
+Mike A. Merrill
+Dec 9
+New job! I’m hiring folks interested in building and researching the next generation of evals and eval infa. DMs are open :)
+Media content
+I think you should give it a try as well
+10:42 PM
+10:42 PM
+I'm curious how much help you scaffold models with when you perform benchmarks
+10:43 PM
+
+** Chase
+I think you should give it a try as well
+10:42 PM
+10:42 PM
+I'm curious how much help you scaffold models with when you perform benchmarks
+10:43 PM
+10:43 PM
+I have a standard system and user prompt that i use for all models, it's public
+I will say I found strangely that this prompt improves performance (which I did not expect)
+"You are an expert physics simulator. Looking at this image of a ball-and-bucket physics simulation, predict which bucket (numbered 1, 2, or 3 from left to right) the ball will eventually fall into.
+
+Let's think about this step by step:
+
+1. First, observe the initial position of the ball
+2. Note any obstacles or lines drawn that will affect the ball's path
+3. Consider how gravity will affect the ball's trajectory
+4. Think about how the ball will bounce and roll along the surfaces
+5. Analyze how the placement and angle of each line will guide the ball
+6. Factor in that the ball has some elasticity and will bounce slightly when it hits surfaces
+
+Based on your analysis, please conclude with a clear answer in this format: 'answer(X)' where X is the bucket number (1, 2, or 3).
+
+Explain your reasoning, then end with your answer in the specified format."
+This is given to all models
+It was generated by claude 3.5 sonnet (new), and interestingly results in substantially improved performance for all models
+despite ostensibly not contributing much
+10:45 PM
+
+** Val
+And you're only measuring the end result, eh
+
+The problem with my test is that it's a 50/50 on random guess, and I also want to track intermediate steps to categorize types of errors
+There's a lot of "correct" answers that have totally bunk reasoning
+10:47 PM
+So I'm not sure if I just live with it and only declare 95%+ performance as actually good and cap the floor to 50%
+
+** Chase
+yeah VPCT has a similar problem
+one thing you can do is composite results
+so for example, instead of just posing a 50/50 circle vs void problem; you have an image with like 8 problems and you add the number of circles results, say
+then you're only "correct" if you get all 8 right, reducing random guess's influence
+
+** Val
+In the same context, eh?
+
+** Chase
+well current models (including gemini 3 pro) are extremely extremely bad at visual/spatial reasoning
+in METR terms I'd give most models ~0.1-0.3 seconds time horizon in vision
+GPT-5 and gemini 2.5 pro would get ~0.6 seconds
+and gemini 3 pro would get closer to 1-3 seconds
+what we currently are looking forward to is models that match 5-10 second horizons or slightly further
+
+** Val
+oh, also, I forgot to send you more visual examples (idk if acer already sent)
+
+** Chase
+i only got a bit from acer, i'd love more examples
+10:53 PM
+
+** Val
+<a bunch more examples, like what I sent to SQCU>
+
+I realized earlier today that any self-similar shape could also encode laws of form; so an example of sierpinski triangles could be an adversarial example
+10:56 PM
+10:56 PM
+Chase Brower
+then you're only "correct" if you get all 8 right, reducing random guess's influence
+I think the intermediary step approach is too restricting, hand-holding, and not fruitful, so I think I'll go for this approach, thank you! :)
+11:04 PM
+11:04 PM
+#Walerie
+attachment
+And maybe start making the first non-parens 2d tests as well
+
+gemini performs surprisingly decently at images like these, although it does get the transcription somewhat incorrect (in a way that doesn't affect the final result, unfortunately >_>)
+11:08 PM
+

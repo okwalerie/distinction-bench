@@ -1,0 +1,303 @@
+#+title: Data History
+#+description: An overview of significant findings across different versions of the benchmark
+
+* V0: Single Notebook Version
+
+The task:
+- Evaluate 8 Regular Parens forms e.g. ((())())
+- N=500
+- claude-opus-4-5, no reasoning.
+- gemini-3-pro-preview, no reasoning.
+#+begin_example
+=== Target Count Distribution ===
+  0:  1
+  1: ███ 12
+  2: ████████████ 43
+  3: ████████████████████████████ 99
+  4: ████████████████████████████████████████ 141
+  5: █████████████████████████████████ 118
+  6: ██████████████████ 64
+  7: █████ 20
+  8:  2
+
+=== Random Baselines ===
+  Per-item:       50.0% (coin flip)
+  All-correct:    0.39% (8 coin flips)
+  Count-match:    20.0% (P(random guess correct) = Σ P(k)²)
+  Count MAE:      1.54 (mean absolute error, guess ~ P(k))
+
+=== Average Steps per Difficulty ===
+  1. easy     : ~3.3 steps
+  2. medium   : ~8.6 steps
+  3. hard     : ~12.7 steps
+  4. lunatic  : ~14.7 steps
+  5. extra    : ~18.1 steps
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+=== Results by Model ===
+claude-opus-4-5-20251101 (n=500):
+  Per-item:      62.8%
+  All-correct:   4.0% (20/500)
+  Count match:   14.6%
+  Count MAE:     1.83
+gemini-3-pro-preview (n=500):
+  Per-item:      71.1%
+  All-correct:   16.6% (83/500)
+  Count match:   32.4%
+  Count MAE:     1.15
+
+=== Accuracy by Difficulty ===
+claude-opus-4-5-20251101:
+  1. easy       76.4% per-item   14.0% all-correct  (n=100)
+  2. medium     65.1% per-item    1.0% all-correct  (n=100)
+  3. hard       54.0% per-item    2.0% all-correct  (n=100)
+  4. lunatic    58.5% per-item    2.0% all-correct  (n=100)
+  5. extra      60.0% per-item    1.0% all-correct  (n=100)
+gemini-3-pro-preview:
+  1. easy       91.1% per-item   56.0% all-correct  (n=100)
+  2. medium     79.6% per-item   18.0% all-correct  (n=100)
+  3. hard       55.4% per-item    0.0% all-correct  (n=100)
+  4. lunatic    64.0% per-item    7.0% all-correct  (n=100)
+  5. extra      65.5% per-item    2.0% all-correct  (n=100)
+
+=== Accuracy by Target ===
+claude-opus-4-5-20251101:
+  marked      : 57.4% (1199/2089)
+  unmarked    : 68.7% (1313/1911)
+gemini-3-pro-preview:
+  marked      : 70.8% (1479/2089)
+  unmarked    : 71.5% (1366/1911)
+#+end_example
+
+* v1: Reprodicible version built on inspect-ai
+- mixed brackets: balanced / jumbled
+  - balanced: (〈〈〉〈〈「」〉〉〈〉〉〈〈〈「」〉〈〉〈「」〉〉〉〈〉)(〈〈〉〉)
+  - mismatched:『(《(〉⟩『『」』]⟨}[⟨{『]』《]『〉>〈「《>]《⟩⟩〉』(<][⟩〉
+- parens only: ((((()))()()))(())
+
+64k thinking on 2 epochs of 1000 samples. Spent way too much money 😱
+#+begin_example
+=== composite_lof_task ===
+Model: anthropic/claude-opus-4-5-20251101
+Groups: 2055
+Date: 2025-12-16T01:43:50+00:00
+
+Metrics:
+  Per-item accuracy: 94.4%
+  All-correct:       85.5% (1756/2055)
+#+end_example
+
+The same 5x3 sample/epochs. GPT-5.2 on reasoning-level=high. Balanced noisy parens.
+#+begin_example
+=== composite_lof_task ===
+Model: openai/gpt-5.2
+Groups: 30
+Date: 2025-12-16T00:36:57+00:00
+
+Metrics:
+  Per-item accuracy:    94.2%
+  All-correct:          76.7% (23/30)
+  Structure accuracy:   75.0%
+#+end_example
+
+Gemini 3 Pro, reasoning-level=high. 30x3 sample / epochs. Balanced noisy parens. IDK if it's just the way I any reasoning-effort=high request is, but this took 30 freaking minutes. I have noticed that most reasoning_effort=high tests I ran on gemini AI studio took about 3 minutes for most tasks. IDK if that's just baked in.
+#+begin_example
+=== composite_lof_task ===
+Model: google/gemini-3-pro-preview
+Groups: 90
+Date: 2025-12-16T04:02:04+00:00
+
+Metrics:
+  Per-item accuracy:    88.3%
+  All-correct:          66.7% (60/90)
+  Structure accuracy:   20.6%
+#+end_example
+
+
+
+One interesting experiment that I did manage to get out of this was running the same data set on the same model: Opus, on three different representations of the same forms.
+
+A) 10k thinking on 5 samples, 3 epochs each. mismatched noisy parens.
+#+begin_example
+=== composite_lof_task ===
+Model: anthropic/claude-opus-4-5-20251101
+Groups: 15
+Date: 2025-12-15T23:19:22+00:00
+
+Metrics:
+  Per-item accuracy: 71.7%
+  All-correct:       40.0% (6/15)
+#+end_example
+
+
+B) 10k thinking on the same 5 samples, 3 epochs each. Balanced noisy parens.
+#+begin_example
+=== composite_lof_task ===
+Model: anthropic/claude-opus-4-5-20251101
+Groups: 15
+Date: 2025-12-15T23:10:31+00:00
+
+Metrics:
+  Per-item accuracy: 96.7%
+  All-correct:       86.7% (13/15)
+#+end_example
+
+C) Opus 4.5, 10k thinking on the same 5 samples, 3 epochs each. Regular parens (())
+#+begin_example
+#+RESULTS:
+=== composite_lof_task ===
+Model: anthropic/claude-opus-4-5-20251101
+Groups: 15
+Date: 2025-12-15T22:40:38+00:00
+
+Metrics:
+  Per-item accuracy: 86.7%
+  All-correct:       53.3% (8/15)
+#+end_example
+   
+And lastly, Sonnet 4.5.
+D) Claude Sonnet 4.5, 10k reasoning tokens. 10x3 samples. Parens notation (same as the one above)
+#+begin_example
+=== composite_lof_task ===
+Model: anthropic/claude-sonnet-4-5-20250929
+Groups: 30
+Date: 2025-12-16T00:26:03+00:00
+
+Metrics:
+  Per-item accuracy:    55.8%
+  All-correct:          10.0% (3/30)
+  Structure accuracy:   22.5%
+#+end_example
+
+* v1.1
+
+
+#+begin_example
+Gemini 2.5 Flash Dialect/Thinking Sweep:
+================================================================================
+                  model        dialect  thinking_tokens  per_item  all_correct  structure
+google/gemini-2.5-flash noisy-mismatch             2048      0.01         0.01       0.00
+google/gemini-2.5-flash noisy-mismatch              512      0.03         0.03       0.00
+google/gemini-2.5-flash noisy-mismatch            24576      0.04         0.04       0.00
+google/gemini-2.5-flash noisy-mismatch             8192      0.03         0.03       0.00
+google/gemini-2.5-flash noisy-mismatch                0      0.07         0.07       0.00
+google/gemini-2.5-flash noisy-balanced              512      0.02         0.02       0.00
+google/gemini-2.5-flash noisy-balanced             8192      0.06         0.06       0.00
+google/gemini-2.5-flash noisy-balanced             2048      0.07         0.07       0.00
+google/gemini-2.5-flash noisy-balanced            24576      0.06         0.06       0.01
+google/gemini-2.5-flash noisy-balanced                0      0.04         0.04       0.00
+google/gemini-2.5-flash      canonical            24576      0.10         0.10       0.13
+google/gemini-2.5-flash      canonical             8192      0.12         0.12       0.14
+google/gemini-2.5-flash      canonical             2048      0.07         0.07       0.13
+google/gemini-2.5-flash      canonical              512      0.02         0.02       0.14
+google/gemini-2.5-flash      canonical                0      0.04         0.04       0.14
+#+end_example
+
+
+#+begin_example
+
+=== Summary by Dialect ===
+               per_item             structure      
+                   mean   max   min      mean   max
+dialect                                            
+canonical         0.070  0.12  0.02     0.136  0.14
+noisy-balanced    0.050  0.07  0.02     0.002  0.01
+noisy-mismatch    0.036  0.07  0.01     0.000  0.00
+
+=== Key Finding ===
+Canonical notation: 7-12% accuracy (best)
+Noisy-balanced: 2-7% accuracy
+Noisy-mismatch: 1-7% accuracy
+
+Structure accuracy near 0% for noisy dialects shows parsing failure.
+More thinking tokens doesn't help - Flash simply can't do this task.
+#+end_example
+
+
+#+RESULTS:
+: === Opus 4.5 Notation Comparison (10k thinking) ===
+:       notation  per_item  all_correct structure  thinking
+: noisy-mismatch       0.4          0.4      None     10000
+: noisy-balanced       1.0          1.0      None     10000
+:      canonical       0.6          0.6      None     10000
+
+
+#+RESULTS:
+: === Model Comparison ===
+:          model        dialect  thinking  n_samples  per_item  all_correct  structure
+: Opus 4.5 (64k) noisy-mismatch     63999       1000  0.944404     0.854501   0.209367
+:        GPT 5.2 noisy-balanced     10000         10  0.800000     0.800000   0.600000
+:   Gemini 3 Pro noisy-mismatch         0         30  0.733333     0.733333   0.066667
+:     Sonnet 4.5      canonical     10000         10  0.000000     0.000000   0.100000
+
+
+#+RESULTS:
+#+begin_example
+
+
+=== Opus 4.5 Detailed Analysis ===
+Total samples: 2055
+Unique sample IDs: 991
+
+K=1 Per-item accuracy: 94.4%
+
+=== By Difficulty ===
+metadata_difficulty     mean      std  count
+            1. easy 0.992771 0.045400    415
+          2. medium 0.973236 0.086681    411
+            3. hard 0.947619 0.146336    420
+         4. lunatic 0.922264 0.186904    402
+           5. extra 0.884521 0.218861    407
+#+end_example
+
+
+
+#+RESULTS:
+: === Summary Table for Blog ===
+:            Model        Dialect Per-Item (max) All-Correct (max)
+: Gemini 2.5 Flash      canonical          12.0%             12.0%
+: Gemini 2.5 Flash noisy-balanced           7.0%              7.0%
+: Gemini 2.5 Flash noisy-mismatch           7.0%              7.0%
+:         Opus 4.5 noisy-mismatch          40.0%             40.0%
+:         Opus 4.5 noisy-balanced         100.0%            100.0%
+:         Opus 4.5      canonical          60.0%             60.0%
+
+* v1.1 with gemini-3-flash
+
+
+#+RESULTS:
+#+begin_example
+Gemini 3 Flash Preview Dialect/Reasoning Sweep:
+================================================================================
+                        model        dialect reasoning_effort  per_item  all_correct  structure
+google/gemini-3-flash-preview      canonical              low      0.20         0.20       0.53
+google/gemini-3-flash-preview      canonical              low      0.19         0.19       0.55
+google/gemini-3-flash-preview noisy-balanced              low      0.22         0.22       0.09
+google/gemini-3-flash-preview noisy-balanced              low      0.22         0.22       0.05
+google/gemini-3-flash-preview noisy-mismatch              low      0.03         0.03       0.00
+google/gemini-3-flash-preview noisy-mismatch              low      0.03         0.03       0.00
+google/gemini-3-flash-preview      canonical             high      0.34         0.34       0.25
+google/gemini-3-flash-preview noisy-balanced             high      0.95         0.95       0.21
+google/gemini-3-flash-preview noisy-mismatch             high      0.59         0.59       0.05
+#+end_example
+
+#+begin_example
+
+=== Summary by Dialect and Reasoning ===
+                                per_item       structure      
+                                    mean   max      mean   max
+dialect        reasoning_effort                               
+canonical      high                0.340  0.34      0.25  0.25
+               low                 0.195  0.20      0.54  0.55
+noisy-balanced high                0.950  0.95      0.21  0.21
+               low                 0.220  0.22      0.07  0.09
+noisy-mismatch high                0.590  0.59      0.05  0.05
+               low                 0.030  0.03      0.00  0.00
+
+=== Key Finding ===
+High reasoning + noisy-balanced: 95% accuracy (vs 7% for 2.5 Flash)
+High reasoning + noisy-mismatch: 59% accuracy
+High reasoning + canonical: 34% accuracy
+
+Low reasoning shows similar pattern but lower overall (~20% canonical, 3% mismatch)
+Gemini 3 Flash represents a generational leap in LoF reasoning capability.
+#+end_example
