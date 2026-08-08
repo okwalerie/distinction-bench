@@ -515,6 +515,25 @@ evidence replay, and publication scanning. update adr 0001, run focused/full/cle
 wheel gates without inference, commit, and return db-14 to review tied to
 `ev_01KZHQ09SFRXEYKPVMFE8AHE8N`.
 
+## Review Cycle 9 Findings — durable single-writer execution
+
+the ninth review closes the remaining local crash and concurrency mechanics. jsonl
+append must retry interrupted and short writes, fsync the complete file, and fsync
+its parent after first creation. atomic manifests must fsync their payload and parent
+after rename. lock-file creation follows the same durable ordering.
+
+one nonblocking advisory linux lock per run spans all reconciliation, request marking,
+provider execution, evidence, accounting, scoring, and the final run manifest. a
+second executor receives an explicit `already_running` result and cannot post or read
+partial append state. different runs retain independent execution locks but cross the
+same release-wide exclusive ledger lock for every reserve and settle.
+
+prove the interface with fsync spies, real subprocess creation/append, a blocking fake
+executor under two concurrent callers, exact one-marker/evidence/call/trial closure,
+and a different-run global-cap race. preserve every prior crash/quarantine/forgery
+gate, update adr 0001, run focused/full/clean gates without inference, commit, and
+return db-14 to review tied to `ev_01KZHRWA2VW17EC9A5Y56FA3C4`.
+
 ## Review Cycle 5 Findings — canonical provider-evidence projection
 
 the fifth review proved that `AttemptEvidence` still permits sibling typed assertions
@@ -599,6 +618,8 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-seal-boundary
+
+## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
 
