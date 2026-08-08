@@ -7,6 +7,7 @@ import re
 from typing import Literal
 
 from inspect_ai.scorer import Score, Scorer, Target, accuracy, mean, scorer, stderr
+from inspect_ai.solver import TaskState
 
 from lofbench.protocols import get_protocol
 
@@ -23,29 +24,18 @@ def parse_protocol_answer(
     expected_tree: list,
 ) -> tuple[str, str, bool]:
     """Strictly parse one public-protocol response."""
-    try:
-        value = json.loads(response)
-    except (json.JSONDecodeError, TypeError):
-        return "invalid", "", False
-    if not isinstance(value, dict):
-        return "invalid", "", False
-    protocol = get_protocol(protocol_id)
-    if protocol.answer_kind == "normal_value":
-        if set(value) != {"value"} or value["value"] not in {"marked", "unmarked"}:
-            return "invalid", "", False
-        prediction = value["value"]
-        return "valid", prediction, prediction == expected_normal_value
-    if set(value) != {"tree"} or not isinstance(value["tree"], list):
-        return "invalid", "", False
-    prediction = json.dumps(value["tree"], separators=(",", ":"))
-    return "valid", prediction, value["tree"] == expected_tree
+    return get_protocol(protocol_id).parse_answer(
+        response,
+        expected_normal_value=expected_normal_value,
+        expected_tree=expected_tree,
+    )
 
 
 @scorer(metrics=[accuracy(), stderr()])
 def public_protocol_scorer() -> Scorer:
     """Score strict JSON for every v1 protocol through one implementation."""
 
-    async def score(state, target: Target) -> Score:
+    async def score(state: TaskState, target: Target) -> Score:
         parse_status, prediction, correct = parse_protocol_answer(
             state.output.completion,
             protocol_id=state.metadata["protocol_id"],
@@ -208,7 +198,7 @@ def lof_single_scorer() -> Scorer:
     Returns "C" for correct, "I" for incorrect.
     """
 
-    async def score(state, target: Target) -> Score:
+    async def score(state: TaskState, target: Target) -> Score:
         # Extract the model's answer
         response = state.output.completion
         answer = extract_single_answer(response)
@@ -248,7 +238,7 @@ def lof_composite_scorer() -> Scorer:
     Human baseline expectation: 98-100% all_correct.
     """
 
-    async def score(state, target: Target) -> Score:
+    async def score(state: TaskState, target: Target) -> Score:
         # Extract the model's answer
         response = state.output.completion
 
@@ -263,9 +253,7 @@ def lof_composite_scorer() -> Scorer:
         canonicals = extracted["canonicals"]
 
         # Compute per-item result accuracy
-        correct_results = sum(
-            1 for i, result in enumerate(results) if result == targets[i]
-        )
+        correct_results = sum(1 for i, result in enumerate(results) if result == targets[i])
         per_item_accuracy = correct_results / n if n > 0 else 0.0
 
         # Compute all_correct (results)

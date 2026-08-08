@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import random
 from hashlib import blake2b, sha256
 from typing import TYPE_CHECKING
@@ -55,9 +54,7 @@ def create_suite_dataset(
         raise ValueError(f"unknown dialect {dialect_id!r}")
     spec = suite.specs[dialect_id]
     by_form = {form["abstract_form_id"]: form for form in suite.forms}
-    by_cell = {
-        (cell["abstract_form_id"], cell["dialect_id"]): cell for cell in suite.cells
-    }
+    by_cell = {(cell["abstract_form_id"], cell["dialect_id"]): cell for cell in suite.cells}
     renderer = ComposedRenderer(spec)
     samples: list[Sample] = []
     for form_id in suite.form_sets[form_set]:
@@ -80,27 +77,15 @@ def create_suite_dataset(
         user_text = protocol.render_user_text(reading_rule=spec.reading_rule)
         if cell["modality"] == "image":
             sample_input = [
-                ChatMessageUser(
-                    content=[ContentText(text=user_text), ContentImage(image=payload)]
-                )
+                ChatMessageUser(content=[ContentText(text=user_text), ContentImage(image=payload)])
             ]
         else:
             sample_input = f"{user_text}\n\nstimulus:\n{payload}"
         prompt_material = (
-            protocol.system_text
-            + "\x00"
-            + user_text
-            + "\x00"
-            + cell["model_payload_sha256"]
+            protocol.system_text + "\x00" + user_text + "\x00" + cell["model_payload_sha256"]
         )
-        prompt_hash = sha256(
-            prompt_material.encode()
-        ).hexdigest()
-        target = (
-            form["normal_value"]
-            if protocol.answer_kind == "normal_value"
-            else json.dumps(form["abstract_form"], separators=(",", ":"))
-        )
+        prompt_hash = sha256(prompt_material.encode()).hexdigest()
+        target = protocol.target_for(form)
         samples.append(
             Sample(
                 id=f"{form_id}:{dialect_id}:{protocol.protocol_id}",

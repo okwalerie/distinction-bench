@@ -72,6 +72,34 @@ class ProtocolSpec:
             return self.user_template.replace("{reading_rule}", reading_rule)
         return self.user_template
 
+    def target_for(self, form: dict[str, Any]) -> str:
+        if self.answer_kind == "normal_value":
+            return str(form["normal_value"])
+        return json.dumps(form["abstract_form"], separators=(",", ":"))
+
+    def parse_answer(
+        self,
+        response: str,
+        *,
+        expected_normal_value: str,
+        expected_tree: list[Any],
+    ) -> tuple[str, str, bool]:
+        try:
+            value = json.loads(response)
+        except (json.JSONDecodeError, TypeError):
+            return "invalid", "", False
+        if not isinstance(value, dict):
+            return "invalid", "", False
+        if self.answer_kind == "normal_value":
+            if set(value) != {"value"} or value["value"] not in {"marked", "unmarked"}:
+                return "invalid", "", False
+            prediction = value["value"]
+            return "valid", prediction, prediction == expected_normal_value
+        if set(value) != {"tree"} or not isinstance(value["tree"], list):
+            return "invalid", "", False
+        prediction = json.dumps(value["tree"], separators=(",", ":"))
+        return "valid", prediction, value["tree"] == expected_tree
+
 
 PROTOCOLS: dict[str, ProtocolSpec] = {
     "reduce-infer-v1": ProtocolSpec(
@@ -156,7 +184,4 @@ def load_protocol_registry(path: Path) -> dict[str, ProtocolSpec]:
     payload = json.loads(path.read_text())
     if payload.get("schema_version") != 1:
         raise RuntimeError("unsupported protocol registry schema")
-    return {
-        key: ProtocolSpec.from_dict(value)
-        for key, value in payload["protocols"].items()
-    }
+    return {key: ProtocolSpec.from_dict(value) for key, value in payload["protocols"].items()}

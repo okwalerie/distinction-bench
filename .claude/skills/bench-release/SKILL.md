@@ -18,14 +18,17 @@ stop before any paid request unless all are true:
 - the visual environment has cairo and
   `uv run python -m lofbench.suites --verify-only` passes for all frozen cells.
 - the env file is mode `0600` or stricter. never print its values.
-- the exact model and endpoint catalog row have known prompt and completion
-  prices, structured-output support, and the input modality required by the
-  selected dialect.
+- authenticated model-endpoint and `/api/v1/endpoints/zdr` catalogs intersect
+  on the exact model id, endpoint tag, and provider name. both rows are active,
+  agree on known prompt/completion prices and structured-output support, and
+  the model declares the input modality required by the selected dialect.
 - routing pins exactly one endpoint with fallbacks disabled,
   `data_collection: deny`, and `zdr: true`.
 - the operator has approved the written cost sheet and cap.
 
-the runner is dry by default. paid execution requires both literal flags:
+the runner is dry by default. every run under one `--state-root` shares its
+single fsynced release ledger; never split one release across state roots. paid
+execution requires both literal flags:
 `--approve-paid-run --max-spend-usd 30`. omission or any other cap performs no
 calls. unknown price, usage, endpoint, or resolved model stops the run.
 
@@ -37,7 +40,7 @@ it also materializes and hash-checks every frozen stimulus, so use the visual
 environment.
 
 ```bash
-uv run python -m lofbench.runner plan \
+uv run python -m dbench plan \
   --release /tmp/distinction-release \
   --state-root /tmp/distinction-state \
   --release-id <release-id> \
@@ -49,7 +52,13 @@ uv run python -m lofbench.runner plan \
   --protocol reduce-infer-v1 \
   --protocol reduce-taught-v1 \
   --protocol transcribe-infer-v1 \
-  --protocol transcribe-taught-v1
+  --protocol transcribe-taught-v1 \
+  --execution-surface direct_api \
+  --cohort sample \
+  --max-transport-attempts 1 \
+  --approved-by human:valerie \
+  --approval-scope 'v1.0.0-sample.1 only; stop and report after sealing' \
+  --env-file /var/home/core/dbench.env
 ```
 
 inspect `/tmp/distinction-state/cost-sheet.json`. check the exact catalog
@@ -68,7 +77,8 @@ frozen `probe` forms and one nontrivial multimodal dialect/model configuration:
 - `transcribe-infer-v1`
 - `transcribe-taught-v1`
 
-that is exactly twenty provider attempts. use `enclosure.plain-v1` and the
+that is exactly twenty provider attempts, with Inspect and SDK retries disabled
+inside each attempt. use `enclosure.plain-v1` and the
 cheapest qualifying multimodal endpoint. if it cannot satisfy exact endpoint,
 privacy, zdr, structured-output, and accounting gates, stop and re-plan with the
 next-cheapest qualifying endpoint; record why. never enable a fallback.
@@ -82,21 +92,22 @@ is incomplete, report the sample as blocked rather than changing the form set.
 for each printed run id, execute its state directory:
 
 ```bash
-uv run python -m lofbench.runner run \
+uv run python -m dbench run \
   --release /tmp/distinction-release \
-  --state-dir /tmp/distinction-state/<run-id> \
+  --state-root /tmp/distinction-state \
+  --run-id <run-id> \
   --env-file /var/home/core/dbench.env \
-  --approve-paid-run --max-spend-usd 30 \
-  --max-transport-attempts 1
+  --approve-paid-run --max-spend-usd 30
 ```
 
 ordinary releases may use the default maximum of three transport attempts.
 resume uses the same flags and schedules only missing trial ids:
 
 ```bash
-uv run python -m lofbench.runner resume \
+uv run python -m dbench resume \
   --release /tmp/distinction-release \
-  --state-dir /tmp/distinction-state/<run-id> \
+  --state-root /tmp/distinction-state \
+  --run-id <run-id> \
   --env-file /var/home/core/dbench.env \
   --approve-paid-run --max-spend-usd 30
 ```
@@ -104,8 +115,9 @@ uv run python -m lofbench.runner resume \
 check a run without spending:
 
 ```bash
-uv run python -m lofbench.runner status \
-  --state-dir /tmp/distinction-state/<run-id>
+uv run python -m dbench status \
+  --state-root /tmp/distinction-state \
+  --run-id <run-id>
 ```
 
 ## admit, derive, and inspect
@@ -113,17 +125,19 @@ uv run python -m lofbench.runner status \
 admit only complete runs, one state directory at a time:
 
 ```bash
-uv run python -m lofbench.runner admit \
+uv run python -m dbench admit \
   --release /tmp/distinction-release \
-  --state-dir /tmp/distinction-state/<run-id>
+  --state-root /tmp/distinction-state \
+  --run-id <run-id>
 ```
 
-admission checks the run's suite and protocol, expected trial ids, duplicate
-ids, model identity, and completeness. after every expected run is admitted,
+admission reconciles the run's suite/protocol, expected trials, calls, attempts,
+provider request ids, token/cost usage, reservations, and settlements. after
+every expected run is admitted,
 derive profiles/effects and build the bundle-only static gallery:
 
 ```bash
-uv run python -m lofbench.runner prepare --release /tmp/distinction-release
+uv run python -m dbench prepare --release /tmp/distinction-release
 ```
 
 inspect the generated `site/` and these invariants:
@@ -142,11 +156,13 @@ sealing requires the same clean commit used at plan time, every expected run
 admitted, a valid bundle schema, and a clean publication secret scan:
 
 ```bash
-uv run python -m lofbench.runner seal --release /tmp/distinction-release
-uv run python -m lofbench.runner export-inspect \
+uv run python -m dbench seal \
+  --release /tmp/distinction-release \
+  --env-file /var/home/core/dbench.env
+uv run python -m dbench export-inspect \
   --release /tmp/distinction-release \
   --out /tmp/distinction-inspect.zip
-uv run python -m lofbench.runner archive \
+uv run python -m dbench archive \
   --release /tmp/distinction-release \
   --out /tmp/distinction-bench-<release-id>.tar.gz
 ```

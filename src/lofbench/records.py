@@ -33,6 +33,8 @@ class RunManifest:
     reasoning: dict[str, Any]
     generation: dict[str, Any]
     billing_channel: str
+    cohort: str
+    max_transport_attempts: int
     expected_trial_ids: tuple[str, ...]
     status: RunStatus = "planned"
     attempts: int = 0
@@ -54,17 +56,16 @@ class RunManifest:
 
     @classmethod
     def plan(cls, **kwargs: Any) -> RunManifest:
-        identity_keys = (
-            "suite_version",
-            "form_set",
-            "dialect_set",
-            "protocol_id",
-            "requested_model_id",
-            "execution_surface",
-            "reasoning",
-            "generation",
-        )
-        identity = {key: kwargs[key] for key in identity_keys}
+        result_keys = {
+            "expected_trial_ids",
+            "status",
+            "attempts",
+            "token_usage",
+            "latency_ms",
+            "cost_usd",
+            "rejection_reason",
+        }
+        identity = {key: value for key, value in kwargs.items() if key not in result_keys}
         return cls(run_id=deterministic_id("run", identity), **kwargs)
 
 
@@ -112,8 +113,34 @@ class CallRecord:
     status: str
     reserved_cost_usd: float
     observed_cost_usd: float
+    resolved_model_id: str
+    endpoint: str
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
     provider_request_id: str = ""
     error_type: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class LedgerEvent:
+    event_type: Literal["reserved", "settled"]
+    call_id: str
+    trial_id: str
+    run_id: str
+    cohort: str
+    amount_usd: float
+    at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> LedgerEvent:
+        if "type" in value:
+            value = {**value, "event_type": value["type"]}
+            value.pop("type")
+        return cls(**value)

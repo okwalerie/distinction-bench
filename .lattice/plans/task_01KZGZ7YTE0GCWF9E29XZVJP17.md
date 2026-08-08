@@ -466,3 +466,5 @@ sample release, never as the completed public benchmark. retain the typed approv
 endpoint pinning, provenance, ledger, retry, completeness, admission, secret scan,
 and `$30.00` global safeguards above. after reporting the sealed sample, stop rather
 than beginning the broad sweep.
+
+## Reset 2026-08-08 by agent:codex-root

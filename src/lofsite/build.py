@@ -6,6 +6,7 @@ import argparse
 import html
 import json
 import shutil
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ _DOWNLOADS = (
     "profiles.parquet",
     "effects.parquet",
     "transcripts.jsonl",
+    "ledger.jsonl",
 )
 
 _CSS = """
@@ -62,9 +64,11 @@ def _nav(prefix: str = "") -> str:
         ("human.html", "human pilot"),
         ("downloads.html", "downloads + citation"),
     )
-    return "<nav>" + "".join(
-        f'<a href="{prefix}{href}">{_e(label)}</a>' for href, label in links
-    ) + "</nav>"
+    return (
+        "<nav>"
+        + "".join(f'<a href="{prefix}{href}">{_e(label)}</a>' for href, label in links)
+        + "</nav>"
+    )
 
 
 def _page(title: str, body: str, *, prefix: str = "") -> str:
@@ -72,8 +76,8 @@ def _page(title: str, body: str, *, prefix: str = "") -> str:
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
         '<meta http-equiv="Content-Security-Policy" '
-        'content="default-src \'self\'; img-src \'self\' data:; style-src \'unsafe-inline\'; '
-        'script-src \'unsafe-inline\'; connect-src \'none\'; form-action \'none\'">'
+        "content=\"default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; "
+        "script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'\">"
         f"<title>{_e(title)} · distinction benchmark</title><style>{_CSS}</style></head><body>"
         f"<header>{_nav(prefix)}</header><main>{body}</main>"
         "<footer>distinction benchmark · code: mit · suite and site content: cc by 4.0"
@@ -99,17 +103,21 @@ def _overview(bundle: ReleaseBundle, suite: LoadedSuite, protocols: dict[str, Pr
         (trials, "admitted trials"),
     )
     cards = "".join(
-        f'<div class=card><div class=metric>{number}</div><div>{_e(label)}</div></div>'
+        f"<div class=card><div class=metric>{number}</div><div>{_e(label)}</div></div>"
         for number, label in metrics
     )
-    status = _e(bundle.manifest["status"])
+    caveat = (
+        "this is a protocol smoke test, not a benchmark result or model ranking."
+        if bundle.manifest.get("sample_contract")
+        else "results shown here are only admitted bundle records."
+    )
     return (
         "<h1>distinction benchmark</h1>"
-        '<p class=lede>an inspectable benchmark of whether a model can preserve laws of form '
+        "<p class=lede>an inspectable benchmark of whether a model can preserve laws of form "
         "structure and reduce it across genuinely different representational dialects.</p>"
-        f'<p class=notice>release <strong>{_e(bundle.manifest["release_id"])}</strong> is '
-        f'<strong>{status}</strong>. results shown here are only admitted bundle records.</p>'
-        f'<section class=grid>{cards}</section><h2>the claim</h2>'
+        f"<p class=notice>release <strong>{_e(bundle.manifest['release_id'])}</strong>: "
+        f"{_e(caveat)}</p>"
+        f"<section class=grid>{cards}</section><h2>the claim</h2>"
         "<p>competence and representational invariance are reported separately. a model can be "
         "consistently wrong; that does not make it competent. plain and treated dialect effects "
         "are paired only within an archetype.</p>"
@@ -126,10 +134,25 @@ def _forms(suite: LoadedSuite, protocols: dict[str, ProtocolSpec]) -> str:
         f"<td>{sum(f['normal_value'] == 'unmarked' for f in forms)}</td></tr>"
         for name, forms in by_difficulty.items()
     )
+    memberships = {
+        form["abstract_form_id"]: sorted(
+            name for name, ids in suite.form_sets.items() if form["abstract_form_id"] in ids
+        )
+        for form in suite.forms
+    }
+    form_rows = "".join(
+        "<tr>"
+        f"<td><code>{_e(form['abstract_form_id'])}</code></td>"
+        f"<td><code>{_e(form['reference_transcription'])}</code></td>"
+        f"<td>{_e(form['normal_value'])}</td><td>{_e(form['difficulty'])}</td>"
+        f"<td>{_e(', '.join(memberships[form['abstract_form_id']]))}</td></tr>"
+        for form in suite.forms
+    )
     protocol_cards = "".join(
         "<article class=card>"
         f"<h3><code>{_e(spec.protocol_id)}</code></h3>"
-        f"<p>{_e(spec.user_template)}</p>"
+        f"<p><strong>system prompt</strong></p><pre>{_e(spec.system_text)}</pre>"
+        f"<p><strong>user prompt template</strong></p><pre>{_e(spec.user_template)}</pre>"
         f"<p class=muted>answer: {_e(spec.answer_kind)} · scorer: {_e(spec.scorer_id)}@"
         f"{_e(spec.scorer_version)} · dialect legend: {_e(spec.includes_dialect_legend)}</p>"
         "<details><summary>exact response schema</summary>"
@@ -137,12 +160,26 @@ def _forms(suite: LoadedSuite, protocols: dict[str, ProtocolSpec]) -> str:
         "</article>"
         for spec in protocols.values()
     )
+    form_sets = "".join(
+        f"<tr><td><code>{_e(name)}</code></td><td>{len(ids)}</td>"
+        f"<td>{_e(', '.join(ids[:8]))}{' …' if len(ids) > 8 else ''}</td></tr>"
+        for name, ids in sorted(suite.form_sets.items())
+    )
     return (
         "<h1>forms + protocols</h1><p class=lede>the abstract form, visual dialect, task protocol, "
         "model endpoint, and execution surface are separate frozen variables.</p>"
         "<h2>balanced form table</h2><table><thead><tr><th>difficulty</th><th>forms</th>"
         f"<th>marked</th><th>unmarked</th></tr></thead><tbody>{rows}</tbody></table>"
-        f"<h2>protocol registry</h2><section class=grid>{protocol_cards}</section>"
+        f"<h2>frozen form sets</h2><table><thead><tr><th>set</th><th>forms</th>"
+        f"<th>first ids</th></tr></thead><tbody>{form_sets}</tbody></table>"
+        "<h2>protocol registry</h2><p class=notice><strong>possible confounds:</strong> infer "
+        "protocols measure convention inference "
+        "and task performance together; taught protocols expose the reading rule but may measure "
+        "instruction use. image dialects additionally confound raster perception and layout.</p>"
+        f"<section class=grid>{protocol_cards}</section>"
+        "<h2>every form and its set membership</h2><table><thead><tr><th>form id</th>"
+        "<th>reference form</th><th>normal value</th><th>difficulty</th><th>sets</th></tr>"
+        f"</thead><tbody>{form_rows}</tbody></table>"
     )
 
 
@@ -156,8 +193,9 @@ def _cell_markup(cell: dict[str, Any], *, prefix: str = "") -> str:
         stimulus = f"<pre>{_e(cell['model_payload'])}</pre>"
     return (
         f"<details><summary><code>{_e(cell['abstract_form_id'])}</code></summary>"
-        f'<div class=stimulus>{stimulus}</div><p class=muted>sha256 '
-        f"<code>{_e(cell['model_payload_sha256'])}</code></p></details>"
+        f"<div class=stimulus>{stimulus}</div><p class=muted>sha256 "
+        f"<code>{_e(cell['model_payload_sha256'])}</code><br>symbolic hash "
+        f"<code>{_e(cell['symbolic_payload_hash'])}</code></p></details>"
     )
 
 
@@ -185,13 +223,65 @@ def _atlas(out: Path, suite: LoadedSuite) -> str:
             f"<pre>{_e(json.dumps(spec.to_dict(), indent=2))}</pre>"
             "</article></div><h2>limitations</h2>"
             f"<ul>{limitations}</ul><h2>all frozen cells</h2>"
-            f'<section class=dialect-cells>{cell_markup}</section>'
+            f"<section class=dialect-cells>{cell_markup}</section>"
         )
         _write(out / "dialects" / f"{dialect_id}.html", _page(spec.label, body, prefix="../"))
     return (
         "<h1>dialect atlas</h1><p class=lede>every dialect declares its reading rule, provenance, "
         "modality, limits, structural family, and exact frozen payload hashes.</p>"
-        f'<section class=grid>{"".join(cards)}</section>'
+        f"<section class=grid>{''.join(cards)}</section>"
+    )
+
+
+def _records_table(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> str:
+    if not rows:
+        return "<p class=notice>no admitted records for this table.</p>"
+    heading = "".join(f"<th>{_e(column.replace('_', ' '))}</th>" for column in columns)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{_e(row.get(column, ''))}</td>" for column in columns) + "</tr>"
+        for row in rows
+    )
+    return f"<table><thead><tr>{heading}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def _worked_path(bundle: ReleaseBundle, runs: list[RunManifest]) -> str:
+    trials = pq.read_table(bundle.root / "trials.parquet").to_pylist()
+    if not runs or not trials:
+        return "<p class=notice>no admitted trial is available for a worked path.</p>"
+    run = runs[0]
+    trial = next(row for row in trials if row["run_id"] == run.run_id)
+    suite = load_suite(version=run.suite_version, path=bundle.root / "suite.json")
+    protocols = load_protocol_registry(bundle.root / "protocols.json")
+    form = next(
+        item for item in suite.forms if item["abstract_form_id"] == trial["abstract_form_id"]
+    )
+    cell = next(
+        item
+        for item in suite.cells
+        if item["abstract_form_id"] == trial["abstract_form_id"]
+        and item["dialect_id"] == trial["dialect_id"]
+    )
+    spec = suite.specs[trial["dialect_id"]]
+    protocol = protocols[trial["protocol_id"]]
+    prompt = protocol.render_user_text(reading_rule=spec.reading_rule)
+    steps = (
+        ("1 · frozen form", f"{form['reference_transcription']} → {form['normal_value']}"),
+        (
+            "2 · frozen dialect payload",
+            f"{trial['dialect_id']} · symbolic {cell['symbolic_payload_hash']} · "
+            f"payload sha256 {cell['model_payload_sha256']}",
+        ),
+        ("3 · exact protocol prompt", f"{protocol.system_text}\n\n{prompt}"),
+        ("4 · recorded model response", trial.get("response_text", "")),
+        (
+            "5 · parser and score",
+            f"{trial['parse_status']} · prediction {trial['prediction']} · "
+            f"correct {trial['correct']}",
+        ),
+    )
+    return "".join(
+        f"<article class=card><h3>{_e(label)}</h3><pre>{_e(value)}</pre></article>"
+        for label, value in steps
     )
 
 
@@ -203,7 +293,7 @@ def _runs_page(bundle: ReleaseBundle) -> str:
 
     def table(items: list[RunManifest]) -> str:
         if not items:
-            return '<p class=notice>no admitted runs on this execution surface.</p>'
+            return "<p class=notice>no admitted runs on this execution surface.</p>"
         rows = "".join(
             f"<tr><td><code>{_e(run.run_id)}</code></td><td>{_e(run.resolved_model_id)}</td>"
             f"<td>{_e(run.protocol_id)}</td><td>{len(run.expected_trial_ids)}</td>"
@@ -216,17 +306,52 @@ def _runs_page(bundle: ReleaseBundle) -> str:
             f"<tbody>{rows}</tbody></table>"
         )
 
+    profiles = pq.read_table(bundle.root / "profiles.parquet").to_pylist()
+    effects = pq.read_table(bundle.root / "effects.parquet").to_pylist()
+    profile_table = _records_table(
+        profiles,
+        (
+            "resolved_model_id",
+            "protocol_id",
+            "competence",
+            "within_family_invariance",
+            "text_competence",
+            "spatial_competence",
+            "invalid_output_rate",
+            "coverage",
+        ),
+    )
+    effect_table = _records_table(
+        effects,
+        (
+            "resolved_model_id",
+            "protocol_id",
+            "family",
+            "plain_dialect_id",
+            "treatment_dialect_id",
+            "signed_paired_effect",
+            "bootstrap_low",
+            "bootstrap_high",
+            "mcnemar_exact_p",
+        ),
+    )
     return (
         "<h1>models + runs</h1><p class=lede>direct api calls and agent-mediated runs "
         "are different "
         "experimental surfaces and are never silently pooled.</p>"
-        '<div class=tabs><button data-tab=direct_api>direct api</button>'
-        '<button data-tab=agent>agent</button></div>'
-        f'<section id=direct_api>{table(grouped["direct_api"])}</section>'
-        f'<section id=agent hidden>{table(grouped["agent"])}</section>'
+        "<div class=tabs><button data-tab=direct_api>direct api</button>"
+        "<button data-tab=agent>agent</button></div>"
+        f"<section id=direct_api>{table(grouped['direct_api'])}</section>"
+        f"<section id=agent hidden>{table(grouped['agent'])}</section>"
         "<script>document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{"
         "document.querySelectorAll('main>section[id]').forEach(s=>s.hidden=s.id!==b.dataset.tab)})"
-        "</script>"
+        "</script><h2>worked result path</h2><p>one admitted result traced from the frozen "
+        "abstract form through its dialect payload and exact protocol to parsing and scoring.</p>"
+        f"<section class=grid>{_worked_path(bundle, runs)}</section>"
+        "<h2>competence + invariance profiles</h2>"
+        f"{profile_table}"
+        "<h2>controlled dialect effects</h2>"
+        f"{effect_table}"
     )
 
 
@@ -248,6 +373,7 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
                 "abstract_form_id": form_id,
                 "dialect_id": dialect_id,
                 "protocol_id": protocol.protocol_id,
+                "answer_kind": protocol.answer_kind,
                 "prompt": protocol.render_user_text(reading_rule=spec.reading_rule),
                 "modality": cell["modality"],
                 "payload": cell.get("model_payload"),
@@ -258,13 +384,20 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
     return (
         f"<h1>human pilot</h1><p class=lede>{len(chosen)} local-only stimuli, balanced across "
         f"{len(protocol_ids)} frozen protocols. nothing is posted; export stays on your device.</p>"
-        '<p class=notice>this informal pilot is not an admitted model run and collects no '
-        "identity data.</p>"
-        '<div id=pilot class=card></div><div class=answer id=answer></div>'
-        '<button id=next>save answer + next</button> '
-        '<button id=download disabled>download json</button>'
+        "<p class=notice>this informal pilot is not an admitted model run. use a pseudonymous "
+        "participant code; no data leaves this page.</p>"
+        "<div class=card><label>participant code <input id=participant required></label> "
+        "<label>laws of form familiarity <select id=familiarity><option value=none>none</option>"
+        "<option value=some>some</option><option value=expert>expert</option>"
+        "</select></label></div>"
+        "<div id=pilot class=card></div><div class=answer id=answer></div>"
+        "<label>confidence <select id=confidence><option value=low>low</option>"
+        "<option value=medium selected>medium</option><option value=high>high</option>"
+        "</select></label> "
+        "<button id=next>save answer + next</button> "
+        "<button id=download disabled>download json</button>"
         f"<script>const stimuli={payload};const release={json.dumps(release_id)};"
-        "let i=0;const rows=[];"
+        "let i=0;let started=performance.now();const rows=[];"
         "const pilot=document.querySelector('#pilot'),answer=document.querySelector('#answer');"
         "function render(){if(i>=stimuli.length){pilot.textContent='pilot complete';"
         "answer.innerHTML='';document.querySelector('#next').disabled=true;"
@@ -272,18 +405,23 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
         "const s=stimuli[i];pilot.innerHTML=`<p><strong>${s.trial} / ${stimuli.length}</strong> · "
         "<code>${s.protocol_id}</code> · <code>${s.dialect_id}</code></p><p>${s.prompt}</p>`+"
         "(s.modality!=='text'?`<div class=stimulus><img src=\"${s.asset}\" "
-        "alt=\"frozen stimulus\"></div>`:`<div class=stimulus><pre></pre></div>`);"
+        'alt="frozen stimulus"></div>`:`<div class=stimulus><pre></pre></div>`);'
         "if(s.modality==='text')pilot.querySelector('pre').textContent=s.payload;"
-        "answer.innerHTML=s.protocol_id.startsWith('reduce')?"
+        "answer.innerHTML=s.answer_kind==='normal_value'?"
         "'<button data-v=marked>marked</button> <button data-v=unmarked>unmarked</button>':"
         "'<textarea rows=6 cols=60 aria-label=transcription></textarea>';"
         "answer.querySelectorAll('[data-v]').forEach(b=>b.onclick=()=>{"
         "answer.dataset.value=b.dataset.v})}document.querySelector('#next').onclick=()=>{"
-        "const s=stimuli[i];const value=s.protocol_id.startsWith('reduce')?"
+        "const s=stimuli[i];const participant=document.querySelector('#participant').value.trim();"
+        "if(!participant)return;const value=s.answer_kind==='normal_value'?"
         "answer.dataset.value:(answer.querySelector('textarea')?.value||'');"
-        "if(!value)return;rows.push({...s,response:value});answer.dataset.value='';"
-        "i++;render()};document.querySelector('#download').onclick=()=>{"
-        "const blob=new Blob([JSON.stringify({schema_version:1,release_id:release,"
+        "if(!value)return;rows.push({...s,response:value,confidence:"
+        "document.querySelector('#confidence').value,elapsed_ms:Math.round(performance.now()-started)});"
+        "answer.dataset.value='';i++;started=performance.now();render()};"
+        "document.querySelector('#download').onclick=()=>{"
+        "const blob=new Blob([JSON.stringify({schema_version:1,release_id:release,participant_code:"
+        "document.querySelector('#participant').value.trim(),familiarity:"
+        "document.querySelector('#familiarity').value,"
         "responses:rows},null,2)],{type:'application/json'});"
         "const a=document.createElement('a');a.href=URL.createObjectURL(blob);"
         "a.download='distinction-human-pilot.json';"
@@ -294,7 +432,8 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
 def _downloads(bundle: ReleaseBundle) -> str:
     rows = "".join(
         f'<tr><td><a href="downloads/{_e(name)}">{_e(name)}</a></td>'
-        f"<td>{(bundle.root / name).stat().st_size}</td></tr>"
+        f"<td>{(bundle.root / name).stat().st_size}</td>"
+        f"<td><code>{sha256((bundle.root / name).read_bytes()).hexdigest()}</code></td></tr>"
         for name in _DOWNLOADS
     )
     citation = (
@@ -304,7 +443,13 @@ def _downloads(bundle: ReleaseBundle) -> str:
     return (
         "<h1>downloads + citation</h1><p class=lede>machine-readable release artifacts are copied "
         "verbatim from the bundle used to build these pages.</p>"
-        f"<table><thead><tr><th>artifact</th><th>bytes</th></tr></thead><tbody>{rows}</tbody></table>"
+        f"<table><thead><tr><th>artifact</th><th>bytes</th><th>sha256</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+        "<h2>caveats</h2><ul><li>sample releases are protocol smoke tests, not rankings.</li>"
+        "<li>untaught runs combine dialect inference with task performance.</li>"
+        "<li>image runs include raster perception and layout as possible confounds.</li>"
+        "<li>checksums above cover exact admitted data files; the sealed release manifest "
+        "covers every published artifact.</li></ul>"
         f"<h2>suggested citation</h2><pre>{_e(citation)}</pre>"
         "<p>code is mit licensed. the frozen suite, stimuli, documentation, and site content are "
         "licensed cc by 4.0.</p>"

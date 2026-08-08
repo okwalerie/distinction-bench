@@ -27,6 +27,8 @@ def _run(model: str, expected: tuple[str, ...]) -> RunManifest:
         reasoning={"effort": "default"},
         generation={"temperature": 0},
         billing_channel="test",
+        cohort="test",
+        max_transport_attempts=1,
         expected_trial_ids=expected,
         status="admitted",
     )

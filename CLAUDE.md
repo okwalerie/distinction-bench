@@ -24,29 +24,42 @@ uv run pytest tests/test_core.py::test_name  # Run single test
 uv run ruff check .        # Lint
 uv run ruff format .       # Format
 
-# Evaluation (inspect-ai)
-uv run inspect eval src/lofbench/tasks/single.py --model <provider/model> -T n=10
-uv run inspect eval src/lofbench/tasks/composite.py --model <provider/model> -T n_groups=20
-uv run inspect eval src/lofbench/tasks/single.py --model <provider/model> -T renderer=noisy_parens
-uv run inspect view         # Browse eval logs
+# Frozen suite and public release application
+uv run python -m lofbench.suites --verify-only
+uv run python -m dbench --help
+uv run pytest -q tests/test_runner.py tests/test_release_bundle.py tests/test_static_site.py
 
 # Pre-commit
 pre-commit install         # Install hooks
 pre-commit run --all-files # Run manually
 ```
 
-A live evaluation run needs a provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) set in the environment. Without one, the command fails at model init, not at task construction — that is expected, not a docs bug.
+Public runs go through `python -m dbench`; do not invoke Inspect directly for release data. The application is dry by default, loads secrets only from a mode-0600 env file, and requires `--approve-paid-run --max-spend-usd 30` for a paid run.
 
 ## Architecture
 
 ### Core Library (`src/lofbench/`)
 
 - `core.py` — form representation, parsing, simplification, generation, `DIFFICULTY_CONFIGS`
-- `renderers/` — dialect renderer registry (`canonical`, `noisy_parens`, `circle`, `nested_list`, `sexpr`); `get_renderer`/`list_renderers`/`register_renderer` in `renderers/__init__.py`; `FormRenderer` ABC in `renderers/base.py`
-- `datasets/factory.py` — builds inspect-ai `Sample`s for text and image dialects (`create_single_dataset`, `create_composite_dataset`)
-- `tasks/` — inspect-ai task definitions: `single.py` (`single_lof_task`), `composite.py` (`composite_lof_task`), `prompts.py` (system/user prompt templates)
-- `scorers/lof_scorer.py` — `lof_single_scorer`, `lof_composite_scorer`
-- `analysis.py` — loads inspect eval logs into pandas for post-hoc analysis
+- `renderers/` — composed archetype/injector dialect renderers and structural verification
+- `suites.py` + `suites/v1.json` — frozen forms, form sets, dialect registry, cell payloads, and hashes
+- `protocols.py` — the four frozen prompt, answer, parsing, and scoring contracts
+- `datasets/factory.py` — suite-driven Inspect `Sample` construction
+- `run_models.py`, `orchestration.py`, `accounting.py` — provider-neutral run identity, execution contracts, retry/resume, and the shared release ledger
+- `release_bundle.py`, `publication.py`, `metrics.py` — admission, sealing, scanning, and derived results
+- `tasks/` + `scorers/` — Inspect task/scorer integration over the frozen suite
+
+### Application (`src/dbench/`)
+
+- `cli.py` — release operator commands and approval gates
+- `openrouter.py` — authenticated endpoint/ZDR discovery and the direct API adapter
+- `agent_cli.py` — isolated Codex and Claude subscription CLI adapters
+
+Provider SDKs, credentials, and executable adapters belong here, never in `lofbench`.
+
+### Static gallery (`src/lofsite/`)
+
+- `build.py` — builds only from an admitted release bundle; working and sealed rebuilds must be byte-identical
 
 ### Representation
 
@@ -62,9 +75,9 @@ Normal forms:
 - `test_renderers.py` — renderer registry and output correctness
 - `test_scorers.py` — scoring logic
 
-### Rendering Architecture (design, not yet built)
+### Rendering Architecture
 
-A dialect-renderer rewrite is designed but not yet implemented: a two-layer archetype/injector model, containment-relation verification, and content-addressed seeding. This design is binding for the DB-1/DB-2/DB-3 rendering work. The current registry (`canonical`, `noisy_parens`, `circle`, `nested_list`, `sexpr`) is what exists in code today; the notes below specify the target, not the present state:
+The implemented renderer uses the binding two-layer archetype/injector model, containment-relation verification, and content-addressed seeding documented here:
 
 - [`.lattice/notes/design-decisions-2026-07-04.md`](.lattice/notes/design-decisions-2026-07-04.md) — the interview decisions binding all DB tasks (what the benchmark measures, dialect families, task/prompt design, measurement design, budget)
 - [`.lattice/notes/rendering-architecture-2026-07-04.md`](.lattice/notes/rendering-architecture-2026-07-04.md) — the binding architecture design for the renderer rewrite (`ComposedRenderer`, `Archetype`/`Injector`, `DialectSpec`, seed threading, provenance schema)
