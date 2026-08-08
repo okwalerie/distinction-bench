@@ -17,6 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from lofbench.protocols import load_protocol_registry, write_protocol_registry
+from lofbench.publication import scan_publication
 from lofbench.records import CallRecord, RunManifest, TrialRecord
 from lofbench.renderers.pipeline.composed import ComposedRenderer
 from lofbench.suites import DEFAULT_SUITE_VERSION, SUITES_DIR, load_suite
@@ -255,7 +256,7 @@ class ReleaseBundle:
         if any(row["resolved_model_id"] != run.resolved_model_id for row in rows):
             raise RuntimeError("resolved model drift within run")
 
-        existing_runs = self._runs()
+        existing_runs = self.runs()
         if run.run_id in {item.run_id for item in existing_runs}:
             raise RuntimeError(f"run {run.run_id} is already present")
         existing_trials = _read_rows(self.root / "trials.parquet")
@@ -276,7 +277,8 @@ class ReleaseBundle:
         )
         self._write_manifest()
 
-    def _runs(self) -> list[RunManifest]:
+    def runs(self) -> list[RunManifest]:
+        """Return the typed run manifests admitted to this bundle."""
         return [
             RunManifest.from_dict(json.loads(line))
             for line in (self.root / "runs.jsonl").read_text().splitlines()
@@ -295,7 +297,7 @@ class ReleaseBundle:
             raise RuntimeError("release root files do not match the bundle schema")
         load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
         load_protocol_registry(self.root / "protocols.json")
-        runs = self._runs()
+        runs = self.runs()
         if len({run.run_id for run in runs}) != len(runs):
             raise RuntimeError("duplicate run ids")
         trial_rows = _read_rows(self.root / "trials.parquet")
@@ -363,6 +365,7 @@ class ReleaseBundle:
         if expected and expected != set(self.manifest["admitted_run_ids"]):
             raise RuntimeError("not every expected run is admitted")
         self.validate()
+        scan_publication(self.root)
         self.manifest["status"] = "sealed"
         self.manifest["sealed_at"] = _utc_now()
         self.manifest["files"] = {

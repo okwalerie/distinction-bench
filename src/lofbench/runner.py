@@ -20,9 +20,12 @@ from typing import Any
 from inspect_ai import Task
 from inspect_ai.dataset import MemoryDataset, Sample
 
+from lofbench.metrics import write_release_metrics
+from lofbench.publication import archive_release, export_inspect_bundle
 from lofbench.records import CallRecord, RunManifest, TrialRecord, deterministic_id
 from lofbench.release_bundle import ReleaseBundle
 from lofbench.scorers import parse_protocol_answer
+from lofbench.suites import load_suite
 from lofbench.tasks.single import single_lof_task
 
 GLOBAL_OPENROUTER_CAP_USD = 30.0
@@ -95,7 +98,9 @@ class EndpointSelection:
         }
 
 
-def fetch_openrouter_endpoint(model_id: str) -> EndpointSelection:
+def fetch_openrouter_endpoint(
+    model_id: str, *, required_modality: str | None = None
+) -> EndpointSelection:
     """Pin the cheapest active exact endpoint with structured-output support."""
     quoted = urllib.parse.quote(model_id, safe="/")
     url = f"https://openrouter.ai/api/v1/models/{quoted}/endpoints"
@@ -104,6 +109,11 @@ def fetch_openrouter_endpoint(model_id: str) -> EndpointSelection:
     model = payload.get("data", {})
     if model.get("id") != model_id:
         raise RuntimeError(f"openrouter did not return exact requested model {model_id!r}")
+    input_modalities = set(model.get("architecture", {}).get("input_modalities", []))
+    if required_modality and required_modality not in input_modalities:
+        raise RuntimeError(
+            f"openrouter model {model_id!r} does not declare {required_modality!r} input"
+        )
     candidates = []
     for endpoint in model.get("endpoints", []):
         supported = set(endpoint.get("supported_parameters", []))
@@ -219,10 +229,6 @@ class InspectExecutor(TrialExecutor):
                 transport_error=True,
                 error_type=type(exc).__name__,
                 latency_ms=(time.monotonic() - started) * 1000,
-                observed_cost_usd=0.0,
-                input_tokens=0,
-                output_tokens=0,
-                reasoning_tokens=0,
             )
         if len(logs) != 1 or logs[0].status != "success" or not logs[0].samples:
             error_type = logs[0].status if logs else "missing_log"
@@ -246,14 +252,38 @@ class InspectExecutor(TrialExecutor):
         cost = raw_usage.get("cost")
         provider = raw.get("provider", "") if isinstance(raw, dict) else ""
         request_id = raw.get("id", "") if isinstance(raw, dict) else ""
+        generation: dict[str, Any] = {}
+        if request_id and (cost is None or not provider):
+            query = urllib.parse.urlencode({"id": request_id})
+            lookup = urllib.request.Request(
+                f"https://openrouter.ai/api/v1/generation?{query}",
+                headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"},
+            )
+            try:
+                with urllib.request.urlopen(  # noqa: S310 - fixed HTTPS host
+                    lookup, timeout=30
+                ) as response:
+                    generation = json.load(response).get("data", {})
+            except Exception:  # noqa: BLE001 - unknown accounting fails closed below
+                generation = {}
+        cost = cost if cost is not None else generation.get("total_cost")
+        provider = provider or generation.get("provider_name", "")
         resolved = event.output.model.removeprefix("openrouter/")
         return ExecutionResult(
             response_text=event.output.completion,
             resolved_model_id=resolved,
             endpoint=provider,
-            input_tokens=usage.input_tokens if usage else None,
-            output_tokens=usage.output_tokens if usage else None,
-            reasoning_tokens=(usage.reasoning_tokens or 0) if usage else None,
+            input_tokens=(
+                usage.input_tokens if usage else generation.get("native_tokens_prompt")
+            ),
+            output_tokens=(
+                usage.output_tokens if usage else generation.get("native_tokens_completion")
+            ),
+            reasoning_tokens=(
+                (usage.reasoning_tokens or 0)
+                if usage
+                else generation.get("native_tokens_reasoning", 0)
+            ),
             observed_cost_usd=float(cost) if cost is not None else None,
             latency_ms=sample.total_time * 1000,
             provider_request_id=request_id,
@@ -285,6 +315,8 @@ class _CliExecutor(TrialExecutor):
                 timeout=300,
                 check=False,
             )
+            if self.command == "claude" and completed.returncode == 0:
+                output_path.write_text(completed.stdout)
             if completed.returncode != 0 or not output_path.exists():
                 return ExecutionResult(
                     transport_error=True,
@@ -395,9 +427,16 @@ class RunOrchestrator:
         *,
         global_cap_usd: float = GLOBAL_OPENROUTER_CAP_USD,
         cohort_cap_usd: float = GLOBAL_OPENROUTER_CAP_USD,
+        max_transport_attempts: int = MAX_TRANSPORT_ATTEMPTS,
     ) -> None:
+        if not 1 <= max_transport_attempts <= MAX_TRANSPORT_ATTEMPTS:
+            raise ValueError(
+                "max_transport_attempts must be between "
+                f"1 and {MAX_TRANSPORT_ATTEMPTS}"
+            )
         self.state_dir = state_dir
         self.executor = executor
+        self.max_transport_attempts = max_transport_attempts
         self.ledger = SpendLedger(
             state_dir / "spend-ledger.jsonl",
             global_cap=global_cap_usd,
@@ -456,7 +495,7 @@ class RunOrchestrator:
             sample = samples_by_trial[trial_id]
             completed = False
             attempts_used = sum(1 for row in prior_calls if row["trial_id"] == trial_id)
-            for attempt in range(attempts_used + 1, MAX_TRANSPORT_ATTEMPTS + 1):
+            for attempt in range(attempts_used + 1, self.max_transport_attempts + 1):
                 call_id = deterministic_id("call", {"trial_id": trial_id, "attempt": attempt})
                 reservation = self._reservation(run, sample)
                 self.ledger.reserve(call_id, reservation)
@@ -477,6 +516,20 @@ class RunOrchestrator:
                     or result.output_tokens is None
                     or result.reasoning_tokens is None
                 ):
+                    call = CallRecord(
+                        call_id=call_id,
+                        trial_id=trial_id,
+                        run_id=run.run_id,
+                        attempt=attempt,
+                        started_at=started_at,
+                        finished_at=_now(),
+                        status="accounting_unknown",
+                        reserved_cost_usd=reservation,
+                        observed_cost_usd=0.0,
+                        provider_request_id=result.provider_request_id,
+                        error_type=result.error_type or "missing_provider_accounting",
+                    )
+                    _append_fsynced(self.state_dir / "calls.jsonl", call.to_dict())
                     raise RuntimeError("provider response omitted price or usage")
                 self.ledger.settle(call_id, result.observed_cost_usd)
                 call = CallRecord(
@@ -630,6 +683,9 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--env-file", type=Path, required=True)
         command.add_argument("--approve-paid-run", action="store_true")
         command.add_argument("--max-spend-usd", type=float)
+        command.add_argument(
+            "--max-transport-attempts", type=int, default=MAX_TRANSPORT_ATTEMPTS
+        )
     status = subparsers.add_parser("status")
     status.add_argument("--state-dir", type=Path, required=True)
     admit = subparsers.add_parser("admit")
@@ -637,6 +693,14 @@ def _parser() -> argparse.ArgumentParser:
     admit.add_argument("--state-dir", type=Path, required=True)
     seal = subparsers.add_parser("seal")
     seal.add_argument("--release", type=Path, required=True)
+    prepare = subparsers.add_parser("prepare")
+    prepare.add_argument("--release", type=Path, required=True)
+    inspect_export = subparsers.add_parser("export-inspect")
+    inspect_export.add_argument("--release", type=Path, required=True)
+    inspect_export.add_argument("--out", type=Path, required=True)
+    archive = subparsers.add_parser("archive")
+    archive.add_argument("--release", type=Path, required=True)
+    archive.add_argument("--out", type=Path, required=True)
     return parser
 
 
@@ -645,7 +709,13 @@ def _main(argv: list[str] | None = None) -> int:
     if args.command == "plan":
         if args.release.exists():
             raise FileExistsError("plan requires a new release directory")
-        selection = fetch_openrouter_endpoint(args.model)
+        suite = load_suite(path=args.suite)
+        if args.dialect not in suite.specs:
+            raise ValueError(f"unknown frozen dialect {args.dialect!r}")
+        required_modality = "image" if suite.specs[args.dialect].modality != "text" else None
+        selection = fetch_openrouter_endpoint(
+            args.model, required_modality=required_modality
+        )
         tasks_and_runs: list[tuple[Task, RunManifest]] = []
         for protocol_id in args.protocol:
             task = single_lof_task(
@@ -656,7 +726,7 @@ def _main(argv: list[str] | None = None) -> int:
             )
             run = plan_run(
                 task,
-                suite_version="v1",
+                suite_version=suite.suite_version,
                 form_set=args.form_set,
                 dialect_set=args.dialect,
                 protocol_id=protocol_id,
@@ -677,6 +747,7 @@ def _main(argv: list[str] | None = None) -> int:
                 "openrouter_cap_usd": GLOBAL_OPENROUTER_CAP_USD,
                 "scope": "v1.0.0-sample.1 then stop and report",
             },
+            materialize_stimuli=True,
         )
         cost_sheet = {
             "catalog_retrieved_at": selection.retrieved_at,
@@ -745,6 +816,34 @@ def _main(argv: list[str] | None = None) -> int:
     if args.command == "seal":
         ReleaseBundle.open(args.release).seal(repository_root=Path.cwd())
         return 0
+    if args.command == "prepare":
+        from lofsite.build import build_site
+
+        bundle = ReleaseBundle.open(args.release)
+        if bundle.manifest["status"] != "working":
+            raise RuntimeError("prepare requires a working release bundle")
+        suite = load_suite(
+            version=bundle.manifest["suite_version"], path=bundle.root / "suite.json"
+        )
+        runs = bundle.runs()
+        write_release_metrics(bundle.root, suite=suite, runs=runs)
+        build_site(bundle.root, bundle.root / "site")
+        bundle.validate()
+        return 0
+    if args.command == "export-inspect":
+        bundle = ReleaseBundle.open(args.release)
+        bundle.validate()
+        if bundle.manifest["status"] != "sealed":
+            raise RuntimeError("inspect export requires a sealed bundle")
+        export_inspect_bundle(bundle.root, args.out)
+        return 0
+    if args.command == "archive":
+        bundle = ReleaseBundle.open(args.release)
+        bundle.validate()
+        if bundle.manifest["status"] != "sealed":
+            raise RuntimeError("archive requires a sealed bundle")
+        archive_release(bundle.root, args.out)
+        return 0
 
     values = load_env_file(args.env_file)
     if "OPENROUTER_API_KEY" not in values:
@@ -757,7 +856,11 @@ def _main(argv: list[str] | None = None) -> int:
         dialect=run.dialect_set,
         protocol=run.protocol_id,
     )
-    updated = RunOrchestrator(args.state_dir, InspectExecutor()).execute(
+    updated = RunOrchestrator(
+        args.state_dir,
+        InspectExecutor(),
+        max_transport_attempts=args.max_transport_attempts,
+    ).execute(
         run,
         task,
         approve_paid_run=args.approve_paid_run,

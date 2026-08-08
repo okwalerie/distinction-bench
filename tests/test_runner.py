@@ -191,6 +191,20 @@ def test_missing_usage_or_cost_stops_immediately(tmp_path):
         RunOrchestrator(tmp_path, executor).execute(
             run, task, approve_paid_run=True, max_spend_usd=30.0
         )
+    calls = [json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()]
+    assert calls[0]["status"] == "accounting_unknown"
+
+
+def test_single_attempt_mode_never_retries_a_sample_run_call(tmp_path):
+    task, run = _task_and_run()
+    transient = _success(transport_error=True, observed_cost_usd=0.0)
+    executor = InMemoryExecutor([transient] + [_success()] * 4)
+    result = RunOrchestrator(
+        tmp_path, executor, max_transport_attempts=1
+    ).execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+    assert result.status == "probed"
+    assert len(executor.calls) == 5
+    assert executor.calls[0].sample.id != executor.calls[1].sample.id
 
 
 def test_endpoint_fallback_and_model_substitution_stop(tmp_path):

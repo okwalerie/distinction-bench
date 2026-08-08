@@ -96,7 +96,9 @@ def _form_id(reference_transcription: str) -> str:
 
 
 def generate_form_table(
-    seed: int = GENERATION_SEED, per_tier: int = FULL_FORMS_PER_TIER
+    seed: int = GENERATION_SEED,
+    per_tier: int = FULL_FORMS_PER_TIER,
+    suite_version: str = DEFAULT_SUITE_VERSION,
 ) -> list[dict[str, Any]]:
     """Generate a deterministic target-balanced candidate table.
 
@@ -165,7 +167,7 @@ def generate_form_table(
     candidates.sort(
         key=lambda form: (difficulty_order[form["difficulty"]], form["abstract_form_id"])
     )
-    rejected_ids = _text_collision_form_ids(candidates)
+    rejected_ids = _text_collision_form_ids(candidates, suite_version=suite_version)
     forms: list[dict[str, Any]] = []
     for tier_name, *_rest in DIFFICULTY_CONFIGS:
         for value in ("marked", "unmarked"):
@@ -311,7 +313,9 @@ def compute_cells(
     return cells, collisions
 
 
-def _text_collision_form_ids(forms: list[dict[str, Any]]) -> set[str]:
+def _text_collision_form_ids(
+    forms: list[dict[str, Any]], *, suite_version: str = DEFAULT_SUITE_VERSION
+) -> set[str]:
     """Reject candidate forms for which two declared text dialects are byte-identical.
 
     This admission check deliberately runs without cairo so core generation and CI
@@ -320,7 +324,7 @@ def _text_collision_form_ids(forms: list[dict[str, Any]]) -> set[str]:
     """
     specs = {
         dialect_id: spec
-        for dialect_id, spec in frozen_dialect_specs().items()
+        for dialect_id, spec in frozen_dialect_specs(suite_version).items()
         if spec.modality == "text"
     }
     _cells, collisions = compute_cells(forms, specs)
@@ -399,7 +403,7 @@ def freeze_suite(
     per_tier: int = FULL_FORMS_PER_TIER,
     out_path: Path | None = None,
 ) -> dict[str, Any]:
-    forms = generate_form_table(seed=seed, per_tier=per_tier)
+    forms = generate_form_table(seed=seed, per_tier=per_tier, suite_version=version)
     specs = frozen_dialect_specs(suite_version=version)
     _check_node_maps_complete(forms, specs)
     _check_dialects_resolve_live(specs)

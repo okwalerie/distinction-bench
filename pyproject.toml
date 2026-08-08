@@ -4,6 +4,13 @@ version = "0.1.0"
 description = "Laws of Form benchmark toolkit"
 readme = {file = "README.org", content-type = "text/plain"}
 license = "MIT"
+authors = [{name = "Distinction Benchmark contributors"}]
+keywords = ["evaluation", "laws-of-form", "llm", "representation-invariance"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.75.0",
@@ -14,6 +21,12 @@ dependencies = [
     "pandas>=2.3.3",
     "pyarrow>=22.0.0",
 ]
+
+[project.urls]
+Homepage = "https://distinction.valeriekim.ca"
+Repository = "https://github.com/okwalerie/distinction-bench"
+Documentation = "https://distinction.valeriekim.ca"
+Issues = "https://github.com/okwalerie/distinction-bench/issues"
 
 [project.optional-dependencies]
 eval = [

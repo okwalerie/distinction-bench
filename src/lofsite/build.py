@@ -86,16 +86,8 @@ def _write(path: Path, value: str) -> None:
     path.write_text(value)
 
 
-def _runs(bundle: ReleaseBundle) -> list[RunManifest]:
-    return [
-        RunManifest.from_dict(json.loads(line))
-        for line in (bundle.root / "runs.jsonl").read_text().splitlines()
-        if line.strip()
-    ]
-
-
 def _overview(bundle: ReleaseBundle, suite: LoadedSuite, protocols: dict[str, ProtocolSpec]) -> str:
-    runs = _runs(bundle)
+    runs = bundle.runs()
     trials = pq.read_table(bundle.root / "trials.parquet").num_rows
     families = {spec.family for spec in suite.specs.values()}
     metrics = (
@@ -204,7 +196,7 @@ def _atlas(out: Path, suite: LoadedSuite) -> str:
 
 
 def _runs_page(bundle: ReleaseBundle) -> str:
-    runs = _runs(bundle)
+    runs = bundle.runs()
     grouped: dict[str, list[RunManifest]] = {"direct_api": [], "agent": []}
     for run in runs:
         grouped.setdefault(run.execution_surface, []).append(run)

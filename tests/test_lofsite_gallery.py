@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-pytest.importorskip("starlette", reason="site extra is not installed")
+pytest.importorskip("fasthtml", reason="site extra is not installed")
 
 from starlette.testclient import TestClient
 
