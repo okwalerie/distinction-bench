@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ import pyarrow.parquet as pq
 
 from lofbench.protocols import load_protocol_registry, write_protocol_registry
 from lofbench.records import CallRecord, RunManifest, TrialRecord
+from lofbench.renderers.pipeline.composed import ComposedRenderer
 from lofbench.suites import DEFAULT_SUITE_VERSION, SUITES_DIR, load_suite
 
 BUNDLE_SCHEMA_VERSION = 1
@@ -75,6 +77,16 @@ def _read_rows(path: Path) -> list[dict[str, Any]]:
     return pq.read_table(path).to_pylist()
 
 
+def _write_bytes_verified(path: Path, payload: bytes, expected_sha256: str) -> None:
+    actual = sha256(payload).hexdigest()
+    if actual != expected_sha256:
+        raise RuntimeError(
+            f"stimulus hash drift for {path}: expected {expected_sha256}, got {actual}"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+
+
 class ReleaseBundle:
     """A small mutation surface around a working or sealed release directory."""
 
@@ -93,6 +105,7 @@ class ReleaseBundle:
         suite_path: Path | None = None,
         expected_run_ids: Iterable[str] = (),
         paid_run_approval: dict[str, Any] | None = None,
+        materialize_stimuli: bool = False,
     ) -> ReleaseBundle:
         if root.exists() and any(root.iterdir()):
             raise FileExistsError(f"release directory is not empty: {root}")
@@ -132,10 +145,14 @@ class ReleaseBundle:
             "expected_run_ids": sorted(expected_run_ids),
             "admitted_run_ids": [],
             "paid_run_approval": paid_run_approval,
+            "stimuli_materialized": False,
             "files": {},
         }
         (root / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        return cls(root, manifest)
+        bundle = cls(root, manifest)
+        if materialize_stimuli:
+            bundle.materialize_stimuli()
+        return bundle
 
     @classmethod
     def open(cls, root: Path) -> ReleaseBundle:
@@ -150,6 +167,65 @@ class ReleaseBundle:
 
     def _write_manifest(self) -> None:
         (self.root / "release.json").write_text(json.dumps(self.manifest, indent=2) + "\n")
+
+    def materialize_stimuli(self) -> None:
+        """Write every frozen model payload and verify it against ``suite.json``.
+
+        Text payloads are already frozen in the suite. Spatial payloads are
+        deterministically re-rendered here because storing every PNG twice in git
+        would make the suite artifact needlessly heavy. A release may only claim
+        materialization after all 11,600 frozen hashes have been checked.
+        """
+        self._require_working()
+        suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
+        forms = {form["abstract_form_id"]: form for form in suite.forms}
+        text_rows: dict[str, list[dict[str, str]]] = {}
+        for cell in suite.cells:
+            relative = Path(cell["asset_path"])
+            target = self.root / relative
+            if cell["modality"] == "text":
+                payload = cell["model_payload"].encode("utf-8")
+                if sha256(payload).hexdigest() != cell["model_payload_sha256"]:
+                    raise RuntimeError(
+                        "frozen text hash drift for "
+                        f"{cell['abstract_form_id']}/{cell['dialect_id']}"
+                    )
+                text_rows.setdefault(cell["dialect_id"], []).append(
+                    {
+                        "abstract_form_id": cell["abstract_form_id"],
+                        "model_payload": cell["model_payload"],
+                        "model_payload_sha256": cell["model_payload_sha256"],
+                    }
+                )
+                continue
+
+            form = forms[cell["abstract_form_id"]]
+            rendered = ComposedRenderer(suite.specs[cell["dialect_id"]]).render(
+                form["reference_transcription"]
+            )
+            prefix = "data:image/png;base64,"
+            if not rendered.rendered.startswith(prefix):
+                raise RuntimeError(f"spatial stimulus is not png: {relative}")
+            payload = base64.b64decode(rendered.rendered.removeprefix(prefix), validate=True)
+            _write_bytes_verified(target, payload, cell["model_payload_sha256"])
+
+        for dialect_id, rows in sorted(text_rows.items()):
+            target = self.root / "stimuli" / "text" / f"{dialect_id}.json"
+            target.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "suite_version": suite.suite_version,
+                        "dialect_id": dialect_id,
+                        "cells": sorted(rows, key=lambda row: row["abstract_form_id"]),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+        self.manifest["stimuli_materialized"] = True
+        self._write_manifest()
 
     def admit_run(
         self,
@@ -236,6 +312,36 @@ class ReleaseBundle:
                 run.expected_trial_ids
             ):
                 raise RuntimeError(f"admitted run {run.run_id} is incomplete")
+        if self.manifest.get("stimuli_materialized"):
+            suite = load_suite(
+                version=self.manifest["suite_version"], path=self.root / "suite.json"
+            )
+            text_payloads: dict[tuple[str, str], dict[str, str]] = {}
+            for dialect_id, spec in suite.specs.items():
+                if spec.modality != "text":
+                    continue
+                text_path = self.root / "stimuli" / "text" / f"{dialect_id}.json"
+                if not text_path.is_file():
+                    raise RuntimeError(f"missing materialized stimulus file {text_path}")
+                payload = json.loads(text_path.read_text())
+                for row in payload["cells"]:
+                    text_payloads[(dialect_id, row["abstract_form_id"])] = row
+            for cell in suite.cells:
+                if cell["modality"] == "text":
+                    row = text_payloads.get((cell["dialect_id"], cell["abstract_form_id"]))
+                    if row is None or sha256(row["model_payload"].encode()).hexdigest() != cell[
+                        "model_payload_sha256"
+                    ]:
+                        raise RuntimeError(
+                            "missing or changed materialized text stimulus "
+                            f"{cell['abstract_form_id']}/{cell['dialect_id']}"
+                        )
+                else:
+                    path = self.root / cell["asset_path"]
+                    if not path.is_file() or sha256(path.read_bytes()).hexdigest() != cell[
+                        "model_payload_sha256"
+                    ]:
+                        raise RuntimeError(f"missing or changed materialized image stimulus {path}")
         if self.manifest["status"] == "sealed":
             actual_paths = {
                 path.relative_to(self.root).as_posix(): path for path in self._artifact_paths()
