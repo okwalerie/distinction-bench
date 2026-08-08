@@ -491,6 +491,30 @@ the neutral dependency direction and prior forgery gates, run focused/full/froze
 wheel gates without inference, commit, and return db-14 to review tied to
 `ev_01KZHKZ0S8T9XFBA4DYN8NK178`.
 
+## Review Cycle 8 Findings — durable request intent and quarantine
+
+the eighth review narrows the remaining crash ambiguity. add a typed, fsynced
+`RequestStartedRecord` immediately before the executor boundary. its deterministic
+request hash binds the call/run/trial/attempt and frozen prompt/payload identities.
+reconciliation may execute a reserved call only when no request marker exists. a
+request marker without attempt evidence is permanently ambiguous: preserve the
+reservation, mark the run ambiguous, and refuse every inference resend.
+
+fault-inject both sides of the remote boundary: after the request marker but before
+the executor, and after the executor returns but before evidence persistence. resume
+must make zero executor calls for the ambiguous call, while every later durable
+append-boundary convergence test stays green. admit and seal must require exact
+request-marker/call closure, so ambiguous state cannot enter a release and the exact
+sample cannot exceed twenty posts.
+
+replace name-only response-header filtering with one strict parser: retain only
+required audit names, require bounded visible-ascii token values for request ids and
+a small known content-type grammar, and reject controls, whitespace, separators, or
+credential/cookie/key material case-insensitively. use the same validator in capture,
+evidence replay, and publication scanning. update adr 0001, run focused/full/clean
+wheel gates without inference, commit, and return db-14 to review tied to
+`ev_01KZHQ09SFRXEYKPVMFE8AHE8N`.
+
 ## Review Cycle 5 Findings — canonical provider-evidence projection
 
 the fifth review proved that `AttemptEvidence` still permits sibling typed assertions
@@ -575,6 +599,8 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-seal-boundary
+
+## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
 
