@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from lofbench.release_bundle import ReleaseBundle
-from lofsite.build import build_site
+from lofsite.build import build_site, verify_site_tree
 
 
 @pytest.fixture
@@ -26,6 +26,7 @@ def working(tmp_path: Path):
         release_id="v1.0.0-test",
         repository_url="https://example.invalid/repo",
         repository_root=repository,
+        spend_caps_usd={"global": 30.0, "cohorts": {}},
     )
     return bundle, repository
 
@@ -71,6 +72,7 @@ def test_static_site_exposes_suite_protocol_atlas_and_local_human_pilot(working)
     human = (bundle.root / "site" / "human.html").read_text()
     assert "12 local-only stimuli" in human
     assert "participant_code" in human
+    assert 'minlength=3 maxlength=64 pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}"' in human
     assert "familiarity" in human
     assert "confidence" in human
     assert "elapsed_ms" in human
@@ -93,15 +95,18 @@ def test_working_site_is_byte_identical_when_rebuilt_from_sealed_bundle(working)
     bundle.seal(repository_root=repository)
     output = bundle.root.parent / "rebuilt"
     build_site(bundle.root, output)
-    original = {
-        path.relative_to(bundle.root / "site"): path.read_bytes()
-        for path in (bundle.root / "site").rglob("*")
-        if path.is_file()
-    }
-    rebuilt = {
-        path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()
-    }
-    assert rebuilt == original
+    verify_site_tree(bundle.root / "site", output)
+
+
+def test_site_verifier_rejects_a_rebuilt_byte_mismatch(working):
+    bundle, repository = working
+    build_site(bundle.root, bundle.root / "site")
+    bundle.seal(repository_root=repository)
+    output = bundle.root.parent / "rebuilt"
+    build_site(bundle.root, output)
+    (output / "index.html").write_text("forged site")
+    with pytest.raises(RuntimeError, match="does not match"):
+        verify_site_tree(bundle.root / "site", output)
 
 
 def test_nonempty_site_output_is_refused(working):

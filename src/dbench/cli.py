@@ -17,9 +17,9 @@ from dbench.agent_cli import (
 )
 from dbench.config import load_env_file
 from dbench.openrouter import OpenRouterInspectExecutor, fetch_openrouter_endpoint
-from lofbench.accounting import SpendLedger
+from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
 from lofbench.metrics import write_release_metrics
-from lofbench.orchestration import DEFAULT_GLOBAL_CAP_USD, RunOrchestrator
+from lofbench.orchestration import RunOrchestrator
 from lofbench.publication import (
     archive_release,
     export_inspect_bundle,
@@ -86,7 +86,7 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--max-transport-attempts", type=int, default=1)
     plan.add_argument("--approved-by")
     plan.add_argument("--approval-scope")
-    for name in ("run", "resume"):
+    for name in ("probe", "run", "resume"):
         command = subparsers.add_parser(name)
         command.add_argument("--release", type=Path, required=True)
         command.add_argument("--state-root", type=Path, required=True)
@@ -138,6 +138,7 @@ def _agent_execution(args: argparse.Namespace, modality: str) -> ExecutionSpec:
         billing_channel="subscription_unmetered",
         cohort=args.cohort,
         max_transport_attempts=args.max_transport_attempts,
+        pricing={"prompt": 0.0, "completion": 0.0, "image": 0.0},
     )
 
 
@@ -161,6 +162,20 @@ def _validate_sample_plan(args: argparse.Namespace) -> dict[str, object] | None:
         "trials_per_run": 5,
         "total_attempts": 20,
     }
+
+
+def _validate_probe_run(
+    run: RunManifest,
+    sample_contract: dict[str, object] | None,
+) -> None:
+    if run.form_set != "probe":
+        raise RuntimeError("probe command requires the frozen probe form set")
+    if sample_contract is not None and (
+        len(run.expected_trial_ids) != sample_contract["trials_per_run"]
+        or run.max_transport_attempts != sample_contract["max_transport_attempts"]
+        or run.protocol_id not in sample_contract["protocol_ids"]
+    ):
+        raise RuntimeError("sample probe run does not preserve the frozen 4 x 5 contract")
 
 
 def _plan(args: argparse.Namespace) -> int:
@@ -234,6 +249,10 @@ def _plan(args: argparse.Namespace) -> int:
         paid_run_approval=paid_approval,
         materialize_stimuli=True,
         sample_contract=sample_contract,
+        spend_caps_usd={
+            "global": DEFAULT_GLOBAL_CAP_USD,
+            "cohorts": dict(COHORT_CAPS_USD),
+        },
     )
     cost_sheet: dict[str, object] = {
         "model_id": args.model,
@@ -246,7 +265,8 @@ def _plan(args: argparse.Namespace) -> int:
                 "catalog_retrieved_at": selection.retrieved_at,
                 "endpoint": selection.endpoint_tag,
                 "provider": selection.provider_name,
-                "pricing": selection.pricing,
+                "pricing": execution.pricing,
+                "catalog_pricing": selection.pricing,
                 "authenticated_zdr_intersection": True,
             }
         )
@@ -367,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     bundle.validate()
     if run.run_id not in bundle.manifest["expected_run_ids"]:
         raise RuntimeError("run is not declared by this release bundle")
+    if args.command == "probe":
+        _validate_probe_run(run, bundle.manifest.get("sample_contract"))
     if run.execution_surface == "direct_api" and "OPENROUTER_API_KEY" not in values:
         raise RuntimeError("direct-api execution requires OPENROUTER_API_KEY")
     if run.billing_channel != "subscription_unmetered" and args.approve_paid_run:

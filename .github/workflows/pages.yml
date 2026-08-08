@@ -20,13 +20,13 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --extra site
+      - run: uv sync --frozen --extra site
       - name: download sealed release bundle
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,7 +39,10 @@ jobs:
           mkdir release
           tar -xzf "distinction-bench-$RELEASE_TAG.tar.gz" -C release
           uv run python -c 'from pathlib import Path; from lofbench.release_bundle import ReleaseBundle; b=ReleaseBundle.open(Path("release")); b.validate(); assert b.manifest["status"] == "sealed"'
-      - run: uv run python -m lofsite.build --release release --out dist/site
+      - name: rebuild and verify sealed site bytes
+        run: >-
+          uv run python -m lofsite.build --release release --out dist/site
+          --verify-against release/site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist/site

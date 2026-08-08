@@ -65,6 +65,7 @@ def test_human_trial_export_conforms_to_frozen_registry():
     [
         lambda value: value["records"][0].pop("participant_code"),
         lambda value: value["records"][0].__setitem__("participant_code", "a person"),
+        lambda value: value["records"][0].__setitem__("participant_code", "ab"),
         lambda value: value["records"][0].__setitem__("familiarity_band", "guru"),
         lambda value: value["records"][0].__setitem__("abstract_form_id", "not-frozen"),
         lambda value: value["records"][0].__setitem__("dialect_id", "not-frozen"),

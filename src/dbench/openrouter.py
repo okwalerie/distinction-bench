@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.parse
 import urllib.request
@@ -83,9 +84,31 @@ class EndpointSelection:
             billing_channel="openrouter-limited-key",
             cohort=cohort,
             max_transport_attempts=max_transport_attempts,
+            pricing=_normalized_pricing(
+                self.pricing,
+                image_required="image" in self.architecture.get("input_modalities", []),
+            ),
             catalog_retrieved_at=self.retrieved_at,
             catalog_row=self.catalog_row,
         )
+
+
+def _normalized_pricing(
+    pricing: dict[str, str],
+    *,
+    image_required: bool,
+) -> dict[str, float]:
+    """Translate provider catalog pricing into the provider-neutral run contract."""
+    try:
+        prompt = float(pricing["prompt"])
+        completion = float(pricing["completion"])
+        image = float(pricing["image"]) if image_required else float(pricing.get("image", 0.0))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("endpoint has unknown prompt/completion/image pricing") from exc
+    normalized = {"prompt": prompt, "completion": completion, "image": image}
+    if any(not math.isfinite(value) or value < 0 for value in normalized.values()):
+        raise RuntimeError("endpoint has invalid prompt/completion/image pricing")
+    return normalized
 
 
 def fetch_openrouter_endpoint(
@@ -126,8 +149,12 @@ def fetch_openrouter_endpoint(
         if pricing != zdr_row.get("pricing"):
             continue
         try:
-            price = float(pricing["prompt"]) + float(pricing["completion"])
-        except (TypeError, ValueError):
+            normalized = _normalized_pricing(
+                pricing,
+                image_required=required_modality == "image",
+            )
+            price = normalized["prompt"] + normalized["completion"]
+        except RuntimeError:
             continue
         candidates.append((price, str(endpoint["tag"]), endpoint, zdr_row))
     if not candidates:

@@ -126,7 +126,10 @@ class AgentCliExecutor(TrialExecutor):
                 reasoning_tokens=0,
                 observed_cost_usd=0.0,
                 latency_ms=(time.monotonic() - started) * 1000,
-                provider_request_id=f"subscription:{self.command}:{request.attempt}",
+                provider_request_id=(
+                    f"subscription:{self.command}:{request.run.run_id}:"
+                    f"{request.sample.id}:{request.attempt}"
+                ),
                 transcript={"surface": self.command, "stderr": completed.stderr},
             )
 

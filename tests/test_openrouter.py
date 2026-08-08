@@ -38,7 +38,11 @@ def _catalogs():
                     "provider_name": "Exact Provider",
                     "status": 0,
                     "supported_parameters": ["response_format"],
-                    "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+                    "pricing": {
+                        "prompt": "0.000001",
+                        "completion": "0.000002",
+                        "image": "0.000003",
+                    },
                 },
                 {
                     "tag": "inactive",
@@ -58,7 +62,11 @@ def _catalogs():
                 "provider_name": "Exact Provider",
                 "status": 0,
                 "supported_parameters": ["response_format"],
-                "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+                "pricing": {
+                    "prompt": "0.000001",
+                    "completion": "0.000002",
+                    "image": "0.000003",
+                },
             },
             {
                 "model_id": "different/model",
@@ -104,6 +112,11 @@ def test_endpoint_selection_authenticates_and_intersects_exact_zdr_rows(monkeypa
         "zdr": True,
     }
     assert selection.catalog_row["authenticated"] is True
+    assert selection.execution_spec(cohort="sample", max_transport_attempts=1).pricing == {
+        "prompt": 0.000001,
+        "completion": 0.000002,
+        "image": 0.000003,
+    }
     assert len(requests) == 2
     assert all(
         request.get_header("Authorization") == "Bearer opaque-test-key" for request in requests
@@ -136,6 +149,23 @@ def test_endpoint_selection_requires_declared_input_modality(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     with pytest.raises(RuntimeError, match="does not declare 'image' input"):
+        fetch_openrouter_endpoint(
+            "example/vision-model", api_key="opaque-test-key", required_modality="image"
+        )
+
+
+def test_multimodal_endpoint_requires_explicit_image_pricing(monkeypatch):
+    model, zdr = _catalogs()
+    model["data"]["endpoints"][1]["pricing"].pop("image")
+    zdr["data"][0]["pricing"].pop("image")
+
+    def urlopen(request, timeout):
+        assert timeout == 30
+        payload = zdr if request.full_url.endswith("/endpoints/zdr") else model
+        return _Response(json.dumps(payload).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="no active exact ZDR"):
         fetch_openrouter_endpoint(
             "example/vision-model", api_key="opaque-test-key", required_modality="image"
         )

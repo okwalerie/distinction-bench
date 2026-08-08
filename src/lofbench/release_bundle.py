@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import shutil
 import subprocess
 from collections.abc import Iterable, Mapping
@@ -17,14 +18,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from lofbench.human_trials import HUMAN_TRIAL_EXPORT_SCHEMA, write_human_trial_schema
+from lofbench.metrics import EMPTY_METRIC_SCHEMA, derive_metric_tables
 from lofbench.protocols import ProtocolSpec, load_protocol_registry, write_protocol_registry
 from lofbench.publication import scan_publication
 from lofbench.records import CallRecord, LedgerEvent, RunManifest, TrialRecord
 from lofbench.renderers.pipeline.composed import ComposedRenderer
-from lofbench.run_models import trial_id_for
+from lofbench.run_models import call_id_for, trial_id_for
 from lofbench.suites import DEFAULT_SUITE_VERSION, SUITES_DIR, LoadedSuite, load_suite
 
-BUNDLE_SCHEMA_VERSION = 3
+BUNDLE_SCHEMA_VERSION = 4
 _ROOT_FILES = {
     "human-trial.schema.json",
     "release.json",
@@ -38,7 +40,6 @@ _ROOT_FILES = {
     "transcripts.jsonl",
     "ledger.jsonl",
 }
-_EMPTY_DERIVED_SCHEMA = pa.schema([("run_id", pa.string())])
 _SAMPLE_PROTOCOLS = {
     "reduce-infer-v1",
     "reduce-taught-v1",
@@ -118,6 +119,7 @@ class ReleaseBundle:
         paid_run_approval: dict[str, Any] | None = None,
         materialize_stimuli: bool = False,
         sample_contract: dict[str, Any] | None = None,
+        spend_caps_usd: dict[str, Any],
     ) -> ReleaseBundle:
         if root.exists() and any(root.iterdir()):
             raise FileExistsError(f"release directory is not empty: {root}")
@@ -135,8 +137,8 @@ class ReleaseBundle:
         (root / "ledger.jsonl").write_text("")
         _write_rows(root / "trials.parquet", [], pa.schema([("trial_id", pa.string())]))
         _write_rows(root / "calls.parquet", [], pa.schema([("call_id", pa.string())]))
-        _write_rows(root / "profiles.parquet", [], _EMPTY_DERIVED_SCHEMA)
-        _write_rows(root / "effects.parquet", [], _EMPTY_DERIVED_SCHEMA)
+        _write_rows(root / "profiles.parquet", [], EMPTY_METRIC_SCHEMA)
+        _write_rows(root / "effects.parquet", [], EMPTY_METRIC_SCHEMA)
         (root / "stimuli" / "text").mkdir(parents=True)
         (root / "stimuli" / "image").mkdir(parents=True)
         (root / "inspect").mkdir()
@@ -160,6 +162,7 @@ class ReleaseBundle:
             "admitted_run_ids": [],
             "paid_run_approval": paid_run_approval,
             "sample_contract": sample_contract,
+            "spend_caps_usd": spend_caps_usd,
             "stimuli_materialized": False,
             "files": {},
         }
@@ -287,12 +290,22 @@ class ReleaseBundle:
             raise RuntimeError("trial id already exists in bundle")
 
         admitted = replace(run, status="admitted")
+        existing_calls = _read_rows(self.root / "calls.parquet")
+        existing_ledger = [
+            LedgerEvent.from_dict(json.loads(line))
+            for line in (self.root / "ledger.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        self._validate_release_accounting(
+            [*existing_runs, admitted],
+            existing_trials + rows,
+            existing_calls + [call.to_dict() for call in call_values],
+            [*existing_ledger, *ledger_values],
+        )
         with (self.root / "runs.jsonl").open("a") as handle:
             handle.write(_json_line(admitted.to_dict()))
         _write_rows(self.root / "trials.parquet", existing_trials + rows)
-        call_rows = _read_rows(self.root / "calls.parquet") + [
-            call.to_dict() for call in call_values
-        ]
+        call_rows = existing_calls + [call.to_dict() for call in call_values]
         _write_rows(self.root / "calls.parquet", call_rows)
         with (self.root / "ledger.jsonl").open("a") as handle:
             for event in ledger_values:
@@ -310,6 +323,15 @@ class ReleaseBundle:
         protocol: ProtocolSpec,
         trials: list[dict[str, Any]],
     ) -> None:
+        if run.run_id != run.authoritative_run_id():
+            raise RuntimeError("run_id does not match the authoritative execution identity")
+        if set(run.pricing) != {"prompt", "completion", "image"} or any(
+            not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+            for value in run.pricing.values()
+        ):
+            raise RuntimeError("run lacks normalized prompt/completion/image pricing")
         if run.form_set not in suite.form_sets:
             raise RuntimeError(f"run uses unknown frozen form set {run.form_set!r}")
         if run.dialect_set not in suite.specs:
@@ -332,6 +354,11 @@ class ReleaseBundle:
                 raise RuntimeError("trial abstract_form_id is not in the run's frozen form set")
             form = forms[form_id]
             cell = cells[(form_id, run.dialect_set)]
+            parse_status, prediction, correct = protocol.parse_answer(
+                trial["response_text"],
+                expected_normal_value=form["normal_value"],
+                expected_tree=form["abstract_form"],
+            )
             authorities = {
                 "trial_id": trial_id_for(run.run_id, form_id, run.dialect_set),
                 "run_id": run.run_id,
@@ -350,6 +377,9 @@ class ReleaseBundle:
                 "symbolic_payload_hash": cell["symbolic_payload_hash"],
                 "model_payload_sha256": cell["model_payload_sha256"],
                 "normal_value": form["normal_value"],
+                "parse_status": parse_status,
+                "prediction": prediction,
+                "correct": correct,
             }
             for field, expected in authorities.items():
                 if trial[field] != expected:
@@ -432,6 +462,96 @@ class ReleaseBundle:
             if settled.amount_usd != call.observed_cost_usd:
                 raise RuntimeError("ledger settlement does not match call")
 
+    def _validate_release_accounting(
+        self,
+        runs: list[RunManifest],
+        trials: list[dict[str, Any]],
+        call_rows: list[dict[str, Any]],
+        ledger_events: list[LedgerEvent],
+    ) -> None:
+        admitted = {run.run_id: run for run in runs if run.status == "admitted"}
+        if {row["run_id"] for row in trials} != set(admitted):
+            raise RuntimeError("release trials do not close over the admitted run set")
+        expected_calls: dict[str, tuple[str, str, int]] = {}
+        for trial in trials:
+            if trial["attempt_count"] < 1:
+                raise RuntimeError("admitted trial has no provider attempt")
+            for attempt in range(1, trial["attempt_count"] + 1):
+                call_id = call_id_for(trial["trial_id"], attempt)
+                expected_calls[call_id] = (trial["trial_id"], trial["run_id"], attempt)
+        calls = [CallRecord(**row) for row in call_rows]
+        if any(
+            not math.isfinite(value) or value < 0
+            for call in calls
+            for value in (call.reserved_cost_usd, call.observed_cost_usd)
+        ):
+            raise RuntimeError("release contains an invalid provider cost")
+        calls_by_id = {call.call_id: call for call in calls}
+        if len(calls_by_id) != len(calls) or set(calls_by_id) != set(expected_calls):
+            raise RuntimeError("release call records do not equal the derived provider-attempt set")
+        request_ids = [call.provider_request_id for call in calls if call.provider_request_id]
+        if len(request_ids) != len(set(request_ids)):
+            raise RuntimeError("release contains duplicate provider request ids")
+        for call_id, expected in expected_calls.items():
+            call = calls_by_id[call_id]
+            if (call.trial_id, call.run_id, call.attempt) != expected:
+                raise RuntimeError("release call identity does not match its derived call id")
+
+        ledger_by_call: dict[str, list[LedgerEvent]] = {}
+        for event in ledger_events:
+            ledger_by_call.setdefault(event.call_id, []).append(event)
+        if set(ledger_by_call) != set(expected_calls):
+            raise RuntimeError("release ledger does not equal the derived provider-attempt set")
+        for call_id, events in ledger_by_call.items():
+            if len(events) != 2 or [event.event_type for event in events] != [
+                "reserved",
+                "settled",
+            ]:
+                raise RuntimeError("release call lacks one ordered reservation and settlement")
+            call = calls_by_id[call_id]
+            reserved, settled = events
+            run = admitted[call.run_id]
+            expected_identity = (call.trial_id, call.run_id, run.cohort)
+            if any(
+                (event.trial_id, event.run_id, event.cohort) != expected_identity
+                for event in events
+            ):
+                raise RuntimeError("release ledger identity does not match its call")
+            if reserved.amount_usd != call.reserved_cost_usd:
+                raise RuntimeError("release reservation amount does not match its call")
+            if settled.amount_usd != call.observed_cost_usd:
+                raise RuntimeError("release settlement amount does not match its call")
+
+        caps = self.manifest.get("spend_caps_usd")
+        if not isinstance(caps, dict) or set(caps) != {"global", "cohorts"}:
+            raise RuntimeError("release lacks authoritative global and cohort spend caps")
+        global_cap = caps["global"]
+        cohort_caps = caps["cohorts"]
+        if (
+            not isinstance(global_cap, (int, float))
+            or not math.isfinite(global_cap)
+            or global_cap <= 0
+        ):
+            raise RuntimeError("release global spend cap is invalid")
+        observed = sum(call.observed_cost_usd for call in calls)
+        if observed > global_cap + 1e-12:
+            raise RuntimeError("release observed spend exceeds its global cap")
+        for cohort in {run.cohort for run in admitted.values()}:
+            cap = cohort_caps.get(cohort) if isinstance(cohort_caps, dict) else None
+            if (
+                not isinstance(cap, (int, float))
+                or not math.isfinite(cap)
+                or cap < 0
+            ):
+                raise RuntimeError(f"release lacks a valid cap for cohort {cohort!r}")
+            cohort_observed = sum(
+                call.observed_cost_usd
+                for call in calls
+                if admitted[call.run_id].cohort == cohort
+            )
+            if cohort_observed > cap + 1e-12:
+                raise RuntimeError(f"release observed spend exceeds cohort {cohort!r} cap")
+
     def runs(self) -> list[RunManifest]:
         """Return the typed run manifests admitted to this bundle."""
         return [
@@ -439,6 +559,35 @@ class ReleaseBundle:
             for line in (self.root / "runs.jsonl").read_text().splitlines()
             if line.strip()
         ]
+
+    def _verified_metric_rows(
+        self,
+        *,
+        suite: LoadedSuite,
+        runs: list[RunManifest],
+        trials: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        expected_profiles, expected_effects = derive_metric_tables(
+            trials,
+            runs=runs,
+            suite=suite,
+        )
+        published_profiles = pq.read_table(self.root / "profiles.parquet")
+        published_effects = pq.read_table(self.root / "effects.parquet")
+        if not published_profiles.equals(expected_profiles):
+            raise RuntimeError("published profiles do not recompute from admitted trials")
+        if not published_effects.equals(expected_effects):
+            raise RuntimeError("published effects do not recompute from admitted trials")
+        return published_profiles.to_pylist(), published_effects.to_pylist()
+
+    def verified_metric_rows(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return derived rows only after recomputing them from admitted evidence."""
+        suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
+        return self._verified_metric_rows(
+            suite=suite,
+            runs=self.runs(),
+            trials=_read_rows(self.root / "trials.parquet"),
+        )
 
     def _artifact_paths(self) -> list[Path]:
         return sorted(
@@ -493,6 +642,8 @@ class ReleaseBundle:
                     [CallRecord(**row) for row in call_rows if row["run_id"] == run.run_id],
                     [event for event in ledger_rows if event.run_id == run.run_id],
                 )
+        self._validate_release_accounting(runs, trial_rows, call_rows, ledger_rows)
+        self._verified_metric_rows(suite=suite, runs=runs, trials=trial_rows)
         self._validate_sample_contract(runs, trial_rows, call_rows)
         if self.manifest.get("stimuli_materialized"):
             suite = load_suite(
@@ -633,9 +784,12 @@ class ReleaseBundle:
         if self.manifest["status"] == "sealed" or sealing:
             if len(admitted) != len(expected_protocols):
                 raise RuntimeError("sealed sample requires four admitted runs")
+            if len(trials) != contract["total_attempts"]:
+                raise RuntimeError("sealed sample does not contain exactly twenty trials")
             if len(calls) != contract["total_attempts"]:
                 raise RuntimeError("sealed sample does not contain exactly twenty attempts")
             approval = self.manifest.get("paid_run_approval") or {}
+            spend_caps = self.manifest.get("spend_caps_usd") or {}
             if (
                 approval.get("release_id") != self.manifest["release_id"]
                 or approval.get("max_spend_usd") != 30.0
@@ -647,8 +801,10 @@ class ReleaseBundle:
                 != admitted[0].catalog_row["selected_endpoint"]["provider_name"]
                 or not approval.get("approved_by")
                 or not approval.get("scope")
+                or spend_caps.get("global") != 30.0
+                or spend_caps.get("cohorts", {}).get("sample") != 30.0
             ):
-                raise RuntimeError("sealed sample lacks exact human paid-run approval")
+                raise RuntimeError("sealed sample lacks exact paid approval or spend caps")
             profiles = _read_rows(self.root / "profiles.parquet")
             if (
                 len(profiles) != len(expected_protocols)

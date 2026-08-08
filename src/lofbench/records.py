@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from hashlib import blake2b
 from typing import Any, Literal
@@ -13,6 +14,37 @@ RunStatus = Literal["planned", "probed", "complete", "admitted", "rejected"]
 def deterministic_id(prefix: str, payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return f"{prefix}_{blake2b(canonical.encode(), digest_size=12).hexdigest()}"
+
+
+RUN_IDENTITY_FIELDS = (
+    "suite_version",
+    "form_set",
+    "dialect_set",
+    "protocol_id",
+    "requested_model_id",
+    "resolved_model_id",
+    "execution_surface",
+    "provider",
+    "endpoint",
+    "routing_policy",
+    "privacy_policy",
+    "sdk_version",
+    "reasoning",
+    "generation",
+    "billing_channel",
+    "cohort",
+    "max_transport_attempts",
+    "pricing",
+)
+
+
+def run_execution_identity(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the sole authoritative identity material for a benchmark run."""
+    return {field: value[field] for field in RUN_IDENTITY_FIELDS}
+
+
+def run_id_for(value: Mapping[str, Any]) -> str:
+    return deterministic_id("run", run_execution_identity(value))
 
 
 @dataclass(frozen=True)
@@ -35,6 +67,7 @@ class RunManifest:
     billing_channel: str
     cohort: str
     max_transport_attempts: int
+    pricing: dict[str, float]
     expected_trial_ids: tuple[str, ...]
     status: RunStatus = "planned"
     attempts: int = 0
@@ -54,19 +87,12 @@ class RunManifest:
     def from_dict(cls, value: dict[str, Any]) -> RunManifest:
         return cls(**{**value, "expected_trial_ids": tuple(value["expected_trial_ids"])})
 
+    def authoritative_run_id(self) -> str:
+        return run_id_for(self.to_dict())
+
     @classmethod
     def plan(cls, **kwargs: Any) -> RunManifest:
-        result_keys = {
-            "expected_trial_ids",
-            "status",
-            "attempts",
-            "token_usage",
-            "latency_ms",
-            "cost_usd",
-            "rejection_reason",
-        }
-        identity = {key: value for key, value in kwargs.items() if key not in result_keys}
-        return cls(run_id=deterministic_id("run", identity), **kwargs)
+        return cls(run_id=run_id_for(kwargs), **kwargs)
 
 
 @dataclass(frozen=True)

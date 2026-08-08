@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from lofbench.records import RunManifest
 from lofbench.suites import LoadedSuite
@@ -23,6 +25,7 @@ PROFILE_GROUP_COLUMNS = [
     "protocol_id",
     "reasoning",
 ]
+EMPTY_METRIC_SCHEMA = pa.schema([("run_id", pa.string())])
 
 
 def _mean(values: list[float]) -> float | None:
@@ -258,6 +261,30 @@ def write_release_metrics(
     trials = pd.read_parquet(bundle_root / "trials.parquet")
     profiles = compute_profiles(trials, runs, suite)
     effects = compute_controlled_effects(trials, runs, suite)
-    profiles.to_parquet(bundle_root / "profiles.parquet", index=False)
-    effects.to_parquet(bundle_root / "effects.parquet", index=False)
+    profile_table, effect_table = metric_tables(profiles, effects)
+    pq.write_table(profile_table, bundle_root / "profiles.parquet", compression="zstd")
+    pq.write_table(effect_table, bundle_root / "effects.parquet", compression="zstd")
     return profiles, effects
+
+
+def metric_tables(
+    profiles: pd.DataFrame, effects: pd.DataFrame
+) -> tuple[pa.Table, pa.Table]:
+    def table(frame: pd.DataFrame) -> pa.Table:
+        if frame.empty:
+            return pa.Table.from_pylist([], schema=EMPTY_METRIC_SCHEMA)
+        return pa.Table.from_pandas(frame, preserve_index=False)
+
+    return table(profiles), table(effects)
+
+
+def derive_metric_tables(
+    trial_rows: list[dict[str, Any]],
+    *,
+    runs: list[RunManifest],
+    suite: LoadedSuite,
+) -> tuple[pa.Table, pa.Table]:
+    trials = pd.DataFrame(trial_rows)
+    profiles = compute_profiles(trials, runs, suite)
+    effects = compute_controlled_effects(trials, runs, suite)
+    return metric_tables(profiles, effects)

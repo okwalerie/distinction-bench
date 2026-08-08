@@ -89,18 +89,25 @@ for this sample use `--max-transport-attempts 1`. a failed attempt remains part
 of the twenty-call budget; do not replace it with a twenty-first call. if any run
 is incomplete, report the sample as blocked rather than changing the form set.
 
-## run and resume
+## probe, run, and resume
 
-for each printed run id, execute its state directory:
+for the sample, execute each of the four five-form run ids with `probe`. this is
+the real paid execution path, not a free preflight: each completed probe is the
+corresponding declared run, and a later `run` or `resume` schedules no duplicate
+trial. the four commands together retain the exact twenty-attempt ceiling:
 
 ```bash
-uv run python -m dbench run \
+uv run python -m dbench probe \
   --release /tmp/distinction-release \
   --state-root /tmp/distinction-state \
   --run-id <run-id> \
   --env-file /var/home/core/dbench.env \
   --approve-paid-run --max-spend-usd 30
 ```
+
+for a non-sample declared run after its probe gate, use the same flags with
+`python -m dbench run`. `probe` refuses any form set other than the frozen
+five-form `probe` set and cannot increase the sample contract or retry limit.
 
 ordinary releases may use the default maximum of three transport attempts.
 resume uses the same flags and schedules only missing trial ids:

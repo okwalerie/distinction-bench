@@ -13,6 +13,8 @@ from typing import IO
 
 from lofbench.records import LedgerEvent
 
+DEFAULT_GLOBAL_CAP_USD = 30.0
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()

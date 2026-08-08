@@ -40,6 +40,7 @@ def _execution() -> ExecutionSpec:
         billing_channel="test-paid",
         cohort="sample",
         max_transport_attempts=3,
+        pricing={"prompt": 0.000001, "completion": 0.000002, "image": 0.000001},
         catalog_retrieved_at="2026-08-08T00:00:00+00:00",
         catalog_row={"selected_endpoint": endpoint},
     )
@@ -235,10 +236,17 @@ def test_missing_usage_or_cost_stops_immediately(tmp_path):
 
 
 def test_single_attempt_mode_never_retries_a_sample_run_call(tmp_path):
-    task, run = _task_and_run()
+    task, _run = _task_and_run()
     transient = _success(transport_error=True, observed_cost_usd=0.0)
     executor = InMemoryExecutor([transient] + [_success()] * 4)
-    run = replace(run, max_transport_attempts=1)
+    run = plan_run(
+        task,
+        suite_version="v1",
+        form_set="probe",
+        dialect_set="parens.reference-v1",
+        protocol_id="reduce-infer-v1",
+        execution=replace(_execution(), max_transport_attempts=1),
+    )
     result = _orchestrator(tmp_path, executor).execute(
         run, task, approve_paid_run=True, max_spend_usd=30.0
     )
@@ -276,8 +284,15 @@ def test_cohort_budget_exhaustion_aborts_before_next_request(tmp_path):
 
 
 def test_unknown_catalog_pricing_stops_before_request(tmp_path):
-    task, run = _task_and_run()
-    run = replace(run, catalog_row={"selected_endpoint": {"pricing": {}}})
+    task, _run = _task_and_run()
+    run = plan_run(
+        task,
+        suite_version="v1",
+        form_set="probe",
+        dialect_set="parens.reference-v1",
+        protocol_id="reduce-infer-v1",
+        execution=replace(_execution(), pricing={}),
+    )
     executor = InMemoryExecutor([_success()])
     with pytest.raises(RuntimeError, match="unknown endpoint pricing"):
         _orchestrator(tmp_path, executor).execute(
@@ -351,10 +366,12 @@ def test_env_file_permissions_and_secret_nondisclosure(tmp_path, capsys):
         ("privacy_policy", {"data_collection": "deny", "zdr": False}),
         ("sdk_version", "test-next"),
         ("billing_channel", "different-paid-channel"),
+        ("pricing", {"prompt": 1.0, "completion": 2.0, "image": 3.0}),
     ],
 )
 def test_run_identity_changes_with_execution_defining_configuration(field, value):
     task, original = _task_and_run()
+    assert original.run_id == original.authoritative_run_id()
     execution = replace(_execution(), **{field: value})
     changed = plan_run(
         task,
@@ -365,3 +382,16 @@ def test_run_identity_changes_with_execution_defining_configuration(field, value
         execution=execution,
     )
     assert changed.run_id != original.run_id
+
+
+def test_run_result_fields_do_not_create_a_second_identity_definition():
+    _task, run = _task_and_run()
+    completed = replace(
+        run,
+        status="complete",
+        attempts=5,
+        token_usage={"input_tokens": 1, "output_tokens": 2, "reasoning_tokens": 3},
+        latency_ms=4.0,
+        cost_usd=5.0,
+    )
+    assert completed.authoritative_run_id() == run.run_id

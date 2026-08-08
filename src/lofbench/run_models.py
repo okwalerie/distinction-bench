@@ -24,6 +24,10 @@ def trial_id_for(run_id: str, abstract_form_id: str, dialect_id: str) -> str:
     )
 
 
+def call_id_for(trial_id: str, attempt: int) -> str:
+    return deterministic_id("call", {"trial_id": trial_id, "attempt": attempt})
+
+
 @dataclass(frozen=True)
 class ExecutionSpec:
     requested_model_id: str
@@ -39,6 +43,7 @@ class ExecutionSpec:
     billing_channel: str
     cohort: str
     max_transport_attempts: int
+    pricing: dict[str, float]
     catalog_retrieved_at: str = ""
     catalog_row: dict[str, Any] | None = None
 
@@ -116,6 +121,7 @@ def plan_run(
         cohort=execution.cohort,
         max_transport_attempts=execution.max_transport_attempts,
         expected_trial_ids=(),
+        pricing=execution.pricing,
         catalog_retrieved_at=execution.catalog_retrieved_at,
         catalog_row=execution.catalog_row or {},
     )

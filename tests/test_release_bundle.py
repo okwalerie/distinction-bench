@@ -13,7 +13,7 @@ from lofbench.metrics import write_release_metrics
 from lofbench.protocols import get_protocol
 from lofbench.records import CallRecord, LedgerEvent, RunManifest, TrialRecord
 from lofbench.release_bundle import ReleaseBundle
-from lofbench.run_models import trial_id_for
+from lofbench.run_models import call_id_for, trial_id_for
 from lofbench.suites import load_suite
 from lofsite.build import build_site
 
@@ -49,6 +49,7 @@ def _run(*, status: str = "complete", suite_version: str = "v1") -> RunManifest:
         cohort="test-release",
         max_transport_attempts=1,
         expected_trial_ids=(),
+        pricing={"prompt": 0.000001, "completion": 0.000002, "image": 0.000001},
         status=status,
         attempts=5,
         token_usage={"input_tokens": 100, "output_tokens": 20, "reasoning_tokens": 0},
@@ -74,6 +75,16 @@ def _trial(run: RunManifest, form_index: int = 0, **overrides) -> TrialRecord:
         if item["abstract_form_id"] == form_id and item["dialect_id"] == run.dialect_set
     )
     protocol = get_protocol(run.protocol_id)
+    response_text = (
+        json.dumps({"value": form["normal_value"]})
+        if protocol.answer_kind == "normal_value"
+        else json.dumps({"tree": form["abstract_form"]})
+    )
+    parse_status, prediction, correct = protocol.parse_answer(
+        response_text,
+        expected_normal_value=form["normal_value"],
+        expected_tree=form["abstract_form"],
+    )
     values = {
         "trial_id": trial_id_for(run.run_id, form_id, run.dialect_set),
         "run_id": run.run_id,
@@ -92,16 +103,17 @@ def _trial(run: RunManifest, form_index: int = 0, **overrides) -> TrialRecord:
         ),
         "symbolic_payload_hash": cell["symbolic_payload_hash"],
         "model_payload_sha256": cell["model_payload_sha256"],
-        "parse_status": "valid",
+        "parse_status": parse_status,
         "attempt_count": 1,
         "latency_ms": 10.0,
         "input_tokens": 20,
         "output_tokens": 4,
         "reasoning_tokens": 0,
         "observed_cost_usd": 0.001,
-        "prediction": form["normal_value"],
+        "prediction": prediction,
         "normal_value": form["normal_value"],
-        "correct": True,
+        "correct": correct,
+        "response_text": response_text,
     }
     values.update(overrides)
     return TrialRecord(**values)
@@ -119,7 +131,7 @@ def _accounting(run: RunManifest) -> tuple[list[CallRecord], list[LedgerEvent]]:
     events = []
     for index, trial_id in enumerate(run.expected_trial_ids, start=1):
         call = CallRecord(
-            call_id=f"call_{index}",
+            call_id=call_id_for(trial_id, 1),
             trial_id=trial_id,
             run_id=run.run_id,
             attempt=1,
@@ -166,6 +178,10 @@ def _admit(bundle: ReleaseBundle, run: RunManifest, trials: list[TrialRecord]) -
     bundle.admit_run(run, trials, calls=calls, ledger_events=events)
 
 
+def _derive(bundle: ReleaseBundle) -> None:
+    write_release_metrics(bundle.root, suite=load_suite(), runs=bundle.runs())
+
+
 @pytest.fixture
 def working(tmp_path):
     repository = _clean_repository(tmp_path / "repo")
@@ -176,6 +192,7 @@ def working(tmp_path):
         repository_url="https://example.invalid/repo",
         repository_root=repository,
         expected_run_ids=(run.run_id,),
+        spend_caps_usd={"global": 30.0, "cohorts": {"test-release": 30.0}},
     )
     return bundle, repository, run
 
@@ -184,6 +201,7 @@ def test_create_validate_admit_and_seal(working):
     bundle, repository, run = working
     bundle.validate()
     _admit(bundle, run, _trials(run))
+    _derive(bundle)
     bundle.seal(repository_root=repository)
     reopened = ReleaseBundle.open(bundle.root)
     assert reopened.manifest["status"] == "sealed"
@@ -211,6 +229,19 @@ def test_resolved_model_drift_is_rejected(working):
     bundle, _repository, run = working
     with pytest.raises(RuntimeError, match="resolved_model_id"):
         _admit(bundle, run, _trials(run, resolved_model_id="substituted/model"))
+
+
+def test_admission_recomputes_run_id_from_execution_identity(working):
+    bundle, _repository, run = working
+    forged = replace(run, run_id="run_forged")
+    with pytest.raises(RuntimeError, match="run_id"):
+        _admit(bundle, forged, _trials(forged))
+
+
+def test_admission_recomputes_parse_and_score_from_response_text(working):
+    bundle, _repository, run = working
+    with pytest.raises(RuntimeError, match="parse_status"):
+        _admit(bundle, run, _trials(run, response_text="not-json"))
 
 
 @pytest.mark.parametrize(
@@ -257,6 +288,58 @@ def test_validation_rechecks_provenance_after_admission(working):
         bundle.validate()
 
 
+def test_release_accounting_rejects_orphan_29999_settlement(working):
+    bundle, _repository, run = working
+    _admit(bundle, run, _trials(run))
+    orphan = LedgerEvent(
+        event_type="settled",
+        call_id="call_orphan",
+        trial_id=run.expected_trial_ids[0],
+        run_id=run.run_id,
+        cohort=run.cohort,
+        amount_usd=29.999,
+        at="2026-08-08T00:00:59+00:00",
+    )
+    with (bundle.root / "ledger.jsonl").open("a") as handle:
+        handle.write(json.dumps(orphan.to_dict()) + "\n")
+    with pytest.raises(RuntimeError, match="ledger"):
+        bundle.validate()
+
+
+@pytest.mark.parametrize(
+    ("caps", "message"),
+    [
+        ({"global": 0.004, "cohorts": {"test-release": 30.0}}, "global cap"),
+        ({"global": 30.0, "cohorts": {"test-release": 0.004}}, "cohort"),
+    ],
+)
+def test_admission_enforces_release_global_and_cohort_caps(working, caps, message):
+    bundle, _repository, run = working
+    bundle.manifest["spend_caps_usd"] = caps
+    with pytest.raises(RuntimeError, match=message):
+        _admit(bundle, run, _trials(run))
+
+
+def test_validation_rejects_forged_profile_and_effect_rows(working):
+    bundle, _repository, run = working
+    _admit(bundle, run, _trials(run))
+    _derive(bundle)
+    profile_path = bundle.root / "profiles.parquet"
+    profiles = pq.read_table(profile_path).to_pylist()
+    profiles[0]["competence"] = 0.123
+    pq.write_table(pa.Table.from_pylist(profiles), profile_path)
+    with pytest.raises(RuntimeError, match="profiles do not recompute"):
+        bundle.validate()
+
+    _derive(bundle)
+    pq.write_table(
+        pa.Table.from_pylist([{"run_id": run.run_id}]),
+        bundle.root / "effects.parquet",
+    )
+    with pytest.raises(RuntimeError, match="effects do not recompute"):
+        bundle.validate()
+
+
 def test_dirty_repository_blocks_seal(working):
     bundle, repository, run = working
     _admit(bundle, run, _trials(run))
@@ -285,6 +368,7 @@ def test_changed_human_trial_schema_is_rejected(working):
 def test_checksum_drift_is_rejected(working):
     bundle, repository, run = working
     _admit(bundle, run, _trials(run))
+    _derive(bundle)
     bundle.seal(repository_root=repository)
     with (bundle.root / "transcripts.jsonl").open("a") as handle:
         handle.write("{}\n")
@@ -295,6 +379,7 @@ def test_checksum_drift_is_rejected(working):
 def test_sealed_bundle_refuses_mutation(working):
     bundle, repository, run = working
     _admit(bundle, run, _trials(run))
+    _derive(bundle)
     bundle.seal(repository_root=repository)
     with pytest.raises(RuntimeError, match="immutable"):
         _admit(bundle, run, _trials(run))
@@ -339,6 +424,7 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
         cohort="sample",
         max_transport_attempts=1,
         expected_trial_ids=(),
+        pricing={"prompt": 0.000001, "completion": 0.000002, "image": 0.000001},
         status="complete",
         attempts=5,
         token_usage={"input_tokens": 100, "output_tokens": 20, "reasoning_tokens": 0},
@@ -384,6 +470,16 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
     ):
         form = forms[form_id]
         cell = cells[form_id]
+        response_text = (
+            json.dumps({"value": form["normal_value"]})
+            if protocol.answer_kind == "normal_value"
+            else json.dumps({"tree": form["abstract_form"]})
+        )
+        parse_status, prediction, correct = protocol.parse_answer(
+            response_text,
+            expected_normal_value=form["normal_value"],
+            expected_tree=form["abstract_form"],
+        )
         trials.append(
             TrialRecord(
                 trial_id=trial_id,
@@ -403,21 +499,21 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                 ),
                 symbolic_payload_hash=cell["symbolic_payload_hash"],
                 model_payload_sha256=cell["model_payload_sha256"],
-                parse_status="valid",
+                parse_status=parse_status,
                 attempt_count=1,
                 latency_ms=10.0,
                 input_tokens=20,
                 output_tokens=4,
                 reasoning_tokens=0,
                 observed_cost_usd=0.001,
-                prediction=form["normal_value"],
+                prediction=prediction,
                 normal_value=form["normal_value"],
-                correct=True,
-                response_text=json.dumps({"value": form["normal_value"]}),
+                correct=correct,
+                response_text=response_text,
             )
         )
         call = CallRecord(
-            call_id=f"{run.run_id}:call:{index}",
+            call_id=call_id_for(trial_id, 1),
             trial_id=trial_id,
             run_id=run.run_id,
             attempt=1,
@@ -489,6 +585,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
             "trials_per_run": 5,
             "total_attempts": 20,
         },
+        spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
     )
     for run in runs:
         trials, calls, events = _sample_records(run, form_ids)
@@ -546,6 +643,7 @@ def test_sample_contract_rejects_empty_call_evidence(tmp_path):
             "trials_per_run": 5,
             "total_attempts": 20,
         },
+        spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
     )
     trials, _calls, _events = _sample_records(run, form_ids)
     with pytest.raises(RuntimeError, match="attempt count"):

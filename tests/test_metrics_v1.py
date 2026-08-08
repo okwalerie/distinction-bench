@@ -29,6 +29,7 @@ def _run(model: str, expected: tuple[str, ...]) -> RunManifest:
         billing_channel="test",
         cohort="test",
         max_transport_attempts=1,
+        pricing={"prompt": 0.0, "completion": 0.0, "image": 0.0},
         expected_trial_ids=expected,
         status="admitted",
     )

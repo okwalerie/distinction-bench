@@ -4,10 +4,11 @@ import os
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
 from test_runner import _task_and_run
 
 from dbench.agent_cli import ClaudeCliExecutor, CodexCliExecutor, agent_subprocess_env
-from dbench.cli import _executor, _load_secret_env
+from dbench.cli import _executor, _load_secret_env, _parser, _validate_probe_run
 from lofbench.run_models import ExecutionRequest
 
 
@@ -90,3 +91,29 @@ def test_env_file_loading_does_not_mutate_process_environment(tmp_path, monkeypa
 
     assert _load_secret_env(env_file) == {"OPENROUTER_API_KEY": "local-only-sentinel"}
     assert "OPENROUTER_API_KEY" not in os.environ
+
+
+def test_probe_is_a_real_guarded_execution_command():
+    _task, run = _task_and_run()
+    contract = {
+        "protocol_ids": [run.protocol_id],
+        "trials_per_run": 5,
+        "max_transport_attempts": run.max_transport_attempts,
+    }
+    _validate_probe_run(run, contract)
+    with pytest.raises(RuntimeError, match="probe form set"):
+        _validate_probe_run(replace(run, form_set="core"), contract)
+    with pytest.raises(RuntimeError, match="4 x 5"):
+        _validate_probe_run(replace(run, max_transport_attempts=1), contract)
+    parsed = _parser().parse_args(
+        [
+            "probe",
+            "--release",
+            "/tmp/release",
+            "--state-root",
+            "/tmp/state",
+            "--run-id",
+            run.run_id,
+        ]
+    )
+    assert parsed.command == "probe"

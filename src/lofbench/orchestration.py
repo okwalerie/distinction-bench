@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,13 +10,12 @@ from pathlib import Path
 from inspect_ai import Task
 from inspect_ai.dataset import Sample
 
-from lofbench.accounting import SpendLedger
+from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
 from lofbench.protocols import get_protocol
-from lofbench.records import CallRecord, RunManifest, TrialRecord, deterministic_id
-from lofbench.run_models import ExecutionRequest, TrialExecutor, trial_id_for
+from lofbench.records import CallRecord, RunManifest, TrialRecord
+from lofbench.run_models import ExecutionRequest, TrialExecutor, call_id_for, trial_id_for
 from lofbench.state_io import append_jsonl_fsynced, read_jsonl, write_json_atomic
 
-DEFAULT_GLOBAL_CAP_USD = 30.0
 MAX_TRANSPORT_ATTEMPTS = 3
 
 
@@ -37,15 +37,20 @@ class RunOrchestrator:
 
     @staticmethod
     def reservation(run: RunManifest, sample: Sample) -> float:
-        pricing = run.catalog_row.get("selected_endpoint", {}).get("pricing", {})
+        pricing = run.pricing
         try:
             prompt_price = float(pricing["prompt"])
             completion_price = float(pricing["completion"])
+            image_price = float(pricing["image"])
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError("unknown endpoint pricing") from exc
+        if any(
+            not math.isfinite(value) or value < 0
+            for value in (prompt_price, completion_price, image_price)
+        ):
+            raise RuntimeError("unknown endpoint pricing")
         estimated_input = max(1, len(str(sample.input)) // 2)
         image_allowance = 2000 if sample.metadata["modality"] != "text" else 0
-        image_price = float(pricing.get("image", prompt_price))
         estimate = (
             estimated_input * prompt_price
             + run.generation["max_tokens"] * completion_price
@@ -61,6 +66,8 @@ class RunOrchestrator:
         approve_paid_run: bool = False,
         max_spend_usd: float | None = None,
     ) -> RunManifest:
+        if run.run_id != run.authoritative_run_id():
+            raise RuntimeError("run_id does not match the authoritative execution identity")
         is_paid = run.billing_channel != "subscription_unmetered"
         if is_paid and (not approve_paid_run or max_spend_usd != DEFAULT_GLOBAL_CAP_USD):
             return run
@@ -100,7 +107,7 @@ class RunOrchestrator:
             completed = False
             attempts_used = sum(1 for row in prior_calls if row["trial_id"] == trial_id)
             for attempt in range(attempts_used + 1, run.max_transport_attempts + 1):
-                call_id = deterministic_id("call", {"trial_id": trial_id, "attempt": attempt})
+                call_id = call_id_for(trial_id, attempt)
                 reservation = self.reservation(run, sample) if is_paid else 0.0
                 self.ledger.reserve(
                     call_id=call_id,

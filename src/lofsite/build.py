@@ -91,6 +91,20 @@ def _write(path: Path, value: str) -> None:
     path.write_text(value)
 
 
+def site_tree_checksums(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def verify_site_tree(expected: Path, rebuilt: Path) -> None:
+    """Require exact path and byte equality for a regenerated sealed site."""
+    if site_tree_checksums(expected) != site_tree_checksums(rebuilt):
+        raise RuntimeError("rebuilt site tree does not match the sealed bundle site")
+
+
 def _overview(bundle: ReleaseBundle, suite: LoadedSuite, protocols: dict[str, ProtocolSpec]) -> str:
     runs = bundle.runs()
     trials = pq.read_table(bundle.root / "trials.parquet").num_rows
@@ -245,7 +259,11 @@ def _records_table(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> str:
     return f"<table><thead><tr>{heading}</tr></thead><tbody>{body}</tbody></table>"
 
 
-def _worked_path(bundle: ReleaseBundle, runs: list[RunManifest]) -> str:
+def _worked_path(
+    bundle: ReleaseBundle,
+    runs: list[RunManifest],
+    profiles: list[dict[str, Any]],
+) -> str:
     trials = pq.read_table(bundle.root / "trials.parquet").to_pylist()
     if not runs or not trials:
         return "<p class=notice>no admitted trial is available for a worked path.</p>"
@@ -265,7 +283,6 @@ def _worked_path(bundle: ReleaseBundle, runs: list[RunManifest]) -> str:
     spec = suite.specs[trial["dialect_id"]]
     protocol = protocols[trial["protocol_id"]]
     prompt = protocol.render_user_text(reading_rule=spec.reading_rule)
-    profiles = pq.read_table(bundle.root / "profiles.parquet").to_pylist()
     reasoning = json.dumps(run.reasoning, sort_keys=True)
     profile = next(
         (
@@ -426,7 +443,11 @@ def _reasoning_contrasts(profiles: list[dict[str, Any]]) -> str:
     )
 
 
-def _runs_page(bundle: ReleaseBundle) -> str:
+def _runs_page(
+    bundle: ReleaseBundle,
+    profiles: list[dict[str, Any]],
+    effects: list[dict[str, Any]],
+) -> str:
     runs = bundle.runs()
     suite = load_suite(version=bundle.manifest["suite_version"], path=bundle.root / "suite.json")
     trials = pq.read_table(bundle.root / "trials.parquet").to_pylist()
@@ -459,8 +480,6 @@ def _runs_page(bundle: ReleaseBundle) -> str:
             f"<tbody>{rows}</tbody></table>"
         )
 
-    profiles = pq.read_table(bundle.root / "profiles.parquet").to_pylist()
-    effects = pq.read_table(bundle.root / "effects.parquet").to_pylist()
     profile_table = _records_table(
         profiles,
         (
@@ -520,7 +539,7 @@ def _runs_page(bundle: ReleaseBundle) -> str:
         f"{provenance}"
         "<h2>worked result path</h2><p>one admitted result traced from the frozen "
         "abstract form through its dialect payload and exact protocol to parsing and scoring.</p>"
-        f"<section class=grid>{_worked_path(bundle, runs)}</section>"
+        f"<section class=grid>{_worked_path(bundle, runs, profiles)}</section>"
         "<h2>competence + invariance profiles</h2>"
         f"{profile_table}"
         "<h2>controlled dialect effects</h2>"
@@ -567,7 +586,8 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
         "<p class=notice>this informal pilot is not an admitted model run. use a pseudonymous "
         "participant code; no data leaves this page. every exported HumanTrialRecord conforms "
         "to the <a href=\"downloads/human-trial.schema.json\">published schema</a>.</p>"
-        "<div class=card><label>participant code <input id=participant required></label> "
+        "<div class=card><label>participant code <input id=participant required minlength=3 "
+        'maxlength=64 pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}"></label> '
         "<label>laws of form familiarity <select id=familiarity><option value=none>none</option>"
         "<option value=some>some</option><option value=expert>expert</option>"
         "</select></label></div>"
@@ -595,7 +615,8 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
         "answer.dataset.value=b.dataset.v})}document.querySelector('#next').onclick=()=>{"
         "const s=stimuli[i];const participant=document.querySelector('#participant').value.trim();"
         "const familiarity_band=document.querySelector('#familiarity').value;"
-        "if(!participant)return;const value=s.answer_kind==='normal_value'?"
+        "if(!/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(participant))return;"
+        "const value=s.answer_kind==='normal_value'?"
         "answer.dataset.value:(answer.querySelector('textarea')?.value||'');"
         "if(!value)return;rows.push({participant_code:participant,familiarity_band,"
         "abstract_form_id:s.abstract_form_id,dialect_id:s.dialect_id,protocol_id:s.protocol_id,"
@@ -657,10 +678,11 @@ def build_site(release_dir: Path, out: Path) -> None:
 
     suite = load_suite(version=bundle.manifest["suite_version"], path=bundle.root / "suite.json")
     protocols = load_protocol_registry(bundle.root / "protocols.json")
+    profiles, effects = bundle.verified_metric_rows()
     _write(out / "index.html", _page("what is tested", _overview(bundle, suite, protocols)))
     _write(out / "forms.html", _page("forms + protocols", _forms(suite, protocols)))
     _write(out / "atlas.html", _page("dialect atlas", _atlas(out, suite)))
-    _write(out / "runs.html", _page("models + runs", _runs_page(bundle)))
+    _write(out / "runs.html", _page("models + runs", _runs_page(bundle, profiles, effects)))
     _write(
         out / "human.html",
         _page("human pilot", _human(suite, protocols, bundle.manifest["release_id"])),
@@ -679,8 +701,11 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="build the bundle-only static benchmark site")
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--verify-against", type=Path)
     args = parser.parse_args(argv)
     build_site(args.release, args.out)
+    if args.verify_against is not None:
+        verify_site_tree(args.verify_against, args.out)
     return 0
 
 
