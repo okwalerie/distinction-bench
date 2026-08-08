@@ -469,6 +469,28 @@ than beginning the broad sweep.
 
 ## Reset 2026-08-08 by agent:codex-root
 
+## Review Cycle 7 Findings — idempotent evidence reconciliation
+
+the seventh review found two remaining trust gaps and one publication leak. provider
+errors must still close billed generation accounting: derive request identity, exact
+token usage, cost, and latency from generation evidence before returning
+`provider_error`; without that proof return `accounting_unknown`, never an invented
+zero. make every envelope projection total over malformed timing and numeric values.
+
+replace forward-only orchestration with one reconcile-before-act state machine. on
+every start, replay evidence revisions, effective calls, ledger events, trials, and
+run state; derive and fsync any missing call, settlement, or trial from already
+persisted evidence before scheduling inference. deterministic call ids are the
+exactly-once inference keys. fault-inject after reserve/evidence/call/settlement/trial
+and run-state writes and require resume to converge without executing the same call
+twice.
+
+retain only an explicit audit-safe response-header allowlist and reject sensitive or
+unknown header names/values during publication scanning. update adr 0001, preserve
+the neutral dependency direction and prior forgery gates, run focused/full/frozen
+wheel gates without inference, commit, and return db-14 to review tied to
+`ev_01KZHKZ0S8T9XFBA4DYN8NK178`.
+
 ## Review Cycle 5 Findings — canonical provider-evidence projection
 
 the fifth review proved that `AttemptEvidence` still permits sibling typed assertions
@@ -553,6 +575,8 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-seal-boundary
+
+## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
 
