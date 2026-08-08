@@ -78,9 +78,14 @@ class PatternArchetype:
 ARCHETYPE_REGISTRY["pattern@1"] = PatternArchetype()
 
 for _preset_name in MIGRATED_PRESETS:
+    _dialect_id = (
+        "pattern.plain-v1"
+        if _preset_name == "default"
+        else f"pattern.{_preset_name}-v1"
+    )
     register_named_dialect(
         DialectSpec(
-            dialect_id=f"pattern.{_preset_name}",
+            dialect_id=_dialect_id,
             family="pattern",
             archetype="pattern@1",
             injectors=([] if _preset_name == "default" else [("preset", {"name": _preset_name})]),

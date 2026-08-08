@@ -81,7 +81,7 @@ ARCHETYPE_REGISTRY["parens@1"] = ParensArchetype()
 
 # Worked example 1: canonical text, identity.
 register_named_dialect(
-    DialectSpec(dialect_id="parens.canonical", family="parens", archetype="parens@1")
+    DialectSpec(dialect_id="parens.reference-v1", family="parens", archetype="parens@1")
 )
 # Whitespace-jittered canonical -- structure-preserving benign spacing only.
 register_named_dialect(

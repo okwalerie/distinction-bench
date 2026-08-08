@@ -44,13 +44,13 @@ LEGACY_DEFAULT_SEED = 0
 LEGACY_PRIMARY_SEED = 1
 LEGACY_SECOND_SEED = 2
 
-# "circle" is a byte-identical legacy-key alias of "enclosure.canonical-v1"
+# "circle" is a byte-identical legacy-key alias of "enclosure.plain-v1"
 # -- same archetype, same empty injector list. See `lofbench.suites`'s own
 # module docstring for the full rationale (including both in a frozen suite
 # would manufacture a guaranteed payload collision). The gallery does not
 # render a second, visually-identical panel for it -- see `_group_dialects`.
 CIRCLE_ALIAS_ID = "circle"
-CIRCLE_ALIAS_OF = "enclosure.canonical-v1"
+CIRCLE_ALIAS_OF = "enclosure.plain-v1"
 CIRCLE_ALIAS_NOTE = (
     f"'{CIRCLE_ALIAS_ID}' is a registered legacy-key alias of this exact archetype "
     f"({CIRCLE_ALIAS_OF!r}: same archetype, same empty injector list) -- "
@@ -159,8 +159,12 @@ def _exemplar_forms() -> tuple[str, str]:
     why these are real frozen forms rather than a new ad-hoc generation.
     """
     forms = load_suite().forms
-    shallow = next(f["form_string"] for f in forms if f["difficulty"] == "1. easy")
-    deep = next(f["form_string"] for f in forms if f["difficulty"] == "5. extra")
+    shallow = next(
+        f["reference_transcription"] for f in forms if f["difficulty"] == "1. easy"
+    )
+    deep = next(
+        f["reference_transcription"] for f in forms if f["difficulty"] == "5. extra"
+    )
     return shallow, deep
 
 
@@ -391,7 +395,9 @@ def _build_generator_samples() -> list[GeneratorSample]:
 
 def _build_suite_summary() -> SuiteSummary:
     suite = load_suite()
-    cells = sorted(suite.cells, key=lambda c: (c["form_id"], c["dialect_id"]))
+    cells = sorted(
+        suite.cells, key=lambda c: (c["abstract_form_id"], c["dialect_id"])
+    )
     n = len(cells)
     sample: list[SuiteCellSample] = []
     if n:
@@ -402,13 +408,13 @@ def _build_suite_summary() -> SuiteSummary:
             c = cells[i]
             sample.append(
                 SuiteCellSample(
-                    form_id=c["form_id"],
+                    form_id=c["abstract_form_id"],
                     dialect_id=c["dialect_id"],
                     family=c["family"],
                     modality=c["modality"],
-                    format=c["format"],
+                    format=c["model_format"],
                     structure_verified=c["structure_verified"],
-                    payload_hash_prefix=c["payload_hash"][:12],
+                    payload_hash_prefix=c["symbolic_payload_hash"][:12],
                 )
             )
     return SuiteSummary(

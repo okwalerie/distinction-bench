@@ -73,14 +73,14 @@ __all__: list[str] = []
 # instance so its own ``to_svg`` can be wired on below without editing any
 # of these DB-3-owned files directly.
 _FAMILIES = (
-    (trees, trees.ARCHETYPE, "trees.canonical-v1"),
-    (blocks, blocks.ARCHETYPE, "blocks.canonical-v1"),
-    (graph, graph.ARCHETYPE, "graph.canonical-v1"),
-    (map_rect, map_rect.ARCHETYPE, "map.canonical-v1"),
-    (map_centred, map_centred.ARCHETYPE, "map-centred.canonical-v1"),
-    (rooms, rooms.ARCHETYPE, "rooms.canonical-v1"),
-    (rna_arc, rna_arc.ARCHETYPE, "rna-arc-v1"),  # architecture doc worked example 4's own slug
-    (paths_lite, paths_lite.ARCHETYPE, "paths.arc-nest-v1"),  # plan section 8's own slug
+    (trees, trees.ARCHETYPE, "trees.plain-v1"),
+    (blocks, blocks.ARCHETYPE, "blocks.plain-v1"),
+    (graph, graph.ARCHETYPE, "graph.plain-v1"),
+    (map_rect, map_rect.ARCHETYPE, "map.plain-v1"),
+    (map_centred, map_centred.ARCHETYPE, "map-centred.plain-v1"),
+    (rooms, rooms.ARCHETYPE, "rooms.plain-v1"),
+    (rna_arc, rna_arc.ARCHETYPE, "biopolymer.rna-arc-plain-v1"),
+    (paths_lite, paths_lite.ARCHETYPE, "paths.arc-nest-plain-v1"),
 )
 
 
@@ -115,7 +115,7 @@ for _module, _archetype, _dialect_id in _FAMILIES:
 # "circle" exists only so the pre-existing registry key keeps resolving,
 # now to a renderer whose own .name equals it.
 _ENCLOSURE_CANONICAL = DialectSpec(
-    dialect_id="enclosure.canonical-v1", family="enclosure", archetype="enclosure@1"
+    dialect_id="enclosure.plain-v1", family="enclosure", archetype="enclosure@1"
 )
 register_named_dialect(_ENCLOSURE_CANONICAL)
 register_named_dialect(

@@ -57,7 +57,7 @@ _INJECTORS = {
 # the deviation note in `dialects_text/word_brackets.py`.
 _DIALECT_SPECS = (
     DialectSpec(
-        dialect_id="biopolymer.rna-dotbracket-v1",
+        dialect_id="biopolymer.rna-dotbracket-plain-v1",
         family="biopolymer",
         archetype="rna_dotbracket@1",
     ),
@@ -68,7 +68,7 @@ _DIALECT_SPECS = (
         injectors=[("unpaired_filler", {})],
     ),
     DialectSpec(
-        dialect_id="trees.indent-v1",
+        dialect_id="trees.indent-plain-v1",
         family="trees",
         archetype="tree_indent@1",
     ),
@@ -79,7 +79,7 @@ _DIALECT_SPECS = (
         injectors=[("indent_style_jitter", {})],
     ),
     DialectSpec(
-        dialect_id="parens.word-brackets-v1",
+        dialect_id="parens.word-brackets-plain-v1",
         family="parens",
         archetype="word_brackets@1",
     ),
@@ -90,7 +90,7 @@ _DIALECT_SPECS = (
         injectors=[("word_delimiter_swap", {"mismatched": True})],
     ),
     DialectSpec(
-        dialect_id="prose.containment-v1",
+        dialect_id="prose.containment-plain-v1",
         family="prose",
         archetype="prose@1",
     ),
@@ -101,7 +101,7 @@ _DIALECT_SPECS = (
         injectors=[("synonym_jitter", {})],
     ),
     DialectSpec(
-        dialect_id="embedding.center-clause-v1",
+        dialect_id="embedding.center-clause-plain-v1",
         family="embedding",
         archetype="clause_embedding@1",
     ),

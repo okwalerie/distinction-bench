@@ -156,7 +156,7 @@ class TestProvenanceSchema:
         assert record["applied"] is True
 
     def test_roundtrip_ok_true_for_text_family(self):
-        renderer = get_renderer("pattern.lisp")
+        renderer = get_renderer("pattern.lisp-v1")
         result = renderer.render("(()())")
         assert result.metadata["roundtrip_ok"] is True
 
@@ -181,12 +181,12 @@ class TestProvenanceSchema:
 @pytest.mark.parametrize("form_string", ["()", "(())", "(()())", "((()))", "(()()())"])
 def test_verify_passes_across_generation_set_for_migrated_dialects(form_string):
     for dialect_id in [
-        "parens.canonical",
+        "parens.reference-v1",
         "parens.jitter-v1",
         "parens.noisy-v1",
         "parens.noisy-mismatched-v1",
-        "pattern.default",
-        "pattern.lisp",
+        "pattern.plain-v1",
+        "pattern.lisp-v1",
     ]:
         renderer = get_renderer(dialect_id)
         result = renderer.render(form_string, random.Random(2026))

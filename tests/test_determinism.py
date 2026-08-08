@@ -165,6 +165,6 @@ class TestFactoryOrderIndependence:
 
 @pytest.mark.parametrize("form_string", ["()", "(())", "(()())", "((()))"])
 def test_composed_renderer_deterministic_for_pattern_family(form_string):
-    r1 = get_renderer("pattern.lisp")
-    r2 = get_renderer("pattern.lisp")
+    r1 = get_renderer("pattern.lisp-v1")
+    r2 = get_renderer("pattern.lisp-v1")
     assert r1.render(form_string).rendered == r2.render(form_string).rendered

@@ -54,15 +54,15 @@ WORKED_EXAMPLE = "(()())"
 # dialect_id -> (parser, whether the pipeline's own `structure_verified`
 # is currently reliable for it -- see module docstring).
 DIALECTS = {
-    "biopolymer.rna-dotbracket-v1": (parse_rna_dotbracket, True),
+    "biopolymer.rna-dotbracket-plain-v1": (parse_rna_dotbracket, True),
     "biopolymer.rna-dotbracket-filler-v1": (parse_rna_dotbracket, True),
-    "trees.indent-v1": (parse_tree_indent, True),
+    "trees.indent-plain-v1": (parse_tree_indent, True),
     "trees.indent-jitter-v1": (parse_tree_indent, True),
-    "parens.word-brackets-v1": (parse_word_brackets, True),
+    "parens.word-brackets-plain-v1": (parse_word_brackets, True),
     "parens.word-brackets-mismatched-v1": (parse_word_brackets_mismatched, True),
-    "prose.containment-v1": (parse_prose, True),
+    "prose.containment-plain-v1": (parse_prose, True),
     "prose.containment-jitter-v1": (parse_prose, True),
-    "embedding.center-clause-v1": (parse_clause_embedding, True),
+    "embedding.center-clause-plain-v1": (parse_clause_embedding, True),
     "embedding.center-clause-jitter-v1": (parse_clause_embedding, True),
 }
 
@@ -119,29 +119,29 @@ class TestCanonicalDialectsMatchPhaseA:
     its canonical dialect is covered by the round-trip test above)."""
 
     def test_rna_dotbracket_worked_example(self):
-        renderer = get_renderer("biopolymer.rna-dotbracket-v1")
+        renderer = get_renderer("biopolymer.rna-dotbracket-plain-v1")
         result = renderer.render(WORKED_EXAMPLE, random.Random(0))
         lines = result.rendered.split("\n")
         assert lines[0].startswith("sequence: ")
         assert lines[1] == "structure: ( ( ) ( ) )"
 
     def test_tree_indent_worked_example(self):
-        renderer = get_renderer("trees.indent-v1")
+        renderer = get_renderer("trees.indent-plain-v1")
         result = renderer.render(WORKED_EXAMPLE)
         assert result.rendered == "mark\n    mark\n    mark"
 
     def test_word_brackets_worked_example(self):
-        renderer = get_renderer("parens.word-brackets-v1")
+        renderer = get_renderer("parens.word-brackets-plain-v1")
         result = renderer.render(WORKED_EXAMPLE)
         assert result.rendered == "BEGIN BEGIN END BEGIN END END"
 
     def test_prose_worked_example(self):
-        renderer = get_renderer("prose.containment-v1")
+        renderer = get_renderer("prose.containment-plain-v1")
         result = renderer.render(WORKED_EXAMPLE)
         assert result.rendered == "a box holding two empty boxes."
 
     def test_clause_embedding_worked_example(self):
-        renderer = get_renderer("embedding.center-clause-v1")
+        renderer = get_renderer("embedding.center-clause-plain-v1")
         result = renderer.render(WORKED_EXAMPLE)
         assert result.rendered == (
             "the creature that two creatures namely the creature sleeps "
@@ -329,14 +329,14 @@ class TestParseBackCatchesCorruption:
         "dialect_id,parser,corrupt",
         [
             (
-                "trees.indent-v1",
+                "trees.indent-plain-v1",
                 parse_tree_indent,
                 # Drop the last line: one of the two leaves under the top
                 # mark disappears, changing the containment relation.
                 lambda rendered: "\n".join(rendered.split("\n")[:-1]),
             ),
             (
-                "parens.word-brackets-v1",
+                "parens.word-brackets-plain-v1",
                 parse_word_brackets,
                 # Swap tokens 2 and 3 ("END BEGIN" -> "BEGIN END"): turns
                 # the two-sibling-leaves shape into a depth-3 chain, a
@@ -345,14 +345,14 @@ class TestParseBackCatchesCorruption:
                 _swap_word_bracket_tokens_2_and_3,
             ),
             (
-                "prose.containment-v1",
+                "prose.containment-plain-v1",
                 parse_prose,
                 # Change the count word: "two" -> "three" no longer matches
                 # the two rendered leaf descriptions that follow it.
                 lambda rendered: rendered.replace("two empty boxes", "three empty boxes"),
             ),
             (
-                "embedding.center-clause-v1",
+                "embedding.center-clause-plain-v1",
                 parse_clause_embedding,
                 # Change the numeral the same way as the prose case.
                 lambda rendered: rendered.replace("two creatures", "three creatures"),

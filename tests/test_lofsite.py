@@ -12,6 +12,9 @@ import json
 
 import pandas as pd
 import pytest
+
+pytest.importorskip("starlette", reason="site extra is not installed")
+
 from starlette.testclient import TestClient
 
 from lofbench.pipeline import SCHEMA_VERSION

@@ -12,6 +12,9 @@ from __future__ import annotations
 import time
 
 import pytest
+
+pytest.importorskip("starlette", reason="site extra is not installed")
+
 from starlette.testclient import TestClient
 
 from lofbench.core import DIFFICULTY_CONFIGS

@@ -30,6 +30,14 @@ class DialectSpec:
     injectors: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     style: dict[str, Any] = field(default_factory=dict)
     suite_version: str = "adhoc"
+    label: str = ""
+    reading_rule: str = ""
+    description: str = ""
+    modality: str = ""
+    model_format: str = ""
+    provenance: str = ""
+    citation: str = ""
+    limitations: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DialectSpec:
@@ -47,6 +55,14 @@ class DialectSpec:
             injectors=injectors,
             style=dict(d.get("style", {})),
             suite_version=d.get("suite_version", "adhoc"),
+            label=d.get("label", ""),
+            reading_rule=d.get("reading_rule", ""),
+            description=d.get("description", ""),
+            modality=d.get("modality", ""),
+            model_format=d.get("model_format", ""),
+            provenance=d.get("provenance", ""),
+            citation=d.get("citation", ""),
+            limitations=tuple(d.get("limitations", [])),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -58,6 +74,14 @@ class DialectSpec:
             "injectors": [[name, dict(params)] for name, params in self.injectors],
             "style": dict(self.style),
             "suite_version": self.suite_version,
+            "label": self.label,
+            "reading_rule": self.reading_rule,
+            "description": self.description,
+            "modality": self.modality,
+            "model_format": self.model_format,
+            "provenance": self.provenance,
+            "citation": self.citation,
+            "limitations": list(self.limitations),
         }
 
     def seed_digest(self) -> bytes:

@@ -48,11 +48,11 @@ SCHEMA_VERSION = "pipeline-schema-v1"
 DEFAULT_SUITE_VERSION = "pilot-v0"
 DEFAULT_MAX_LOG_MB = 400.0
 
-# Dialect ids that mark the canonical (baseline) arm of a paired comparison.
-# "canonical" is what get_log_metadata derives for every pre-DB-4 log;
-# "parens.canonical" is the post-DB-4 frozen-suite id per the rendering
-# architecture note's worked example 1.
-CANONICAL_DIALECT_IDS = frozenset({"canonical", "parens.canonical"})
+# Historical ids remain readable for pilot-v0. Public v1 calls its neutral
+# arm a reference transcription rather than privileging a canonical notation.
+CANONICAL_DIALECT_IDS = frozenset(
+    {"canonical", "parens.canonical", "parens.reference-v1"}
+)
 
 # Fallback family/modality/format derivation from the raw `renderer` name,
 # used only when per-sample render_metadata is absent (i.e. every real log

@@ -68,7 +68,7 @@ class TestParensCanonicalDialect:
 
     def test_matches_legacy_canonical_no_spacing(self):
         old = get_renderer("canonical")  # spacing=False default
-        new = get_renderer("parens.canonical")
+        new = get_renderer("parens.reference-v1")
         for form_string in SEEDED_FORMS:
             assert old.render(form_string).rendered == new.render(form_string).rendered
 
@@ -157,7 +157,8 @@ class TestPatternNamedDialects:
     @pytest.mark.parametrize("preset", ["default", "lisp", "scheme", "python", "rust", "java"])
     def test_named_dialect_matches_legacy_sexpr(self, preset):
         old = get_renderer("sexpr", preset=preset)
-        new = get_renderer(f"pattern.{preset}")
+        dialect_id = "pattern.plain-v1" if preset == "default" else f"pattern.{preset}-v1"
+        new = get_renderer(dialect_id)
         for form_string in SEEDED_FORMS:
             old_result = old.render(form_string)
             new_result = new.render(form_string)
