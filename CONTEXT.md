@@ -34,5 +34,9 @@ and derived aggregates must close exactly.
 analysis and the public site consume this validated projection and must not reach
 around it to mutable registries, self-asserted rows, or loose logs.
 
+run execution is a single-writer interface: one per-run advisory lock spans replay,
+provider execution, and every durable transition. separate runs share one locked
+release ledger, so concurrency cannot split the global spend authority.
+
 pilot-v0 import code retains historical field names such as `canonical`; new public
 interfaces use the vocabulary above.

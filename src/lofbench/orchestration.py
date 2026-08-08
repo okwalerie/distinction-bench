@@ -36,10 +36,22 @@ from lofbench.run_models import (
     request_sha256_for,
     trial_id_for,
 )
-from lofbench.state_io import append_jsonl_fsynced, read_jsonl, write_json_atomic
+from lofbench.state_io import (
+    FileLockUnavailableError,
+    append_jsonl_fsynced,
+    exclusive_file_lock,
+    read_jsonl,
+    write_json_atomic,
+)
 
 MAX_TRANSPORT_ATTEMPTS = 3
 TransitionObserver = Callable[[str, str], None]
+
+
+class RunAlreadyRunningError(RuntimeError):
+    """Another process owns this run's execution state."""
+
+    status = "already_running"
 
 
 def _effective_calls(rows: list[dict]) -> list[dict]:
@@ -275,7 +287,17 @@ class RunOrchestrator:
             return run
         if not 1 <= run.max_transport_attempts <= MAX_TRANSPORT_ATTEMPTS:
             raise RuntimeError("run declares an invalid transport-attempt limit")
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with exclusive_file_lock(self.state_dir / ".run.lock", blocking=False):
+                return self._execute_locked(run, task)
+        except FileLockUnavailableError as exc:
+            raise RunAlreadyRunningError(
+                f"run {run.run_id} is already running in another process"
+            ) from exc
+
+    def _execute_locked(self, run: RunManifest, task: Task) -> RunManifest:
+        """Reconcile and execute while the caller owns the run's single-writer lock."""
+        is_paid = run.billing_channel != "subscription_unmetered"
         samples_by_trial = {
             trial_id_for(
                 run.run_id,

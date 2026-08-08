@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import IO
 
 from lofbench.records import LedgerEvent
+from lofbench.state_io import exclusive_file_lock
 
 DEFAULT_GLOBAL_CAP_USD = 30.0
 
@@ -38,8 +39,14 @@ class SpendLedger:
     @contextmanager
     def _locked(self, *, exclusive: bool) -> Iterator[IO[str]]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if exclusive:
+            with exclusive_file_lock(self.lock_path, blocking=True):
+                with self.path.open("a+") as ledger:
+                    ledger.seek(0)
+                    yield ledger
+            return
         with self.lock_path.open("a+") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
             try:
                 with self.path.open("a+") as ledger:
                     ledger.seek(0)

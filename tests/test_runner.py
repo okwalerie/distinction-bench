@@ -4,6 +4,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from threading import Event
 
 import pytest
 from inspect_ai import Task
@@ -16,13 +17,14 @@ from dbench.provider_evidence import (
     project_openrouter_evidence,
 )
 from lofbench.accounting import SpendLedger
-from lofbench.orchestration import RunOrchestrator
+from lofbench.orchestration import RunAlreadyRunningError, RunOrchestrator
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
 from lofbench.run_models import (
     ExecutionResult,
     ExecutionSpec,
     InMemoryExecutor,
+    TrialExecutor,
     plan_run,
 )
 from lofbench.state_io import read_jsonl
@@ -213,6 +215,35 @@ class _CrashOnceAfter:
             raise _SimulatedCrash(transition)
 
 
+class _BlockingExecutor(TrialExecutor):
+    def __init__(self, result: ExecutionResult) -> None:
+        self.result = result
+        self.calls = []
+        self.started = Event()
+        self.release = Event()
+
+    def execute(self, request):
+        self.calls.append(request)
+        self.started.set()
+        if not self.release.wait(timeout=10):
+            raise RuntimeError("blocking executor was not released")
+        return self.result
+
+
+def _one_sample(task, run):
+    sample = list(task.dataset.samples)[0]
+    return (
+        Task(
+            dataset=MemoryDataset(samples=[sample]),
+            solver=task.solver,
+            scorer=task.scorer,
+            config=task.config,
+            metadata=task.metadata,
+        ),
+        replace(run, expected_trial_ids=run.expected_trial_ids[:1]),
+    )
+
+
 def test_plain_run_is_a_dry_run(tmp_path):
     task, run = _task_and_run()
     executor = InMemoryExecutor([_success()] * 5)
@@ -343,6 +374,101 @@ def test_complete_resume_does_not_duplicate_paid_calls(tmp_path):
     )
     assert again.status == "complete"
     assert resume.calls == []
+
+
+def test_concurrent_execution_of_one_run_allows_exactly_one_provider_post(tmp_path):
+    full_task, full_run = _task_and_run()
+    task, run = _one_sample(full_task, full_run)
+    first_executor = _BlockingExecutor(_success())
+    first = _orchestrator(tmp_path, first_executor)
+    second_executor = InMemoryExecutor([_success()])
+    second = _orchestrator(tmp_path, second_executor)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        running = pool.submit(
+            first.execute,
+            run,
+            task,
+            approve_paid_run=True,
+            max_spend_usd=30.0,
+        )
+        assert first_executor.started.wait(timeout=5)
+        try:
+            with pytest.raises(RunAlreadyRunningError, match="already running") as raised:
+                second.execute(
+                    run,
+                    task,
+                    approve_paid_run=True,
+                    max_spend_usd=30.0,
+                )
+            assert raised.value.status == "already_running"
+        finally:
+            first_executor.release.set()
+        completed = running.result(timeout=10)
+
+    assert completed.status == "complete"
+    assert len(first_executor.calls) == 1
+    assert second_executor.calls == []
+    state = tmp_path / "run-state"
+    for name in (
+        "request-started.jsonl",
+        "transcripts.jsonl",
+        "calls.jsonl",
+        "trials.jsonl",
+    ):
+        assert len(read_jsonl(state / name)) == 1
+
+
+def test_different_run_locks_still_share_one_atomic_global_ledger(tmp_path):
+    first_task, first_run = _one_sample(*_task_and_run("reduce-infer-v1"))
+    second_task, second_run = _one_sample(*_task_and_run("reduce-taught-v1"))
+    ledger_path = tmp_path / "shared-ledger.jsonl"
+    first_executor = _BlockingExecutor(_success())
+    first = RunOrchestrator(
+        tmp_path / "first-run",
+        first_executor,
+        ledger=SpendLedger(
+            ledger_path,
+            global_cap=0.015,
+            cohort_caps={"sample": 0.015},
+        ),
+        evidence_projector=project_openrouter_evidence,
+    )
+    second_executor = InMemoryExecutor([_success()])
+    second = RunOrchestrator(
+        tmp_path / "second-run",
+        second_executor,
+        ledger=SpendLedger(
+            ledger_path,
+            global_cap=0.015,
+            cohort_caps={"sample": 0.015},
+        ),
+        evidence_projector=project_openrouter_evidence,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        running = pool.submit(
+            first.execute,
+            first_run,
+            first_task,
+            approve_paid_run=True,
+            max_spend_usd=30.0,
+        )
+        assert first_executor.started.wait(timeout=5)
+        with pytest.raises(RuntimeError, match="global cap"):
+            second.execute(
+                second_run,
+                second_task,
+                approve_paid_run=True,
+                max_spend_usd=30.0,
+            )
+        first_executor.release.set()
+        assert running.result(timeout=10).status == "complete"
+
+    assert second_executor.calls == []
+    rows = read_jsonl(ledger_path)
+    assert [row["event_type"] for row in rows] == ["reserved", "settled"]
+    assert len({row["call_id"] for row in rows}) == 1
 
 
 @pytest.mark.parametrize(

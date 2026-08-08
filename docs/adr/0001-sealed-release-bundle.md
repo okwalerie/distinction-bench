@@ -64,6 +64,22 @@ converge by replay without another inference. provider errors settle the exact
 generation-reported cost and tokens but never create a trial; if that accounting cannot
 be proven, the reservation remains outstanding.
 
+one advisory linux file lock makes each run a single-writer module. execution acquires
+the lock nonblockingly before reconciliation and holds it across reservation,
+request-start, provider execution, evidence, settlement, trial, and the final atomic run
+manifest. another executor receives an explicit already-running error and cannot inspect
+partial append state or post. status readers may read the last atomically replaced run
+manifest while execution continues. different run locks do not partition accounting:
+every reservation and settlement still crosses the release-wide exclusive ledger lock,
+so global and cohort caps serialize across runs.
+
+durable jsonl appends retry interrupted and short writes, fsync the complete file, and
+fsync its parent directory when the file is first created. lock-file creation follows
+the same file-then-parent ordering. atomic json manifests fsync their complete temporary
+payload, replace the destination, then fsync the parent directory. these guarantees
+assume a healthy local filesystem implementing the usual linux `fsync`, atomic-rename,
+and advisory-lock semantics.
+
 `CallRecord` links the envelope digest and the completed `TrialRecord` links the final
 attempt. trial error semantics are replayed from that evidence. admission requires
 exact request-start/evidence/call/trial/ledger closure and recomputes all run aggregates. derived
