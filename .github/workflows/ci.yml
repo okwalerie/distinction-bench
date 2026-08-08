@@ -9,18 +9,18 @@ permissions:
 
 jobs:
   core:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync --group dev
+      - run: uv sync --frozen --group dev
       - run: uv run ruff check .
       - run: uv run pytest -q
 
   visual-rerun-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -28,6 +28,6 @@ jobs:
           enable-cache: true
       - name: install cairo runtime
         run: sudo apt-get update && sudo apt-get install -y libcairo2 libpango-1.0-0
-      - run: uv sync --group dev --extra visual --extra site
+      - run: uv sync --frozen --group dev --extra visual --extra site
       - run: uv run python -m lofbench.suites --verify-only
       - run: uv run pytest -q

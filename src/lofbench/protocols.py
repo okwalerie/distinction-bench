@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
@@ -99,6 +100,12 @@ class ProtocolSpec:
             return "invalid", "", False
         prediction = json.dumps(value["tree"], separators=(",", ":"))
         return "valid", prediction, value["tree"] == expected_tree
+
+    def prompt_hash(self, *, reading_rule: str, model_payload_sha256: str) -> str:
+        """Hash the exact system text, rendered user text, and frozen payload identity."""
+        user_text = self.render_user_text(reading_rule=reading_rule)
+        material = self.system_text + "\x00" + user_text + "\x00" + model_payload_sha256
+        return sha256(material.encode()).hexdigest()
 
 
 PROTOCOLS: dict[str, ProtocolSpec] = {

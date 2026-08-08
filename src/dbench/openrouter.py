@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.parse
 import urllib.request
@@ -156,6 +155,11 @@ def fetch_openrouter_endpoint(
 class OpenRouterInspectExecutor(TrialExecutor):
     """One-call Inspect adapter pinned to an admitted OpenRouter endpoint."""
 
+    def __init__(self, *, api_key: str) -> None:
+        if not api_key:
+            raise ValueError("OpenRouter execution requires an API key")
+        self.api_key = api_key
+
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         from inspect_ai import eval as inspect_eval
 
@@ -173,7 +177,11 @@ class OpenRouterInspectExecutor(TrialExecutor):
             logs = inspect_eval(
                 task,
                 model=f"openrouter/{request.run.requested_model_id}",
-                model_args={"provider": request.run.routing_policy, "max_retries": 0},
+                model_args={
+                    "api_key": self.api_key,
+                    "provider": request.run.routing_policy,
+                    "max_retries": 0,
+                },
                 display="none",
                 log_dir=str(request.log_dir),
                 log_samples=True,
@@ -209,16 +217,20 @@ class OpenRouterInspectExecutor(TrialExecutor):
             try:
                 generation = _authenticated_json(
                     f"{_API_ROOT}/generation?{query}",
-                    os.environ["OPENROUTER_API_KEY"],
+                    self.api_key,
                 ).get("data", {})
             except Exception:  # noqa: BLE001 - accounting fails closed downstream
                 generation = {}
         cost = cost if cost is not None else generation.get("total_cost")
         provider = provider or generation.get("provider_name", "")
+        expected_provider = request.run.catalog_row.get("selected_endpoint", {}).get(
+            "provider_name"
+        )
+        observed_endpoint = request.run.endpoint if provider == expected_provider else provider
         return ExecutionResult(
             response_text=event.output.completion,
             resolved_model_id=event.output.model.removeprefix("openrouter/"),
-            endpoint=provider,
+            endpoint=observed_endpoint,
             input_tokens=(usage.input_tokens if usage else generation.get("native_tokens_prompt")),
             output_tokens=(
                 usage.output_tokens if usage else generation.get("native_tokens_completion")

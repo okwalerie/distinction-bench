@@ -4,7 +4,16 @@ This repository contains the Distinction Benchmark and the Laws of Form benchmar
 
 ** Installation
 #+begin_src bash
-uv sync
+uv sync --group dev
+#+end_src
+
+the full frozen-suite verification also needs the visual extra and native cairo.
+on ubuntu/debian:
+
+#+begin_src bash
+sudo apt-get update && sudo apt-get install -y libcairo2 libpango-1.0-0
+uv sync --group dev --extra visual
+uv run python -m lofbench.suites --verify-only
 #+end_src
 
 ** Usage
@@ -60,4 +69,3 @@ Spencer-Brown's Laws of Form defines a minimal calculus with two axioms:
 - *I2 (Crossing)*: =(()) → void= — Nested mark cancels to void (aka, not represented)
 
 Every expression reduces to either =()= (marked) or =void= (unmarked).
-

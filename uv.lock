@@ -1623,10 +1623,6 @@ analysis = [
     { name = "pandas" },
     { name = "pyarrow" },
 ]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
 eval = [
     { name = "anthropic" },
     { name = "google-genai" },
@@ -1644,6 +1640,7 @@ visual = [
 dev = [
     { name = "playwright" },
     { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -1661,17 +1658,16 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'analysis'", specifier = ">=2.0" },
     { name = "pyarrow", specifier = ">=22.0.0" },
     { name = "pyarrow", marker = "extra == 'analysis'", specifier = ">=14.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-dotenv", marker = "extra == 'eval'", specifier = ">=1.0.0" },
     { name = "python-fasthtml", marker = "extra == 'site'", specifier = ">=0.14.4" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
 ]
-provides-extras = ["eval", "dev", "analysis", "site", "visual"]
+provides-extras = ["eval", "analysis", "site", "visual"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "playwright", specifier = ">=1.57.0" },
     { name = "pytest", specifier = ">=9.0.2" },
+    { name = "ruff", specifier = ">=0.8" },
 ]
 
 [[package]]

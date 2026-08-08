@@ -47,6 +47,12 @@ _SECRET_ENV_NAMES = (
 )
 
 
+def _secret_source(environment: Mapping[str, str] | None) -> Mapping[str, str]:
+    if environment is None:
+        return os.environ
+    return {**os.environ, **environment}
+
+
 def redact_mapping(value: Mapping[str, Any], *, secret_fields: Iterable[str]) -> dict[str, Any]:
     """Return a JSON-safe copy with named secret fields removed at every depth."""
     secret_names = {name.lower() for name in secret_fields}
@@ -70,9 +76,11 @@ def sanitize_public_mapping(
     value: Mapping[str, Any],
     *,
     secret_env_names: Iterable[str] = _SECRET_ENV_NAMES,
+    environment: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Drop denied metadata and redact secret-bearing scalar values for publication."""
-    secret_values = [secret for name in secret_env_names if (secret := os.environ.get(name))]
+    source = _secret_source(environment)
+    secret_values = [secret for name in secret_env_names if (secret := source.get(name))]
     home = str(Path.home())
     if home not in {"", "/"}:
         secret_values.append(home)
@@ -139,9 +147,11 @@ def scan_publication(
     root: Path,
     *,
     secret_env_names: Iterable[str] = _SECRET_ENV_NAMES,
+    environment: Mapping[str, str] | None = None,
 ) -> None:
     """Fail closed on credentials, host paths, and unapproved metadata."""
-    values = tuple(value.encode() for name in secret_env_names if (value := os.environ.get(name)))
+    source = _secret_source(environment)
+    values = tuple(value.encode() for name in secret_env_names if (value := source.get(name)))
     home = str(Path.home())
     if home not in {"", "/"}:
         values = (*values, home.encode())
@@ -189,6 +199,7 @@ def export_inspect_bundle(release_root: Path, out: Path) -> Path:
         "release.json",
         "suite.json",
         "protocols.json",
+        "human-trial.schema.json",
         "runs.jsonl",
         "trials.parquet",
         "calls.parquet",

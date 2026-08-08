@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 from inspect_ai import Task
 
-from dbench.agent_cli import ClaudeCliExecutor, CodexCliExecutor, cli_version
+from dbench.agent_cli import (
+    ClaudeCliExecutor,
+    CodexCliExecutor,
+    agent_subprocess_env,
+    cli_version,
+)
 from dbench.config import load_env_file
 from dbench.openrouter import OpenRouterInspectExecutor, fetch_openrouter_endpoint
 from lofbench.accounting import SpendLedger
@@ -52,10 +56,7 @@ def _ledger(state_root: Path) -> SpendLedger:
 def _load_secret_env(path: Path | None) -> dict[str, str]:
     if path is None:
         return {}
-    values = load_env_file(path)
-    for name, value in values.items():
-        os.environ[name] = value
-    return values
+    return load_env_file(path)
 
 
 def _state_dir(args: argparse.Namespace) -> Path:
@@ -118,15 +119,20 @@ def _agent_execution(args: argparse.Namespace, modality: str) -> ExecutionSpec:
     if modality != "text":
         raise RuntimeError("subscription CLI surfaces currently admit text dialects only")
     command = args.execution_surface.removesuffix("_cli")
+    environment = agent_subprocess_env()
     return ExecutionSpec(
         requested_model_id=args.model,
         resolved_model_id=args.model,
         execution_surface=args.execution_surface,
         provider=command,
         endpoint=command,
-        routing_policy={"local_cli": command},
-        privacy_policy={"local_process": True},
-        sdk_version=cli_version(command),
+        routing_policy={
+            "local_cli": command,
+            "environment_allowlist": sorted(environment),
+            "secrets_scrubbed": True,
+        },
+        privacy_policy={"local_process": True, "secret_environment_inheritance": False},
+        sdk_version=cli_version(command, environment=environment),
         reasoning={"effort": "default"},
         generation={"temperature": 0, "max_tokens": 512},
         billing_channel="subscription_unmetered",
@@ -276,13 +282,14 @@ def _plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def _executor(run: RunManifest) -> TrialExecutor:
+def _executor(run: RunManifest, *, secrets: dict[str, str]) -> TrialExecutor:
     if run.execution_surface == "direct_api":
-        return OpenRouterInspectExecutor()
+        return OpenRouterInspectExecutor(api_key=secrets.get("OPENROUTER_API_KEY", ""))
+    environment = agent_subprocess_env(secret_names=secrets)
     if run.execution_surface == "codex_cli":
-        return CodexCliExecutor()
+        return CodexCliExecutor(environment=environment)
     if run.execution_surface == "claude_cli":
-        return ClaudeCliExecutor()
+        return ClaudeCliExecutor(environment=environment)
     raise RuntimeError(f"unsupported execution surface {run.execution_surface!r}")
 
 
@@ -319,8 +326,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "seal":
-        _load_secret_env(args.env_file)
-        ReleaseBundle.open(args.release).seal(repository_root=Path.cwd())
+        values = _load_secret_env(args.env_file)
+        ReleaseBundle.open(args.release).seal(
+            repository_root=Path.cwd(), publication_environment=values
+        )
         return 0
     if args.command == "prepare":
         from lofsite.build import build_site
@@ -377,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     updated = RunOrchestrator(
         state_dir,
-        _executor(run),
+        _executor(run, secrets=values),
         ledger=_ledger(args.state_root),
     ).execute(
         run,

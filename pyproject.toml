@@ -35,10 +35,6 @@ eval = [
     "openai>=2.45.0",
     "python-dotenv>=1.0.0",
 ]
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.8",
-]
 analysis = [
     "pandas>=2.0",
     "pyarrow>=14.0",
@@ -71,4 +67,5 @@ select = ["E", "F", "I", "UP"]
 dev = [
     "playwright>=1.57.0",
     "pytest>=9.0.2",
+    "ruff>=0.8",
 ]

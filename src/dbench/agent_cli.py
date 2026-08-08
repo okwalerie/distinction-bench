@@ -3,17 +3,67 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from lofbench.run_models import ExecutionRequest, ExecutionResult, TrialExecutor
 
+_AGENT_ENV_ALLOWLIST = frozenset(
+    {
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "COLORTERM",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LOGNAME",
+        "PATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TERM",
+        "USER",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    }
+)
 
-def cli_version(command: str) -> str:
+
+def agent_subprocess_env(
+    *,
+    secret_names: Iterable[str] = (),
+    source: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build the only environment an agent CLI subprocess may receive."""
+    values = os.environ if source is None else source
+    denied = {name.upper() for name in secret_names}
+
+    def safe(name: str) -> bool:
+        upper = name.upper()
+        return not (
+            upper in denied
+            or "OPENROUTER" in upper
+            or "SECRET" in upper
+            or "PASSWORD" in upper
+            or upper.endswith("_API_KEY")
+            or upper.endswith("_TOKEN")
+        )
+
+    return {
+        name: value
+        for name, value in values.items()
+        if name in _AGENT_ENV_ALLOWLIST and safe(name)
+    }
+
+
+def cli_version(command: str, *, environment: Mapping[str, str]) -> str:
     completed = subprocess.run(
         [command, "--version"],
+        env=dict(environment),
         text=True,
         capture_output=True,
         timeout=30,
@@ -28,6 +78,9 @@ def cli_version(command: str) -> str:
 class AgentCliExecutor(TrialExecutor):
     command: str
 
+    def __init__(self, *, environment: Mapping[str, str]) -> None:
+        self.environment = dict(environment)
+
     def argv(self, request: ExecutionRequest, schema_path: Path, output_path: Path) -> list[str]:
         raise NotImplementedError
 
@@ -39,11 +92,15 @@ class AgentCliExecutor(TrialExecutor):
             schema_path = root / "schema.json"
             output_path = root / "output.json"
             protocol = request.task.config.response_schema
-            schema_path.write_text(json.dumps(protocol.json_schema if protocol else {}))
+            schema = protocol.json_schema if protocol else {}
+            if hasattr(schema, "model_dump"):
+                schema = schema.model_dump(mode="json", exclude_none=True)
+            schema_path.write_text(json.dumps(schema))
             started = time.monotonic()
             completed = subprocess.run(
                 self.argv(request, schema_path, output_path),
                 cwd=root,
+                env=self.environment,
                 text=True,
                 capture_output=True,
                 timeout=300,

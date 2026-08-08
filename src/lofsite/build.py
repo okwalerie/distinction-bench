@@ -20,6 +20,7 @@ from lofbench.suites import LoadedSuite, load_suite
 _DOWNLOADS = (
     "suite.json",
     "protocols.json",
+    "human-trial.schema.json",
     "runs.jsonl",
     "trials.parquet",
     "calls.parquet",
@@ -264,45 +265,197 @@ def _worked_path(bundle: ReleaseBundle, runs: list[RunManifest]) -> str:
     spec = suite.specs[trial["dialect_id"]]
     protocol = protocols[trial["protocol_id"]]
     prompt = protocol.render_user_text(reading_rule=spec.reading_rule)
-    steps = (
-        ("1 · frozen form", f"{form['reference_transcription']} → {form['normal_value']}"),
+    profiles = pq.read_table(bundle.root / "profiles.parquet").to_pylist()
+    reasoning = json.dumps(run.reasoning, sort_keys=True)
+    profile = next(
         (
-            "2 · frozen dialect payload",
-            f"{trial['dialect_id']} · symbolic {cell['symbolic_payload_hash']} · "
-            f"payload sha256 {cell['model_payload_sha256']}",
+            row
+            for row in profiles
+            if row.get("execution_surface") == run.execution_surface
+            and row.get("resolved_model_id") == run.resolved_model_id
+            and row.get("protocol_id") == run.protocol_id
+            and row.get("reasoning") == reasoning
         ),
-        ("3 · exact protocol prompt", f"{protocol.system_text}\n\n{prompt}"),
-        ("4 · recorded model response", trial.get("response_text", "")),
+        None,
+    )
+    if cell["modality"] == "text":
+        stimulus = f"<pre>{_e(cell['model_payload'])}</pre>"
+    else:
+        stimulus = (
+            f'<img src="assets/{_e(cell["asset_path"])}" '
+            f'alt="actual rendered stimulus {_e(cell["abstract_form_id"])}">'
+        )
+    profile_value = (
+        "not available"
+        if profile is None
+        else (
+            f"this trial contributes {int(bool(trial['correct']))} to the correct-count "
+            f"numerator; profile competence {profile.get('competence')}, coverage "
+            f"{profile.get('coverage')}, mean latency {profile.get('mean_latency_ms')} ms"
+        )
+    )
+    cards = (
         (
-            "5 · parser and score",
-            f"{trial['parse_status']} · prediction {trial['prediction']} · "
-            f"correct {trial['correct']}",
+            "1 · containment tree and frozen form",
+            f"<pre>{_e(json.dumps(form['abstract_form'], separators=(',', ':')))}</pre>"
+            f"<p>reference transcription <code>{_e(form['reference_transcription'])}</code>; "
+            f"normal value <strong>{_e(form['normal_value'])}</strong></p>",
         ),
+        (
+            "2 · actual rendered stimulus",
+            f"<div class=stimulus>{stimulus}</div><p>dialect <code>{_e(trial['dialect_id'])}"
+            f"</code>; family {_e(spec.family)}</p><p>symbolic hash "
+            f"<code>{_e(cell['symbolic_payload_hash'])}</code><br>payload sha256 "
+            f"<code>{_e(cell['model_payload_sha256'])}</code></p>",
+        ),
+        (
+            "3 · reading rule, protocol, and exact prompt",
+            f"<p><strong>reading rule</strong></p><pre>{_e(spec.reading_rule)}</pre>"
+            f"<p>protocol <code>{_e(protocol.protocol_id)}</code></p>"
+            f"<p><strong>system prompt</strong></p><pre>{_e(protocol.system_text)}</pre>"
+            f"<p><strong>user prompt</strong></p><pre>{_e(prompt)}</pre>"
+            f"<p>prompt hash <code>{_e(trial['prompt_hash'])}</code></p>",
+        ),
+        (
+            "4 · target and recorded response",
+            f"<p>target</p><pre>{_e(protocol.target_for(form))}</pre>"
+            f"<p>response</p><pre>{_e(trial.get('response_text', ''))}</pre>",
+        ),
+        (
+            "5 · parse and scorer identity",
+            f"<p>parse status <strong>{_e(trial['parse_status'])}</strong>; prediction "
+            f"<code>{_e(trial['prediction'])}</code></p><p>scorer "
+            f"<code>{_e(protocol.scorer_id)}@{_e(protocol.scorer_version)}</code>; correctness "
+            f"<strong>{_e(trial['correct'])}</strong></p>",
+        ),
+        ("6 · profile contribution", f"<p>{_e(profile_value)}</p>"),
     )
     return "".join(
-        f"<article class=card><h3>{_e(label)}</h3><pre>{_e(value)}</pre></article>"
-        for label, value in steps
+        f"<article class=card><h3>{_e(label)}</h3>{value}</article>" for label, value in cards
+    )
+
+
+def _accuracy(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "not run"
+    correct = sum(bool(row["correct"]) for row in rows)
+    return f"{correct}/{len(rows)} ({correct / len(rows):.0%})"
+
+
+def _coverage_matrices(
+    suite: LoadedSuite,
+    runs: list[RunManifest],
+    trials: list[dict[str, Any]],
+) -> tuple[str, str]:
+    run_columns = sorted(runs, key=lambda run: (run.protocol_id, run.run_id))
+    headings = "".join(f"<th>{_e(run.protocol_id)}</th>" for run in run_columns)
+    dialect_rows = []
+    for dialect_id, spec in sorted(suite.specs.items()):
+        values = []
+        for run in run_columns:
+            rows = [
+                row
+                for row in trials
+                if row["run_id"] == run.run_id and row["dialect_id"] == dialect_id
+            ]
+            values.append(f"<td>{_e(_accuracy(rows))}</td>")
+        dialect_rows.append(
+            f"<tr><td><code>{_e(dialect_id)}</code></td><td>{_e(spec.family)}</td>"
+            f"{''.join(values)}</tr>"
+        )
+    families = sorted({spec.family for spec in suite.specs.values()})
+    family_rows = []
+    for family in families:
+        dialect_ids = {
+            dialect_id for dialect_id, spec in suite.specs.items() if spec.family == family
+        }
+        values = []
+        for run in run_columns:
+            rows = [
+                row
+                for row in trials
+                if row["run_id"] == run.run_id and row["dialect_id"] in dialect_ids
+            ]
+            values.append(f"<td>{_e(_accuracy(rows))}</td>")
+        family_rows.append(f"<tr><td>{_e(family)}</td>{''.join(values)}</tr>")
+    dialect = (
+        "<table><thead><tr><th>dialect</th><th>family</th>"
+        f"{headings}</tr></thead><tbody>{''.join(dialect_rows)}</tbody></table>"
+    )
+    family = (
+        f"<table><thead><tr><th>family</th>{headings}</tr></thead>"
+        f"<tbody>{''.join(family_rows)}</tbody></table>"
+    )
+    return dialect, family
+
+
+def _reasoning_contrasts(profiles: list[dict[str, Any]]) -> str:
+    if not profiles:
+        return "<p class=notice>not run: no admitted profile.</p>"
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for profile in profiles:
+        key = (
+            str(profile["execution_surface"]),
+            str(profile["resolved_model_id"]),
+            str(profile["protocol_id"]),
+        )
+        groups.setdefault(key, []).append(profile)
+    rows = []
+    for key, values in sorted(groups.items()):
+        contrast = (
+            "admitted contrast"
+            if len({str(value["reasoning"]) for value in values}) > 1
+            else "not run: no second reasoning setting"
+        )
+        for value in values:
+            rows.append(
+                "<tr>"
+                f"<td>{_e(key[0])}</td><td>{_e(key[1])}</td><td>{_e(key[2])}</td>"
+                f"<td><code>{_e(value['reasoning'])}</code></td>"
+                f"<td>{_e(value.get('competence'))}</td>"
+                f"<td>{_e(value.get('within_family_invariance'))}</td>"
+                f"<td>{_e(value.get('mean_latency_ms'))}</td>"
+                f"<td>{_e(value.get('input_tokens'))}/{_e(value.get('output_tokens'))}/"
+                f"{_e(value.get('reasoning_tokens'))}</td><td>{_e(contrast)}</td></tr>"
+            )
+    return (
+        "<table><thead><tr><th>surface</th><th>model</th><th>protocol</th><th>reasoning</th>"
+        "<th>competence</th><th>invariance</th><th>mean latency ms</th>"
+        "<th>input/output/reasoning tokens</th><th>contrast status</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
     )
 
 
 def _runs_page(bundle: ReleaseBundle) -> str:
     runs = bundle.runs()
+    suite = load_suite(version=bundle.manifest["suite_version"], path=bundle.root / "suite.json")
+    trials = pq.read_table(bundle.root / "trials.parquet").to_pylist()
     grouped: dict[str, list[RunManifest]] = {"direct_api": [], "agent": []}
     for run in runs:
-        grouped.setdefault(run.execution_surface, []).append(run)
+        grouped["direct_api" if run.execution_surface == "direct_api" else "agent"].append(run)
 
     def table(items: list[RunManifest]) -> str:
         if not items:
             return "<p class=notice>no admitted runs on this execution surface.</p>"
         rows = "".join(
-            f"<tr><td><code>{_e(run.run_id)}</code></td><td>{_e(run.resolved_model_id)}</td>"
-            f"<td>{_e(run.protocol_id)}</td><td>{len(run.expected_trial_ids)}</td>"
-            f"<td>{run.cost_usd:.8f}</td><td>{_e(run.provider)}</td></tr>"
+            f"<tr><td><code>{_e(run.run_id)}</code></td>"
+            f"<td>{_e(run.requested_model_id)}<br>{_e(run.resolved_model_id)}</td>"
+            f"<td>{_e(run.protocol_id)}<br>{_e(run.dialect_set)}</td>"
+            f"<td>{_e(run.execution_surface)}<br>{_e(run.provider)}<br>"
+            f"<code>{_e(run.endpoint)}</code></td>"
+            f"<td><code>{_e(json.dumps(run.reasoning, sort_keys=True))}</code></td>"
+            f"<td>{run.latency_ms:.2f}</td><td>{run.token_usage.get('input_tokens', 0)}/"
+            f"{run.token_usage.get('output_tokens', 0)}/"
+            f"{run.token_usage.get('reasoning_tokens', 0)}</td>"
+            f"<td>{run.cost_usd:.8f}<br>{_e(run.billing_channel)}</td>"
+            f"<td>{_e(run.sdk_version)}</td></tr>"
             for run in items
         )
         return (
-            "<table><thead><tr><th>run</th><th>resolved model</th><th>protocol</th>"
-            "<th>trials</th><th>cost usd</th><th>provider</th></tr></thead>"
+            "<table><thead><tr><th>run</th><th>requested/resolved model</th>"
+            "<th>protocol/dialect</th><th>surface/provider/exact endpoint</th>"
+            "<th>reasoning</th><th>latency ms</th><th>input/output/reasoning tokens</th>"
+            "<th>cost usd/billing</th><th>sdk</th></tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
 
@@ -335,6 +488,24 @@ def _runs_page(bundle: ReleaseBundle) -> str:
             "mcnemar_exact_p",
         ),
     )
+    dialect_matrix, family_matrix = _coverage_matrices(suite, runs, trials)
+    provenance_rows = []
+    for run in runs:
+        exact_provenance = {
+            "provider": run.provider,
+            "endpoint": run.endpoint,
+            "routing_policy": run.routing_policy,
+            "privacy_policy": run.privacy_policy,
+            "catalog_retrieved_at": run.catalog_retrieved_at,
+            "catalog_row": run.catalog_row,
+        }
+        provenance_rows.append(
+            "<details><summary><code>"
+            f"{_e(run.run_id)}</code> exact endpoint and routing provenance</summary><pre>"
+            f"{_e(json.dumps(exact_provenance, indent=2, sort_keys=True))}"
+            "</pre></details>"
+        )
+    provenance = "".join(provenance_rows)
     return (
         "<h1>models + runs</h1><p class=lede>direct api calls and agent-mediated runs "
         "are different "
@@ -345,13 +516,22 @@ def _runs_page(bundle: ReleaseBundle) -> str:
         f"<section id=agent hidden>{table(grouped['agent'])}</section>"
         "<script>document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{"
         "document.querySelectorAll('main>section[id]').forEach(s=>s.hidden=s.id!==b.dataset.tab)})"
-        "</script><h2>worked result path</h2><p>one admitted result traced from the frozen "
+        "</script><h2>exact endpoint + routing provenance</h2>"
+        f"{provenance}"
+        "<h2>worked result path</h2><p>one admitted result traced from the frozen "
         "abstract form through its dialect payload and exact protocol to parsing and scoring.</p>"
         f"<section class=grid>{_worked_path(bundle, runs)}</section>"
         "<h2>competence + invariance profiles</h2>"
         f"{profile_table}"
         "<h2>controlled dialect effects</h2>"
         f"{effect_table}"
+        "<h2>dialect matrix</h2><p>every frozen dialect is explicit; absent cells say not run.</p>"
+        f"{dialect_matrix}"
+        "<h2>family matrix</h2><p>family aggregates are shown only where admitted trials exist.</p>"
+        f"{family_matrix}"
+        "<h2>reasoning contrasts</h2><p>competence, invariance, latency, and tokens stay "
+        "separate across reasoning settings.</p>"
+        f"{_reasoning_contrasts(profiles)}"
     )
 
 
@@ -385,7 +565,8 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
         f"<h1>human pilot</h1><p class=lede>{len(chosen)} local-only stimuli, balanced across "
         f"{len(protocol_ids)} frozen protocols. nothing is posted; export stays on your device.</p>"
         "<p class=notice>this informal pilot is not an admitted model run. use a pseudonymous "
-        "participant code; no data leaves this page.</p>"
+        "participant code; no data leaves this page. every exported HumanTrialRecord conforms "
+        "to the <a href=\"downloads/human-trial.schema.json\">published schema</a>.</p>"
         "<div class=card><label>participant code <input id=participant required></label> "
         "<label>laws of form familiarity <select id=familiarity><option value=none>none</option>"
         "<option value=some>some</option><option value=expert>expert</option>"
@@ -413,16 +594,18 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
         "answer.querySelectorAll('[data-v]').forEach(b=>b.onclick=()=>{"
         "answer.dataset.value=b.dataset.v})}document.querySelector('#next').onclick=()=>{"
         "const s=stimuli[i];const participant=document.querySelector('#participant').value.trim();"
+        "const familiarity_band=document.querySelector('#familiarity').value;"
         "if(!participant)return;const value=s.answer_kind==='normal_value'?"
         "answer.dataset.value:(answer.querySelector('textarea')?.value||'');"
-        "if(!value)return;rows.push({...s,response:value,confidence:"
+        "if(!value)return;rows.push({participant_code:participant,familiarity_band,"
+        "abstract_form_id:s.abstract_form_id,dialect_id:s.dialect_id,protocol_id:s.protocol_id,"
+        "answer:s.answer_kind==='normal_value'?value:null,"
+        "transcription:s.answer_kind!=='normal_value'?value:null,confidence:"
         "document.querySelector('#confidence').value,elapsed_ms:Math.round(performance.now()-started)});"
         "answer.dataset.value='';i++;started=performance.now();render()};"
         "document.querySelector('#download').onclick=()=>{"
-        "const blob=new Blob([JSON.stringify({schema_version:1,release_id:release,participant_code:"
-        "document.querySelector('#participant').value.trim(),familiarity:"
-        "document.querySelector('#familiarity').value,"
-        "responses:rows},null,2)],{type:'application/json'});"
+        "const blob=new Blob([JSON.stringify({schema_version:1,release_id:release,records:rows},"
+        "null,2)],{type:'application/json'});"
         "const a=document.createElement('a');a.href=URL.createObjectURL(blob);"
         "a.download='distinction-human-pilot.json';"
         "a.click();URL.revokeObjectURL(a.href)};render()</script>"

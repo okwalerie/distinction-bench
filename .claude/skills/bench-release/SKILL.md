@@ -15,8 +15,10 @@ stop before any paid request unless all are true:
 
 - `git status --short` is empty and the intended commit is checked out.
 - `uv run ruff check .` and `uv run pytest -q` pass.
-- the visual environment has cairo and
-  `uv run python -m lofbench.suites --verify-only` passes for all frozen cells.
+- the visual environment has native cairo and the pinned visual extra. on
+  ubuntu/debian, install `libcairo2` and `libpango-1.0-0`, run
+  `uv sync --group dev --extra visual`, then require
+  `uv run python -m lofbench.suites --verify-only` to pass for all frozen cells.
 - the env file is mode `0600` or stricter. never print its values.
 - authenticated model-endpoint and `/api/v1/endpoints/zdr` catalogs intersect
   on the exact model id, endpoint tag, and provider name. both rows are active,

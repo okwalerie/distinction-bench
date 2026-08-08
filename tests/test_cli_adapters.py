@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import os
 from dataclasses import replace
+from types import SimpleNamespace
 
 from test_runner import _task_and_run
 
-from dbench.agent_cli import ClaudeCliExecutor, CodexCliExecutor
-from dbench.cli import _executor
+from dbench.agent_cli import ClaudeCliExecutor, CodexCliExecutor, agent_subprocess_env
+from dbench.cli import _executor, _load_secret_env
 from lofbench.run_models import ExecutionRequest
 
 
 def test_application_dispatches_both_subscription_cli_adapters():
     _task, run = _task_and_run()
-    assert isinstance(_executor(replace(run, execution_surface="codex_cli")), CodexCliExecutor)
-    assert isinstance(_executor(replace(run, execution_surface="claude_cli")), ClaudeCliExecutor)
+    assert isinstance(
+        _executor(replace(run, execution_surface="codex_cli"), secrets={}), CodexCliExecutor
+    )
+    assert isinstance(
+        _executor(replace(run, execution_surface="claude_cli"), secrets={}), ClaudeCliExecutor
+    )
 
 
 def test_cli_adapter_commands_pin_model_schema_and_tool_policy(tmp_path):
@@ -29,14 +35,58 @@ def test_cli_adapter_commands_pin_model_schema_and_tool_policy(tmp_path):
     output = tmp_path / "output.json"
     schema.write_text('{"type":"object"}')
 
-    codex = CodexCliExecutor().argv(request, schema, output)
+    codex = CodexCliExecutor(environment={}).argv(request, schema, output)
     assert codex[:2] == ["codex", "exec"]
     assert ["--model", run.requested_model_id] == codex[codex.index("--model") :][:2]
     assert ["--sandbox", "read-only"] == codex[codex.index("--sandbox") :][:2]
     assert ["--output-schema", str(schema)] == codex[codex.index("--output-schema") :][:2]
 
-    claude = ClaudeCliExecutor().argv(request, schema, output)
+    claude = ClaudeCliExecutor(environment={}).argv(request, schema, output)
     assert claude[:2] == ["claude", "-p"]
     assert ["--model", run.requested_model_id] == claude[claude.index("--model") :][:2]
     assert ["--tools", ""] == claude[claude.index("--tools") :][:2]
     assert ["--json-schema", schema.read_text()] == claude[claude.index("--json-schema") :][:2]
+
+
+def test_agent_subprocess_receives_explicit_environment_without_sentinels(
+    tmp_path, monkeypatch
+):
+    task, run = _task_and_run()
+    sample = list(task.dataset.samples)[0]
+    request = ExecutionRequest(
+        run=run,
+        task=task,
+        sample=sample,
+        attempt=1,
+        log_dir=tmp_path / "logs",
+    )
+    openrouter_sentinel = "sentinel-openrouter-secret"
+    dbench_sentinel = "sentinel-dbench-secret"
+    monkeypatch.setenv("OPENROUTER_API_KEY", openrouter_sentinel)
+    monkeypatch.setenv("DBENCH_SECRET", dbench_sentinel)
+    captured = {}
+
+    def fake_run(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=1, stdout="", stderr="failed safely")
+
+    monkeypatch.setattr("dbench.agent_cli.subprocess.run", fake_run)
+    environment = agent_subprocess_env(secret_names={"DBENCH_SECRET"})
+    CodexCliExecutor(environment=environment).execute(request)
+
+    assert "env" in captured
+    child_environment = captured["env"]
+    assert "OPENROUTER_API_KEY" not in child_environment
+    assert "DBENCH_SECRET" not in child_environment
+    assert openrouter_sentinel not in child_environment.values()
+    assert dbench_sentinel not in child_environment.values()
+
+
+def test_env_file_loading_does_not_mutate_process_environment(tmp_path, monkeypatch):
+    env_file = tmp_path / "dbench.env"
+    env_file.write_text("OPENROUTER_API_KEY=local-only-sentinel\n")
+    env_file.chmod(0o600)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    assert _load_secret_env(env_file) == {"OPENROUTER_API_KEY": "local-only-sentinel"}
+    assert "OPENROUTER_API_KEY" not in os.environ

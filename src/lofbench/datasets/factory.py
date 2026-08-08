@@ -81,10 +81,10 @@ def create_suite_dataset(
             ]
         else:
             sample_input = f"{user_text}\n\nstimulus:\n{payload}"
-        prompt_material = (
-            protocol.system_text + "\x00" + user_text + "\x00" + cell["model_payload_sha256"]
+        prompt_hash = protocol.prompt_hash(
+            reading_rule=spec.reading_rule,
+            model_payload_sha256=cell["model_payload_sha256"],
         )
-        prompt_hash = sha256(prompt_material.encode()).hexdigest()
         target = protocol.target_for(form)
         samples.append(
             Sample(

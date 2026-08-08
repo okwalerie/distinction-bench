@@ -186,11 +186,7 @@ class RunOrchestrator:
                     continue
                 if result.resolved_model_id != run.resolved_model_id:
                     raise RuntimeError("provider resolved a different model id")
-                allowed_endpoints = {
-                    run.endpoint,
-                    run.catalog_row.get("selected_endpoint", {}).get("provider_name"),
-                }
-                if result.endpoint not in allowed_endpoints:
+                if result.endpoint != run.endpoint:
                     raise RuntimeError("provider endpoint drift or fallback detected")
                 parse_status, prediction, correct = protocol.parse_answer(
                     result.response_text,

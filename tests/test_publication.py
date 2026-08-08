@@ -7,6 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from lofbench.human_trials import write_human_trial_schema
 from lofbench.publication import (
     archive_release,
     export_inspect_bundle,
@@ -50,6 +51,15 @@ def test_scan_finds_actual_environment_secret_inside_compressed_parquet(
     assert secret not in str(raised.value)
 
 
+def test_scan_accepts_explicit_secret_environment_without_global_mutation(tmp_path: Path):
+    secret = "explicit-seal-only-secret"
+    (tmp_path / "bad.json").write_text(json.dumps({"response": f"echo {secret}"}))
+    with pytest.raises(RuntimeError) as raised:
+        scan_publication(tmp_path, environment={"OPENROUTER_API_KEY": secret})
+    assert "bad.json" in str(raised.value)
+    assert secret not in str(raised.value)
+
+
 def test_public_sanitizer_drops_metadata_and_redacts_secret_values(monkeypatch):
     secret = "opaque-sanitizer-secret"
     monkeypatch.setenv("OPENROUTER_API_KEY", secret)
@@ -81,6 +91,7 @@ def test_inspect_export_is_compact_and_scanned(tmp_path: Path):
     release.mkdir()
     (release / "suite.json").write_text("{}")
     (release / "protocols.json").write_text("{}")
+    write_human_trial_schema(release / "human-trial.schema.json")
     for name in ("runs.jsonl", "transcripts.jsonl", "ledger.jsonl"):
         (release / name).write_text("")
     for name in ("trials.parquet", "calls.parquet", "profiles.parquet", "effects.parquet"):

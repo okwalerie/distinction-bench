@@ -150,7 +150,7 @@ def test_direct_executor_disables_inspect_and_sdk_retries(monkeypatch, tmp_path)
         return []
 
     monkeypatch.setattr(inspect_ai, "eval", inspect_eval)
-    result = OpenRouterInspectExecutor().execute(
+    result = OpenRouterInspectExecutor(api_key="opaque-test-key").execute(
         ExecutionRequest(
             run=run,
             task=task,
@@ -164,3 +164,4 @@ def test_direct_executor_disables_inspect_and_sdk_retries(monkeypatch, tmp_path)
     assert captured["max_retries"] == 0
     assert captured["model_args"]["max_retries"] == 0
     assert captured["model_args"]["provider"] == run.routing_policy
+    assert captured["model_args"]["api_key"] == "opaque-test-key"

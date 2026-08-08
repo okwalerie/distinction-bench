@@ -6,7 +6,7 @@ import base64
 import json
 import shutil
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -16,14 +16,17 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from lofbench.protocols import load_protocol_registry, write_protocol_registry
+from lofbench.human_trials import HUMAN_TRIAL_EXPORT_SCHEMA, write_human_trial_schema
+from lofbench.protocols import ProtocolSpec, load_protocol_registry, write_protocol_registry
 from lofbench.publication import scan_publication
 from lofbench.records import CallRecord, LedgerEvent, RunManifest, TrialRecord
 from lofbench.renderers.pipeline.composed import ComposedRenderer
-from lofbench.suites import DEFAULT_SUITE_VERSION, SUITES_DIR, load_suite
+from lofbench.run_models import trial_id_for
+from lofbench.suites import DEFAULT_SUITE_VERSION, SUITES_DIR, LoadedSuite, load_suite
 
-BUNDLE_SCHEMA_VERSION = 2
+BUNDLE_SCHEMA_VERSION = 3
 _ROOT_FILES = {
+    "human-trial.schema.json",
     "release.json",
     "suite.json",
     "protocols.json",
@@ -126,6 +129,7 @@ class ReleaseBundle:
         suite = load_suite(path=source_suite)
         shutil.copyfile(source_suite, root / "suite.json")
         write_protocol_registry(root / "protocols.json")
+        write_human_trial_schema(root / "human-trial.schema.json")
         (root / "runs.jsonl").write_text("")
         (root / "transcripts.jsonl").write_text("")
         (root / "ledger.jsonl").write_text("")
@@ -265,15 +269,12 @@ class ReleaseBundle:
         if run.status != "complete":
             raise RuntimeError("only complete runs can be admitted")
         rows = [trial.to_dict() for trial in trials]
+        self._validate_trial_provenance(run, suite, protocols[run.protocol_id], rows)
         trial_ids = [row["trial_id"] for row in rows]
         if len(trial_ids) != len(set(trial_ids)):
             raise RuntimeError("run contains duplicate trial ids")
         if set(trial_ids) != set(run.expected_trial_ids):
             raise RuntimeError("run is incomplete for its declared trial ids")
-        if any(row["run_id"] != run.run_id for row in rows):
-            raise RuntimeError("trial run_id mismatch")
-        if any(row["resolved_model_id"] != run.resolved_model_id for row in rows):
-            raise RuntimeError("resolved model drift within run")
         call_values = list(calls)
         ledger_values = list(ledger_events)
         self._validate_run_accounting(run, rows, call_values, ledger_values)
@@ -301,6 +302,58 @@ class ReleaseBundle:
                 handle.write(_json_line(transcript))
         self.manifest["admitted_run_ids"] = sorted([*self.manifest["admitted_run_ids"], run.run_id])
         self._write_manifest()
+
+    @staticmethod
+    def _validate_trial_provenance(
+        run: RunManifest,
+        suite: LoadedSuite,
+        protocol: ProtocolSpec,
+        trials: list[dict[str, Any]],
+    ) -> None:
+        if run.form_set not in suite.form_sets:
+            raise RuntimeError(f"run uses unknown frozen form set {run.form_set!r}")
+        if run.dialect_set not in suite.specs:
+            raise RuntimeError(f"run uses unknown frozen dialect {run.dialect_set!r}")
+        form_ids = tuple(suite.form_sets[run.form_set])
+        authoritative_trial_ids = tuple(
+            trial_id_for(run.run_id, form_id, run.dialect_set) for form_id in form_ids
+        )
+        if run.expected_trial_ids != authoritative_trial_ids:
+            raise RuntimeError("run expected trial ids do not match its frozen form set")
+        forms = {form["abstract_form_id"]: form for form in suite.forms}
+        cells = {
+            (cell["abstract_form_id"], cell["dialect_id"]): cell for cell in suite.cells
+        }
+        dialect = suite.specs[run.dialect_set]
+        allowed_forms = set(form_ids)
+        for trial in trials:
+            form_id = trial["abstract_form_id"]
+            if form_id not in allowed_forms:
+                raise RuntimeError("trial abstract_form_id is not in the run's frozen form set")
+            form = forms[form_id]
+            cell = cells[(form_id, run.dialect_set)]
+            authorities = {
+                "trial_id": trial_id_for(run.run_id, form_id, run.dialect_set),
+                "run_id": run.run_id,
+                "suite_version": run.suite_version,
+                "dialect_id": run.dialect_set,
+                "protocol_id": run.protocol_id,
+                "execution_surface": run.execution_surface,
+                "requested_model_id": run.requested_model_id,
+                "resolved_model_id": run.resolved_model_id,
+                "provider": run.provider,
+                "endpoint": run.endpoint,
+                "prompt_hash": protocol.prompt_hash(
+                    reading_rule=dialect.reading_rule,
+                    model_payload_sha256=cell["model_payload_sha256"],
+                ),
+                "symbolic_payload_hash": cell["symbolic_payload_hash"],
+                "model_payload_sha256": cell["model_payload_sha256"],
+                "normal_value": form["normal_value"],
+            }
+            for field, expected in authorities.items():
+                if trial[field] != expected:
+                    raise RuntimeError(f"trial provenance mismatch for {field}")
 
     @staticmethod
     def _validate_run_accounting(
@@ -395,8 +448,12 @@ class ReleaseBundle:
     def validate(self) -> None:
         if set(path.name for path in self.root.iterdir() if path.is_file()) != _ROOT_FILES:
             raise RuntimeError("release root files do not match the bundle schema")
-        load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
-        load_protocol_registry(self.root / "protocols.json")
+        if json.loads((self.root / "human-trial.schema.json").read_text()) != (
+            HUMAN_TRIAL_EXPORT_SCHEMA
+        ):
+            raise RuntimeError("human trial schema does not match the authoritative schema")
+        suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
+        protocols = load_protocol_registry(self.root / "protocols.json")
         runs = self.runs()
         if len({run.run_id for run in runs}) != len(runs):
             raise RuntimeError("duplicate run ids")
@@ -423,9 +480,16 @@ class ReleaseBundle:
             ):
                 raise RuntimeError(f"admitted run {run.run_id} is incomplete")
             if run.status == "admitted":
+                run_trials = [row for row in trial_rows if row["run_id"] == run.run_id]
+                self._validate_trial_provenance(
+                    run,
+                    suite,
+                    protocols[run.protocol_id],
+                    run_trials,
+                )
                 self._validate_run_accounting(
                     run,
-                    [row for row in trial_rows if row["run_id"] == run.run_id],
+                    run_trials,
                     [CallRecord(**row) for row in call_rows if row["run_id"] == run.run_id],
                     [event for event in ledger_rows if event.run_id == run.run_id],
                 )
@@ -592,10 +656,60 @@ class ReleaseBundle:
                 or any(row["coverage"] != 1.0 for row in profiles)
             ):
                 raise RuntimeError("sealed sample requires complete derived profiles")
-            if not any((self.root / "site").iterdir()):
-                raise RuntimeError("sealed sample requires its static site")
+            site = self.root / "site"
+            required_site_files = {
+                "index.html",
+                "forms.html",
+                "atlas.html",
+                "runs.html",
+                "human.html",
+                "downloads.html",
+                "CNAME",
+                "downloads/human-trial.schema.json",
+            }
+            missing = [
+                relative for relative in required_site_files if not (site / relative).is_file()
+            ]
+            if missing:
+                raise RuntimeError(f"sealed sample site is missing required artifacts: {missing}")
+            required_markers = {
+                "runs.html": (
+                    "containment tree and frozen form",
+                    "actual rendered stimulus",
+                    "reading rule, protocol, and exact prompt",
+                    "target and recorded response",
+                    "parse and scorer identity",
+                    "profile contribution",
+                    "dialect matrix",
+                    "family matrix",
+                    "reasoning contrasts",
+                    "not run",
+                    "exact endpoint + routing provenance",
+                    "input/output/reasoning tokens",
+                ),
+                "human.html": (
+                    "HumanTrialRecord",
+                    "familiarity_band",
+                    "elapsed_ms",
+                    "human-trial.schema.json",
+                ),
+                "forms.html": ("system prompt", "possible confounds", "frozen form sets"),
+                "downloads.html": ("sha256", "caveats", "human-trial.schema.json"),
+            }
+            for relative, markers in required_markers.items():
+                page = (site / relative).read_text()
+                absent = [marker for marker in markers if marker not in page]
+                if absent:
+                    raise RuntimeError(
+                        f"sealed sample site {relative} lacks required evidence: {absent}"
+                    )
 
-    def seal(self, *, repository_root: Path) -> None:
+    def seal(
+        self,
+        *,
+        repository_root: Path,
+        publication_environment: Mapping[str, str] | None = None,
+    ) -> None:
         self._require_working()
         self.require_repository_state(repository_root)
         expected = set(self.manifest["expected_run_ids"])
@@ -608,7 +722,7 @@ class ReleaseBundle:
             _read_rows(self.root / "calls.parquet"),
             sealing=True,
         )
-        scan_publication(self.root)
+        scan_publication(self.root, environment=publication_environment)
         self.manifest["status"] = "sealed"
         self.manifest["sealed_at"] = _utc_now()
         self.manifest["files"] = {

@@ -15,7 +15,7 @@ Every expression reduces to either `()` (marked) or void (unmarked). The benchma
 
 ```bash
 # Environment setup
-uv sync                    # Install dependencies
+uv sync --group dev        # Install the canonical development dependency group
 uv run pytest              # Run tests
 uv run pytest -x -v        # Run tests, stop on first failure, verbose
 uv run pytest tests/test_core.py::test_name  # Run single test
@@ -24,14 +24,12 @@ uv run pytest tests/test_core.py::test_name  # Run single test
 uv run ruff check .        # Lint
 uv run ruff format .       # Format
 
-# Frozen suite and public release application
+# Frozen suite and public release application (Ubuntu/Debian visual gate)
+sudo apt-get update && sudo apt-get install -y libcairo2 libpango-1.0-0
+uv sync --group dev --extra visual
 uv run python -m lofbench.suites --verify-only
 uv run python -m dbench --help
 uv run pytest -q tests/test_runner.py tests/test_release_bundle.py tests/test_static_site.py
-
-# Pre-commit
-pre-commit install         # Install hooks
-pre-commit run --all-files # Run manually
 ```
 
 Public runs go through `python -m dbench`; do not invoke Inspect directly for release data. The application is dry by default, loads secrets only from a mode-0600 env file, and requires `--approve-paid-run --max-spend-usd 30` for a paid run.
