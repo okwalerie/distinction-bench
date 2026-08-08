@@ -15,6 +15,9 @@ from lofbench.core import (
     string_depth,
     string_to_form,
 )
+from lofbench.protocols import PROTOCOLS, ProtocolSpec, get_protocol
+from lofbench.records import CallRecord, RunManifest, TrialRecord
+from lofbench.release_bundle import ReleaseBundle
 from lofbench.renderers import (
     FormRenderer,
     RenderedForm,
@@ -46,6 +49,14 @@ __all__ = [
     "RenderedForm",
     "get_renderer",
     "list_renderers",
+    # Public release interfaces
+    "ProtocolSpec",
+    "PROTOCOLS",
+    "get_protocol",
+    "RunManifest",
+    "TrialRecord",
+    "CallRecord",
+    "ReleaseBundle",
 ]
 
 __version__ = "0.2.0"
