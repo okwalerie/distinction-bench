@@ -25,6 +25,7 @@ from lofbench.run_models import (
     InMemoryExecutor,
     plan_run,
 )
+from lofbench.state_io import read_jsonl
 from lofbench.suites import DEFAULT_SUITE_REGISTRY
 from lofbench.tasks.single import single_lof_task
 
@@ -101,24 +102,11 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
                 transport_error=values["error_type"] or "TransportError",
             ),
         )
-    elif values["provider_error"]:
-        sources = (
-            ProviderEvidenceSource.capture_http(
-                label=OPENROUTER_CHAT_SOURCE,
-                sequence=1,
-                request_started_at=started.isoformat(),
-                response_finished_at=finished.isoformat(),
-                request_method="POST",
-                request_url="https://openrouter.ai/api/v1/chat/completions",
-                http_status=503,
-                response_headers=(),
-                raw_body=b'{"error":{"type":"busy"}}',
-            ),
-        )
     else:
         provider_name = (
             "Example Provider" if values["endpoint"] == "example-provider" else values["endpoint"]
         )
+        finish_reason = "error" if values["provider_error"] else "stop"
         generation = {
             "id": values["provider_request_id"],
             "model": values["resolved_model_id"],
@@ -127,10 +115,30 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
             "native_tokens_completion": values["output_tokens"],
             "native_tokens_reasoning": values["reasoning_tokens"],
             "latency": values["latency_ms"],
-            "finish_reason": "stop",
+            "finish_reason": finish_reason,
         }
+        if values["provider_error"]:
+            generation["error"] = {"type": values["error_type"] or "busy"}
         if values["observed_cost_usd"] is not None:
             generation["total_cost"] = values["observed_cost_usd"]
+        chat = {
+            "id": values["provider_request_id"],
+            "model": values["resolved_model_id"],
+            "provider": provider_name,
+            "choices": [
+                {
+                    "message": {"content": values["response_text"]},
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": values["input_tokens"],
+                "completion_tokens": values["output_tokens"],
+                "completion_tokens_details": {"reasoning_tokens": values["reasoning_tokens"]},
+            },
+        }
+        if values["provider_error"]:
+            chat["error"] = {"type": values["error_type"] or "busy"}
         sources = (
             ProviderEvidenceSource.capture_http(
                 label=OPENROUTER_CHAT_SOURCE,
@@ -141,26 +149,7 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
                 request_url="https://openrouter.ai/api/v1/chat/completions",
                 http_status=200,
                 response_headers=(),
-                raw_body=json.dumps(
-                    {
-                        "id": values["provider_request_id"],
-                        "model": values["resolved_model_id"],
-                        "provider": provider_name,
-                        "choices": [
-                            {
-                                "message": {"content": values["response_text"]},
-                                "finish_reason": "stop",
-                            }
-                        ],
-                        "usage": {
-                            "prompt_tokens": values["input_tokens"],
-                            "completion_tokens": values["output_tokens"],
-                            "completion_tokens_details": {
-                                "reasoning_tokens": values["reasoning_tokens"]
-                            },
-                        },
-                    }
-                ).encode(),
+                raw_body=json.dumps(chat).encode(),
             ),
             ProviderEvidenceSource.capture_http(
                 label=OPENROUTER_GENERATION_SOURCE,
@@ -191,13 +180,37 @@ def _ledger(tmp_path, *, global_cap: float = 30.0, cohort_cap: float = 30.0):
     )
 
 
-def _orchestrator(tmp_path, executor, **ledger_caps):
+def _orchestrator(
+    tmp_path,
+    executor,
+    *,
+    accounting_recoverer=None,
+    transition_observer=None,
+    **ledger_caps,
+):
     return RunOrchestrator(
         tmp_path / "run-state",
         executor,
         ledger=_ledger(tmp_path, **ledger_caps),
         evidence_projector=project_openrouter_evidence,
+        accounting_recoverer=accounting_recoverer,
+        transition_observer=transition_observer,
     )
+
+
+class _SimulatedCrash(RuntimeError):
+    pass
+
+
+class _CrashOnceAfter:
+    def __init__(self, transition: str) -> None:
+        self.transition = transition
+        self.crashed = False
+
+    def __call__(self, transition: str, _call_id: str) -> None:
+        if transition == self.transition and not self.crashed:
+            self.crashed = True
+            raise _SimulatedCrash(transition)
 
 
 def test_plain_run_is_a_dry_run(tmp_path):
@@ -329,6 +342,84 @@ def test_complete_resume_does_not_duplicate_paid_calls(tmp_path):
     assert resume.calls == []
 
 
+@pytest.mark.parametrize(
+    "transition",
+    ["reserved", "evidence", "call", "settled", "trial", "run_manifest"],
+)
+def test_resume_converges_after_every_durable_append_boundary(tmp_path, transition):
+    task, run = _task_and_run()
+    executor = InMemoryExecutor([_success()] * 5)
+    crash = _CrashOnceAfter(transition)
+    orchestrator = _orchestrator(
+        tmp_path,
+        executor,
+        transition_observer=crash,
+    )
+    with pytest.raises(_SimulatedCrash, match=transition):
+        orchestrator.execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+    completed = orchestrator.execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+    assert completed.status == "complete"
+    assert len(executor.calls) == 5
+    assert len({request.call_id for request in executor.calls}) == 5
+    assert _ledger(tmp_path).totals() == pytest.approx((0.005, 0.0))
+
+
+def test_billed_provider_error_settles_exactly_without_a_trial(tmp_path):
+    full_task, _full_run = _task_and_run()
+    sample = list(full_task.dataset.samples)[0]
+    task = Task(
+        dataset=MemoryDataset(samples=[sample]),
+        solver=full_task.solver,
+        scorer=full_task.scorer,
+        config=full_task.config,
+        metadata=full_task.metadata,
+    )
+    planned = plan_run(
+        full_task,
+        suite_version="v1",
+        form_set="probe",
+        dialect_id="parens.reference-v1",
+        protocol_id="reduce-infer-v1",
+        execution=replace(_execution(), max_transport_attempts=1),
+    )
+    run = replace(planned, expected_trial_ids=planned.expected_trial_ids[:1])
+    executor = InMemoryExecutor(
+        [
+            _success(
+                provider_error=True,
+                error_type="provider_busy",
+                observed_cost_usd=0.004,
+            )
+        ]
+    )
+    result = _orchestrator(tmp_path, executor).execute(
+        run, task, approve_paid_run=True, max_spend_usd=30.0
+    )
+    assert result.status == "probed"
+    assert result.cost_usd == pytest.approx(0.004)
+    assert not (tmp_path / "run-state/trials.jsonl").exists()
+    calls = read_jsonl(tmp_path / "run-state/calls.jsonl")
+    assert calls[0]["status"] == "provider_error"
+    assert calls[0]["observed_cost_usd"] == pytest.approx(0.004)
+    assert calls[0]["input_tokens"] == 100
+    assert _ledger(tmp_path).totals() == pytest.approx((0.004, 0.0))
+
+
+def test_billed_provider_error_can_precede_one_scored_completion(tmp_path):
+    task, run = _task_and_run()
+    executor = InMemoryExecutor(
+        [_success(provider_error=True, observed_cost_usd=0.004), _success()] + [_success()] * 4
+    )
+    result = _orchestrator(tmp_path, executor).execute(
+        run, task, approve_paid_run=True, max_spend_usd=30.0
+    )
+    assert result.status == "complete"
+    assert result.attempts == 6
+    trials = read_jsonl(tmp_path / "run-state/trials.jsonl")
+    assert trials[0]["attempt_count"] == 2
+    assert _ledger(tmp_path).totals() == pytest.approx((0.009, 0.0))
+
+
 def test_missing_usage_or_cost_stops_immediately(tmp_path):
     task, run = _task_and_run()
     executor = InMemoryExecutor([_success(observed_cost_usd=None)])
@@ -349,6 +440,48 @@ def test_missing_usage_or_cost_stops_immediately(tmp_path):
             run, task, approve_paid_run=True, max_spend_usd=30.0
         )
     assert resume.calls == []
+
+
+def test_resume_replays_a_recovered_evidence_revision_after_crash(tmp_path):
+    full_task, full_run = _task_and_run()
+    sample = list(full_task.dataset.samples)[0]
+    task = Task(
+        dataset=MemoryDataset(samples=[sample]),
+        solver=full_task.solver,
+        scorer=full_task.scorer,
+        config=full_task.config,
+        metadata=full_task.metadata,
+    )
+    run = replace(full_run, expected_trial_ids=full_run.expected_trial_ids[:1])
+    first = InMemoryExecutor([_success(observed_cost_usd=None)])
+    with pytest.raises(RuntimeError, match="accounting is unknown"):
+        _orchestrator(tmp_path, first).execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+
+    recovered_evidence = _success().provider_evidence
+    recovery_calls = 0
+
+    def recover(_evidence, _run):
+        nonlocal recovery_calls
+        recovery_calls += 1
+        return recovered_evidence
+
+    crash = _CrashOnceAfter("evidence")
+    resume = _orchestrator(
+        tmp_path,
+        InMemoryExecutor([]),
+        accounting_recoverer=recover,
+        transition_observer=crash,
+    )
+    with pytest.raises(_SimulatedCrash, match="evidence"):
+        resume.execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+    completed = resume.execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+    assert completed.status == "complete"
+    assert recovery_calls == 1
+    assert resume.executor.calls == []
+    assert [row["revision"] for row in read_jsonl(tmp_path / "run-state/transcripts.jsonl")] == [
+        0,
+        1,
+    ]
 
 
 def test_single_attempt_mode_never_retries_a_sample_run_call(tmp_path):

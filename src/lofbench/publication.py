@@ -13,6 +13,8 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from lofbench.provider_evidence import validate_response_headers
+
 _SECRET_MARKERS = {
     b"OPENROUTER_API_KEY=": "openrouter assignment",
     b"ANTHROPIC_API_KEY=": "anthropic assignment",
@@ -118,6 +120,11 @@ def _structured_findings(
             child_location = f"{location}.{name}"
             if name.lower() in _DENIED_METADATA_FIELDS:
                 findings.append(f"{child_location}: unapproved metadata field")
+            if name.lower() == "response_headers":
+                try:
+                    validate_response_headers(child)
+                except RuntimeError:
+                    findings.append(f"{child_location}: unapproved response header")
             findings.extend(
                 _structured_findings(
                     child,

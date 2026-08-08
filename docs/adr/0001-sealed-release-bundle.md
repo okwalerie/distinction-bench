@@ -31,7 +31,12 @@ function and is reconstructed during planning, admission, and validation.
 each provider call has one append-only `AttemptEvidence` revision chain. every row retains an immutable,
 deterministically labelled `ProviderEvidenceEnvelope`: the exact raw chat response,
 every exact raw generation-accounting lookup response (including failed polls), http
-status and headers, raw bytes and parse outcome, and local request/response timestamps.
+status, raw bytes and parse outcome, local request/response timestamps, and only the
+allowlisted `content-type`, `x-generation-id`, `x-request-id`, and
+`x-openrouter-request-id` response metadata. the generation id is an accounting
+lookup key when an error body has no id. authorization, cookie, proxy-authentication,
+api-key, and unknown response headers are discarded before persistence and rejected
+by publication validation.
 one pure projector derives completion, request id, resolved model, provider, endpoint,
 usage, cost, latency, status, and error. orchestration consumes only that projection;
 admission reruns it and compares every call/trial field. incomplete accounting remains
@@ -41,6 +46,15 @@ successful lookup appends a digest-linked evidence revision and call revision wi
 resending inference. the direct openrouter adapter
 uses the provider's chat-completions endpoint rather than treating an opaque inspect
 sample dump as raw authority. missing generation evidence fails closed.
+
+run execution is an idempotent reconcile-before-act state machine. reservation,
+evidence, call, settlement, trial, and run-manifest writes are separate durable
+transitions. each start or resume replays the evidence revision chains, effective calls,
+ledger, and trials; it completes every derivable transition before reserving another
+attempt. a deterministic call id is the execution key, so resumption at any durable
+append boundary converges without a second inference for that call. provider errors
+settle the exact generation-reported cost and tokens but never create a trial; if that
+accounting cannot be proven, the reservation remains outstanding.
 
 `CallRecord` links the envelope digest and the completed `TrialRecord` links the final
 attempt. trial error semantics are replayed from that evidence. admission requires

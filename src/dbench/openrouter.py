@@ -45,6 +45,20 @@ def _headers(response: Any) -> tuple[tuple[str, str], ...]:
     return tuple((str(name), str(value)) for name, value in rows)
 
 
+def _generation_id(source: ProviderEvidenceSource) -> str:
+    payload = source.payload()
+    body_id = payload.get("id") if isinstance(payload, dict) else None
+    if not isinstance(body_id, str) or not body_id:
+        body_id = None
+    header_ids = [value for name, value in source.response_headers if name == "x-generation-id"]
+    if len(set(header_ids)) > 1:
+        return ""
+    header_id = header_ids[0] if header_ids else None
+    if body_id is not None and header_id is not None and body_id != header_id:
+        return ""
+    return body_id or header_id or ""
+
+
 def _read_response(response: Any) -> tuple[bytes, Exception | None]:
     chunks: list[bytes] = []
     try:
@@ -376,9 +390,8 @@ class OpenRouterExecutor(TrialExecutor):
             },
         )
         sources = [chat_source]
-        chat = chat_source.payload()
-        request_id = chat.get("id") if isinstance(chat, dict) else None
-        if isinstance(request_id, str) and request_id:
+        request_id = _generation_id(chat_source)
+        if request_id:
             sources.extend(self._generation_sources(request_id))
         return ExecutionResult(
             provider_evidence=ProviderEvidenceEnvelope(
@@ -397,9 +410,8 @@ class OpenRouterExecutor(TrialExecutor):
             (source for source in evidence.sources if source.label == OPENROUTER_CHAT_SOURCE),
             None,
         )
-        payload = chat.payload() if chat is not None else None
-        request_id = payload.get("id") if isinstance(payload, dict) else None
-        if not isinstance(request_id, str) or not request_id:
+        request_id = _generation_id(chat) if chat is not None else ""
+        if not request_id:
             return evidence
         prior = [
             source for source in evidence.sources if source.label == OPENROUTER_GENERATION_SOURCE

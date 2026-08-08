@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +16,45 @@ AttemptStatus = Literal[
     "transport_error",
     "accounting_unknown",
 ]
+
+AUDIT_SAFE_RESPONSE_HEADERS = frozenset(
+    {"content-type", "x-generation-id", "x-request-id", "x-openrouter-request-id"}
+)
+
+
+def sanitize_response_headers(
+    rows: Any,
+) -> tuple[tuple[str, str], ...]:
+    """Retain only deterministic response metadata safe for publication."""
+    sanitized: list[tuple[str, str]] = []
+    try:
+        for row in rows:
+            if len(row) != 2 or not all(isinstance(item, str) for item in row):
+                continue
+            name, value = row
+            normalized = name.lower()
+            if normalized in AUDIT_SAFE_RESPONSE_HEADERS:
+                sanitized.append((normalized, value))
+    except TypeError:
+        return ()
+    return tuple(sanitized)
+
+
+def validate_response_headers(rows: Any) -> tuple[tuple[str, str], ...]:
+    """Reject publication data containing unapproved response metadata."""
+    try:
+        headers = tuple(tuple(row) for row in rows)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("provider evidence response headers are invalid") from exc
+    if any(
+        len(row) != 2
+        or not all(isinstance(item, str) for item in row)
+        or row[0] != row[0].lower()
+        or row[0] not in AUDIT_SAFE_RESPONSE_HEADERS
+        for row in headers
+    ):
+        raise RuntimeError("provider evidence response headers are invalid")
+    return headers
 
 
 @dataclass(frozen=True)
@@ -78,7 +118,7 @@ class ProviderEvidenceSource:
             request_method=request_method,
             request_url=request_url,
             http_status=http_status,
-            response_headers=tuple(response_headers),
+            response_headers=sanitize_response_headers(response_headers),
             raw_body_base64=base64.b64encode(raw_body).decode("ascii"),
             body_text=body_text,
             text_decoding=text_decoding,
@@ -174,11 +214,9 @@ class ProviderEvidenceSource:
             raise RuntimeError("provider evidence http status is invalid")
         try:
             raw_body = base64.b64decode(value["raw_body_base64"], validate=True)
-            headers = tuple(tuple(row) for row in value["response_headers"])
+            headers = validate_response_headers(value["response_headers"])
         except (ValueError, TypeError) as exc:
             raise RuntimeError("provider evidence raw body or headers are invalid") from exc
-        if any(len(row) != 2 or not all(isinstance(item, str) for item in row) for row in headers):
-            raise RuntimeError("provider evidence headers are invalid")
         body_text, text_decoding, json_outcome = cls._body_projection(raw_body)
         if (
             body_text != value["body_text"]
@@ -289,14 +327,27 @@ def fail_closed_projection(
     source = evidence.sources[0] if evidence.sources else None
     latency = 0.0
     if source is not None:
-        latency = (
-            datetime.fromisoformat(source.response_finished_at)
-            - datetime.fromisoformat(source.request_started_at)
-        ).total_seconds() * 1000
+        try:
+            latency = (
+                datetime.fromisoformat(source.response_finished_at)
+                - datetime.fromisoformat(source.request_started_at)
+            ).total_seconds() * 1000
+            if not math.isfinite(latency) or latency < 0:
+                latency = 0.0
+        except (TypeError, ValueError, OverflowError):
+            latency = 0.0
     return AttemptProjection(
         status="accounting_unknown",
-        started_at=source.request_started_at if source else "",
-        finished_at=source.response_finished_at if source else "",
+        started_at=(
+            source.request_started_at
+            if source is not None and isinstance(source.request_started_at, str)
+            else ""
+        ),
+        finished_at=(
+            source.response_finished_at
+            if source is not None and isinstance(source.response_finished_at, str)
+            else ""
+        ),
         response_text="",
         provider_request_id="",
         resolved_model_id="",

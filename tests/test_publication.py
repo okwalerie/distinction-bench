@@ -60,6 +60,20 @@ def test_scan_accepts_explicit_secret_environment_without_global_mutation(tmp_pa
     assert secret not in str(raised.value)
 
 
+def test_scan_rejects_unknown_response_header_names_and_secret_values(tmp_path: Path):
+    (tmp_path / "unknown.json").write_text(
+        json.dumps({"response_headers": [["x-internal-trace", "opaque"]]})
+    )
+    with pytest.raises(RuntimeError, match="response header"):
+        scan_publication(tmp_path)
+
+    (tmp_path / "unknown.json").write_text(
+        json.dumps({"response_headers": [["content-type", "Bearer opaque-secret"]]})
+    )
+    with pytest.raises(RuntimeError, match="secret"):
+        scan_publication(tmp_path)
+
+
 def test_public_sanitizer_drops_metadata_and_redacts_secret_values(monkeypatch):
     secret = "opaque-sanitizer-secret"
     monkeypatch.setenv("OPENROUTER_API_KEY", secret)

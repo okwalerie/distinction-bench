@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -24,6 +25,7 @@ from lofbench.run_models import ExecutionRequest, TrialExecutor, call_id_for, tr
 from lofbench.state_io import append_jsonl_fsynced, read_jsonl, write_json_atomic
 
 MAX_TRANSPORT_ATTEMPTS = 3
+TransitionObserver = Callable[[str, str], None]
 
 
 def _effective_calls(rows: list[dict]) -> list[dict]:
@@ -34,12 +36,32 @@ def _effective_calls(rows: list[dict]) -> list[dict]:
 
 
 def _latest_evidence(rows: list[dict]) -> dict[str, AttemptEvidence]:
-    latest: dict[str, AttemptEvidence] = {}
+    chains: dict[str, list[AttemptEvidence]] = {}
     for row in rows:
         record = AttemptEvidence.from_dict(row)
-        prior = latest.get(record.call_id)
-        if prior is None or record.revision > prior.revision:
-            latest[record.call_id] = record
+        chains.setdefault(record.call_id, []).append(record)
+    latest: dict[str, AttemptEvidence] = {}
+    for call_id, chain in chains.items():
+        chain.sort(key=lambda record: record.revision)
+        predecessor = ""
+        identity = None
+        for revision, record in enumerate(chain):
+            candidate_identity = (
+                record.call_id,
+                record.trial_id,
+                record.run_id,
+                record.attempt,
+            )
+            identity = identity or candidate_identity
+            if (
+                record.revision != revision
+                or record.predecessor_evidence_sha256 != predecessor
+                or record.authoritative_digest() != record.evidence_sha256
+                or candidate_identity != identity
+            ):
+                raise RuntimeError("run evidence revision chain is invalid")
+            predecessor = record.evidence_sha256
+        latest[call_id] = chain[-1]
     return latest
 
 
@@ -52,12 +74,18 @@ class RunOrchestrator:
         ledger: SpendLedger,
         evidence_projector: EvidenceProjector,
         accounting_recoverer: AccountingRecoverer | None = None,
+        transition_observer: TransitionObserver | None = None,
     ) -> None:
         self.state_dir = state_dir
         self.executor = executor
         self.ledger = ledger
         self.evidence_projector = evidence_projector
         self.accounting_recoverer = accounting_recoverer
+        self.transition_observer = transition_observer
+
+    def _observe(self, transition: str, call_id: str = "") -> None:
+        if self.transition_observer is not None:
+            self.transition_observer(transition, call_id)
 
     @staticmethod
     def reservation(run: RunManifest, sample: Sample) -> float:
@@ -93,7 +121,7 @@ class RunOrchestrator:
             return fail_closed_projection(
                 evidence, run.to_dict(), f"projector_{type(exc).__name__}"
             )
-        if projection.status == "complete" and (
+        if projection.status in {"complete", "provider_error"} and (
             projection.resolved_model_id != run.resolved_model_id
             or projection.endpoint != run.endpoint
             or projection.provider != run.provider
@@ -139,14 +167,6 @@ class RunOrchestrator:
             response_sha256=sha256(projection.response_text.encode()).hexdigest(),
             evidence_sha256=evidence.evidence_sha256,
         )
-
-    def _append_attempt(
-        self,
-        evidence: AttemptEvidence,
-        call: CallRecord,
-    ) -> None:
-        append_jsonl_fsynced(self.state_dir / "transcripts.jsonl", evidence.to_dict())
-        append_jsonl_fsynced(self.state_dir / "calls.jsonl", call.to_dict())
 
     @staticmethod
     def _trial(
@@ -210,66 +230,8 @@ class RunOrchestrator:
             cost_usd=sum(row["observed_cost_usd"] for row in calls),
         )
         write_json_atomic(self.state_dir / "run.json", updated.to_dict())
+        self._observe("run_manifest")
         return updated
-
-    def _recover_unknown_calls(
-        self,
-        run: RunManifest,
-        samples_by_trial: dict[str, Sample],
-        protocol: ProtocolSpec,
-    ) -> None:
-        calls = _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
-        unknown = [row for row in calls if row["status"] == "accounting_unknown"]
-        if not unknown:
-            return
-        if self.accounting_recoverer is None:
-            self._write_run_state(run)
-            raise RuntimeError("run has unresolved provider accounting")
-        evidence_by_call = _latest_evidence(read_jsonl(self.state_dir / "transcripts.jsonl"))
-        existing_trials = {row["trial_id"] for row in read_jsonl(self.state_dir / "trials.jsonl")}
-        for row in unknown:
-            prior = evidence_by_call[row["call_id"]]
-            try:
-                recovered_envelope = self.accounting_recoverer(
-                    prior.provider_evidence, run.to_dict()
-                )
-            except Exception as exc:
-                self._write_run_state(run)
-                raise RuntimeError("provider accounting recovery failed") from exc
-            revised = prior.revise(recovered_envelope)
-            append_jsonl_fsynced(self.state_dir / "transcripts.jsonl", revised.to_dict())
-            projection = self._project(recovered_envelope, run)
-            call = self._call(
-                call_id=row["call_id"],
-                trial_id=row["trial_id"],
-                run=run,
-                attempt=row["attempt"],
-                reservation=row["reserved_cost_usd"],
-                projection=projection,
-                evidence=revised,
-            )
-            append_jsonl_fsynced(self.state_dir / "calls.jsonl", call.to_dict())
-            if projection.status == "accounting_unknown":
-                self._write_run_state(run)
-                raise RuntimeError("provider accounting remains unresolved")
-            self.ledger.settle(
-                call_id=call.call_id,
-                trial_id=call.trial_id,
-                run_id=run.run_id,
-                cohort=run.cohort,
-                amount=projection.observed_cost_usd,
-            )
-            if projection.status == "complete" and call.trial_id not in existing_trials:
-                trial = self._trial(
-                    run=run,
-                    sample=samples_by_trial[call.trial_id],
-                    protocol=protocol,
-                    projection=projection,
-                    evidence=revised,
-                    attempt=call.attempt,
-                )
-                append_jsonl_fsynced(self.state_dir / "trials.jsonl", trial.to_dict())
-                existing_trials.add(call.trial_id)
 
     def execute(
         self,
@@ -298,38 +260,161 @@ class RunOrchestrator:
         if set(samples_by_trial) != set(run.expected_trial_ids):
             raise RuntimeError("task samples do not match the run's expected trial ids")
         protocol = get_protocol(run.protocol_id)
-        self._recover_unknown_calls(run, samples_by_trial, protocol)
-        existing = {row["trial_id"]: row for row in read_jsonl(self.state_dir / "trials.jsonl")}
-        prior_calls = _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
-        orphaned_complete = {
-            row["trial_id"]
-            for row in prior_calls
-            if row["status"] == "complete" and row["trial_id"] not in existing
+        call_identity = {
+            call_id_for(trial_id, attempt): (trial_id, attempt)
+            for trial_id in run.expected_trial_ids
+            for attempt in range(1, run.max_transport_attempts + 1)
         }
-        if orphaned_complete:
-            raise RuntimeError("run has a completed call rejected by an identity gate")
-        for trial_id in run.expected_trial_ids:
-            if trial_id in existing:
-                continue
-            sample = samples_by_trial[trial_id]
-            attempts_used = sum(1 for row in prior_calls if row["trial_id"] == trial_id)
-            for attempt in range(attempts_used + 1, run.max_transport_attempts + 1):
-                call_id = call_id_for(trial_id, attempt)
-                reservation = self.reservation(run, sample) if is_paid else 0.0
-                self.ledger.reserve(
+        inferred_here: set[str] = set()
+        recovered_here: set[str] = set()
+
+        while True:
+            evidence_by_call = _latest_evidence(read_jsonl(self.state_dir / "transcripts.jsonl"))
+            call_rows = _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
+            calls_by_id = {row["call_id"]: row for row in call_rows}
+            trial_rows = read_jsonl(self.state_dir / "trials.jsonl")
+            if len({row["trial_id"] for row in trial_rows}) != len(trial_rows):
+                raise RuntimeError("run state contains duplicate trials")
+            trials_by_id = {row["trial_id"]: row for row in trial_rows}
+            if not set(trials_by_id) <= set(run.expected_trial_ids):
+                raise RuntimeError("run state contains an unexpected trial")
+
+            events_by_call: dict[str, list] = {}
+            for event in self.ledger.events_for_run(run.run_id):
+                events_by_call.setdefault(event.call_id, []).append(event)
+            initiated = set(events_by_call) | set(evidence_by_call) | set(calls_by_id)
+            if initiated - set(call_identity):
+                raise RuntimeError("run state contains an unexpected call")
+
+            # Close every deterministic transition already justified by durable
+            # evidence before a new inference is considered.
+            changed = False
+            reserve_only: list[str] = []
+            for call_id in call_identity:
+                if call_id not in initiated:
+                    continue
+                trial_id, attempt = call_identity[call_id]
+                events = events_by_call.get(call_id, [])
+                if len(events) not in (1, 2) or events[0].event_type != "reserved":
+                    raise RuntimeError("run ledger transition sequence is invalid")
+                if len(events) == 2 and events[1].event_type != "settled":
+                    raise RuntimeError("run ledger transition sequence is invalid")
+                if any(
+                    (event.call_id, event.trial_id, event.run_id, event.cohort)
+                    != (call_id, trial_id, run.run_id, run.cohort)
+                    for event in events
+                ):
+                    raise RuntimeError("run ledger identity is invalid")
+                reservation = events[0].amount_usd
+                evidence = evidence_by_call.get(call_id)
+                persisted_call = calls_by_id.get(call_id)
+                if evidence is None:
+                    if persisted_call is not None or len(events) == 2:
+                        raise RuntimeError("run state contains a call without evidence")
+                    reserve_only.append(call_id)
+                    continue
+                if (
+                    evidence.call_id != call_id
+                    or evidence.trial_id != trial_id
+                    or evidence.run_id != run.run_id
+                    or evidence.attempt != attempt
+                    or evidence.authoritative_digest() != evidence.evidence_sha256
+                ):
+                    raise RuntimeError("run evidence identity is invalid")
+
+                projection = self._project(evidence.provider_evidence, run)
+                derived_call = self._call(
                     call_id=call_id,
                     trial_id=trial_id,
-                    run_id=run.run_id,
-                    cohort=run.cohort,
-                    amount=reservation,
+                    run=run,
+                    attempt=attempt,
+                    reservation=reservation,
+                    projection=projection,
+                    evidence=evidence,
                 )
+                if persisted_call is None or (
+                    persisted_call.get("evidence_sha256") != evidence.evidence_sha256
+                ):
+                    append_jsonl_fsynced(self.state_dir / "calls.jsonl", derived_call.to_dict())
+                    self._observe("call", call_id)
+                    changed = True
+                    break
+                if persisted_call != derived_call.to_dict():
+                    raise RuntimeError("run call contradicts its provider evidence")
+
+                if projection.status == "accounting_unknown":
+                    if len(events) == 2:
+                        raise RuntimeError("unknown accounting was settled")
+                    if call_id in inferred_here:
+                        self._write_run_state(run)
+                        raise RuntimeError(
+                            f"provider accounting is unknown: {projection.error_type}"
+                        )
+                    if self.accounting_recoverer is None or call_id in recovered_here:
+                        self._write_run_state(run)
+                        raise RuntimeError(
+                            f"unresolved provider accounting: {projection.error_type}"
+                        )
+                    recovered_here.add(call_id)
+                    recovered = self.accounting_recoverer(evidence.provider_evidence, run.to_dict())
+                    if recovered == evidence.provider_evidence:
+                        self._write_run_state(run)
+                        raise RuntimeError(
+                            f"unresolved provider accounting: {projection.error_type}"
+                        )
+                    revision = evidence.revise(recovered)
+                    append_jsonl_fsynced(self.state_dir / "transcripts.jsonl", revision.to_dict())
+                    self._observe("evidence", call_id)
+                    changed = True
+                    break
+
+                if len(events) == 1:
+                    self.ledger.settle(
+                        call_id=call_id,
+                        trial_id=trial_id,
+                        run_id=run.run_id,
+                        cohort=run.cohort,
+                        amount=projection.observed_cost_usd,
+                    )
+                    self._observe("settled", call_id)
+                    changed = True
+                    break
+                if events[1].amount_usd != projection.observed_cost_usd:
+                    raise RuntimeError("run settlement contradicts its provider evidence")
+
+                if projection.status == "complete":
+                    trial = self._trial(
+                        run=run,
+                        sample=samples_by_trial[trial_id],
+                        protocol=protocol,
+                        projection=projection,
+                        evidence=evidence,
+                        attempt=attempt,
+                    )
+                    persisted_trial = trials_by_id.get(trial_id)
+                    if persisted_trial is None:
+                        append_jsonl_fsynced(self.state_dir / "trials.jsonl", trial.to_dict())
+                        self._observe("trial", call_id)
+                        changed = True
+                        break
+                    if persisted_trial != trial.to_dict():
+                        raise RuntimeError("run trial contradicts its completion evidence")
+            if changed:
+                continue
+
+            # A reservation is the durable intent for exactly one inference.
+            # Resumption reuses its deterministic call id.
+            if reserve_only:
+                call_id = reserve_only[0]
+                trial_id, attempt = call_identity[call_id]
                 result = self.executor.execute(
                     ExecutionRequest(
                         run=run,
                         task=task,
-                        sample=sample,
+                        sample=samples_by_trial[trial_id],
                         attempt=attempt,
                         log_dir=self.state_dir / "inspect-logs",
+                        call_id=call_id,
                     )
                 )
                 evidence = AttemptEvidence.capture(
@@ -340,37 +425,38 @@ class RunOrchestrator:
                     provider_evidence=result.provider_evidence,
                 )
                 append_jsonl_fsynced(self.state_dir / "transcripts.jsonl", evidence.to_dict())
-                projection = self._project(result.provider_evidence, run)
-                call = self._call(
-                    call_id=call_id,
-                    trial_id=trial_id,
-                    run=run,
-                    attempt=attempt,
-                    reservation=reservation,
-                    projection=projection,
-                    evidence=evidence,
+                inferred_here.add(call_id)
+                self._observe("evidence", call_id)
+                continue
+
+            # With reconciliation closed, reserve the next missing attempt before
+            # allowing the provider adapter to act.
+            scheduled = False
+            for trial_id in run.expected_trial_ids:
+                if trial_id in trials_by_id:
+                    continue
+                attempts = sorted(
+                    attempt
+                    for call_id, (candidate_trial, attempt) in call_identity.items()
+                    if candidate_trial == trial_id and call_id in initiated
                 )
-                append_jsonl_fsynced(self.state_dir / "calls.jsonl", call.to_dict())
-                if projection.status == "accounting_unknown":
-                    self._write_run_state(run)
-                    raise RuntimeError(f"provider accounting is unknown: {projection.error_type}")
-                self.ledger.settle(
+                if attempts != list(range(1, len(attempts) + 1)):
+                    raise RuntimeError("run attempt sequence is invalid")
+                if len(attempts) >= run.max_transport_attempts:
+                    continue
+                attempt = len(attempts) + 1
+                call_id = call_id_for(trial_id, attempt)
+                reservation = self.reservation(run, samples_by_trial[trial_id]) if is_paid else 0.0
+                self.ledger.reserve(
                     call_id=call_id,
                     trial_id=trial_id,
                     run_id=run.run_id,
                     cohort=run.cohort,
-                    amount=projection.observed_cost_usd,
+                    amount=reservation,
                 )
-                if projection.status != "complete":
-                    continue
-                trial = self._trial(
-                    run=run,
-                    sample=sample,
-                    protocol=protocol,
-                    projection=projection,
-                    evidence=evidence,
-                    attempt=attempt,
-                )
-                append_jsonl_fsynced(self.state_dir / "trials.jsonl", trial.to_dict())
+                self._observe("reserved", call_id)
+                scheduled = True
                 break
-        return self._write_run_state(run)
+            if scheduled:
+                continue
+            return self._write_run_state(run)

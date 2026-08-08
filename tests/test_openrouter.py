@@ -346,6 +346,67 @@ def test_direct_executor_retains_exact_chat_and_generation_evidence(monkeypatch,
     assert "max_retries" not in request_payload
 
 
+def test_billed_http_error_uses_generation_id_header_for_exact_accounting(monkeypatch, tmp_path):
+    task, run = _task_and_run()
+    generation = {
+        "data": {
+            "id": "request-1",
+            "model": "example/model",
+            "provider_name": "Example Provider",
+            "total_cost": 0.004,
+            "native_tokens_prompt": 10,
+            "native_tokens_completion": 2,
+            "native_tokens_reasoning": 1,
+            "latency": 0.0,
+            "finish_reason": "error",
+            "error": {"type": "provider_unavailable"},
+        }
+    }
+    requests = 0
+
+    def urlopen(request, timeout):
+        nonlocal requests
+        assert timeout == 30
+        requests += 1
+        if "/generation?" in request.full_url:
+            return _Response(json.dumps(generation).encode())
+        raise urllib.error.HTTPError(
+            request.full_url,
+            502,
+            "provider unavailable",
+            {"x-generation-id": "request-1", "set-cookie": "must-not-publish"},
+            io.BytesIO(
+                json.dumps({"error": {"metadata": {"error_type": "provider_unavailable"}}}).encode()
+            ),
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    evidence = (
+        OpenRouterExecutor(api_key="opaque-test-key", sleeper=lambda _delay: None)
+        .execute(
+            ExecutionRequest(
+                run=run,
+                task=task,
+                sample=list(task.dataset.samples)[0],
+                attempt=1,
+                log_dir=tmp_path,
+            )
+        )
+        .provider_evidence
+    )
+    assert evidence.sources[0].response_headers == (("x-generation-id", "request-1"),)
+    projection = project_openrouter_evidence(evidence, run.to_dict())
+    assert projection.status == "provider_error"
+    assert projection.provider_request_id == "request-1"
+    assert projection.observed_cost_usd == pytest.approx(0.004)
+    assert (projection.input_tokens, projection.output_tokens, projection.reasoning_tokens) == (
+        10,
+        2,
+        1,
+    )
+    assert requests == 2
+
+
 @pytest.mark.parametrize(
     ("chat_changes", "generation_changes", "expected_status", "expected_error"),
     [
@@ -362,6 +423,18 @@ def test_direct_executor_retains_exact_chat_and_generation_evidence(monkeypatch,
             "provider_finish_error",
         ),
         (
+            lambda row: _set_nested(
+                row,
+                "choices",
+                0,
+                "error",
+                {"metadata": {"error_type": "provider_unavailable"}},
+            ),
+            None,
+            "provider_error",
+            "provider_provider_unavailable",
+        ),
+        (
             None,
             lambda row: _set_nested(row, "data", "cancelled", True),
             "provider_error",
@@ -370,8 +443,8 @@ def test_direct_executor_retains_exact_chat_and_generation_evidence(monkeypatch,
         (
             None,
             lambda row: row.update({"error": {"type": "generation_failed"}}),
-            "accounting_unknown",
-            "missing_generation_accounting",
+            "provider_error",
+            "provider_generation_failed",
         ),
         (
             None,
@@ -441,6 +514,41 @@ def test_projection_closes_all_cross_source_semantics(
     assert projection.error_type == expected_error
 
 
+def test_billed_chat_error_retains_exact_generation_accounting():
+    evidence, run = _projection_evidence(
+        chat_changes=lambda row: row.update({"error": {"type": "provider_busy"}})
+    )
+    projection = project_openrouter_evidence(evidence, run.to_dict())
+    assert projection.status == "provider_error"
+    assert projection.provider_request_id == "request-1"
+    assert projection.resolved_model_id == "example/model"
+    assert projection.input_tokens == 10
+    assert projection.output_tokens == 2
+    assert projection.reasoning_tokens == 1
+    assert projection.observed_cost_usd == 0.001
+    assert projection.provider_latency_ms == 10.0
+
+
+def test_chat_error_without_generation_accounting_remains_unknown():
+    evidence, run = _projection_evidence(
+        chat_changes=lambda row: row.update({"error": {"type": "provider_busy"}})
+    )
+    evidence = replace(evidence, sources=evidence.sources[:1])
+    projection = project_openrouter_evidence(evidence, run.to_dict())
+    assert projection.status == "accounting_unknown"
+    assert projection.observed_cost_usd == 0.0
+
+
+def test_chat_body_and_generation_header_request_ids_must_agree():
+    evidence, run = _projection_evidence()
+    chat = replace(evidence.sources[0], response_headers=(("x-generation-id", "request-forged"),))
+    projection = project_openrouter_evidence(
+        replace(evidence, sources=(chat, evidence.sources[1])), run.to_dict()
+    )
+    assert projection.status == "accounting_unknown"
+    assert projection.error_type == "contradictory_chat_request_id"
+
+
 def test_projection_rejects_a_source_projection_that_contradicts_raw_bytes():
     evidence, run = _projection_evidence()
     forged = replace(
@@ -453,6 +561,51 @@ def test_projection_rejects_a_source_projection_that_contradicts_raw_bytes():
     projection = project_openrouter_evidence(forged, run.to_dict())
     assert projection.status == "accounting_unknown"
     assert projection.error_type == ("provider evidence raw body contradicts its projections")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("request_started_at", None),
+        ("request_started_at", "not-a-timestamp"),
+        ("response_finished_at", "not-a-timestamp"),
+        ("response_finished_at", "2026-08-07T23:59:59+00:00"),
+    ],
+)
+def test_projection_is_total_over_malformed_source_timing(field, value):
+    evidence, run = _projection_evidence()
+    forged_source = replace(evidence.sources[0], **{field: value})
+    forged = replace(evidence, sources=(forged_source, evidence.sources[1]))
+    projection = project_openrouter_evidence(forged, run.to_dict())
+    assert projection.status == "accounting_unknown"
+    assert projection.latency_ms == 0.0
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("data", "total_cost"), None),
+        (("data", "total_cost"), "0.001"),
+        (("data", "total_cost"), float("nan")),
+        (("data", "total_cost"), float("inf")),
+        (("data", "total_cost"), -0.001),
+        (("data", "native_tokens_prompt"), None),
+        (("data", "native_tokens_prompt"), "10"),
+        (("data", "native_tokens_prompt"), float("nan")),
+        (("data", "native_tokens_prompt"), -1),
+        (("data", "latency"), None),
+        (("data", "latency"), "10"),
+        (("data", "latency"), float("nan")),
+        (("data", "latency"), float("inf")),
+        (("data", "latency"), -1.0),
+    ],
+)
+def test_projection_is_total_over_invalid_accounting_scalars(path, value):
+    evidence, run = _projection_evidence(
+        generation_changes=lambda row: _set_nested(row, *path, value)
+    )
+    projection = project_openrouter_evidence(evidence, run.to_dict())
+    assert projection.status == "accounting_unknown"
 
 
 def test_direct_executor_projects_generation_lookup_error_from_retained_evidence(
@@ -549,7 +702,7 @@ def test_direct_executor_retains_non_success_and_malformed_chat_bodies(
     assert source.json_parse_outcome == expected_outcome
     assert source.body_text == expected_text
     projection = project_openrouter_evidence(evidence, run.to_dict())
-    assert projection.status == ("provider_error" if response == "http" else "accounting_unknown")
+    assert projection.status == "accounting_unknown"
 
 
 def test_direct_executor_retains_http_metadata_and_partial_bytes_on_read_failure(
@@ -576,7 +729,7 @@ def test_direct_executor_retains_http_metadata_and_partial_bytes_on_read_failure
     )
     source = evidence.sources[0]
     assert source.http_status == 200
-    assert source.response_headers == (("x-provider-trace", "trace-1"),)
+    assert source.response_headers == ()
     assert source.raw_body_base64 == "eyJpZCI6"
     assert source.body_text == '{"id":'
     assert source.json_parse_outcome == "invalid"

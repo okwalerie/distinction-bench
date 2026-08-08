@@ -59,6 +59,7 @@ class ExecutionRequest:
     sample: Sample
     attempt: int
     log_dir: Path
+    call_id: str = ""
 
 
 @dataclass(frozen=True)
