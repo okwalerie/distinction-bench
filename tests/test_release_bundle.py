@@ -29,12 +29,13 @@ from lofbench.records import (
     AttemptEvidence,
     CallRecord,
     LedgerEvent,
+    RequestStartedRecord,
     RunManifest,
     TrialRecord,
     execution_spec_identity,
 )
 from lofbench.release_bundle import ReleaseBundle
-from lofbench.run_models import call_id_for, trial_id_for
+from lofbench.run_models import call_id_for, request_sha256_for, trial_id_for
 from lofbench.suites import DEFAULT_SUITE_REGISTRY, load_suite
 from lofsite.build import build_site
 
@@ -348,6 +349,32 @@ def _accounting(
     return linked_trials, calls, events, evidence
 
 
+def _request_records(
+    run: RunManifest,
+    trials: list[TrialRecord],
+    calls: list[CallRecord],
+) -> list[RequestStartedRecord]:
+    by_id = {trial.trial_id: trial for trial in trials}
+    return [
+        RequestStartedRecord(
+            call_id=call.call_id,
+            trial_id=call.trial_id,
+            run_id=run.run_id,
+            attempt=call.attempt,
+            request_sha256=request_sha256_for(
+                call_id=call.call_id,
+                trial_id=call.trial_id,
+                run_id=run.run_id,
+                attempt=call.attempt,
+                prompt_hash=by_id[call.trial_id].prompt_hash,
+                model_payload_sha256=by_id[call.trial_id].model_payload_sha256,
+            ),
+            started_at=call.started_at,
+        )
+        for call in calls
+    ]
+
+
 def _admit(bundle: ReleaseBundle, run: RunManifest, trials: list[TrialRecord]) -> None:
     if {trial.trial_id for trial in trials} != set(run.expected_trial_ids):
         bundle.admit_run(run, trials)
@@ -357,6 +384,7 @@ def _admit(bundle: ReleaseBundle, run: RunManifest, trials: list[TrialRecord]) -
         run,
         linked_trials,
         calls=calls,
+        request_starts=_request_records(run, linked_trials, calls),
         ledger_events=events,
         evidence=evidence,
     )
@@ -630,8 +658,83 @@ def test_admission_rejects_incomplete_contradictory_attempt_evidence(working):
             run,
             trials,
             calls=calls,
+            request_starts=_request_records(run, trials, calls),
             ledger_events=events,
             evidence=[contradictory],
+        )
+
+
+def test_admission_requires_exact_request_started_records(working):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    with pytest.raises(RuntimeError, match="request-started"):
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=evidence,
+        )
+
+
+def test_ambiguous_run_cannot_be_admitted_or_sealed(working):
+    bundle, repository, run = working
+    ambiguous = replace(run, status="ambiguous", attempts=0)
+    with pytest.raises(RuntimeError, match="only complete"):
+        bundle.admit_run(ambiguous, [])
+    with pytest.raises(RuntimeError, match="expected runs|admitted"):
+        bundle.seal(repository_root=repository)
+
+
+def test_admission_persists_and_revalidates_request_started_records(working):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    requests = _request_records(run, trials, calls)
+    bundle.admit_run(
+        run,
+        trials,
+        calls=calls,
+        request_starts=requests,
+        ledger_events=events,
+        evidence=evidence,
+    )
+    assert len((bundle.root / "request-started.jsonl").read_text().splitlines()) == 5
+    _derive(bundle)
+    bundle.validate()
+
+
+def test_validation_rejects_a_tampered_request_started_record(working):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    bundle.admit_run(
+        run,
+        trials,
+        calls=calls,
+        request_starts=_request_records(run, trials, calls),
+        ledger_events=events,
+        evidence=evidence,
+    )
+    path = bundle.root / "request-started.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]["request_sha256"] = "0" * 64
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(RuntimeError, match="request-started hash"):
+        bundle.validate()
+
+
+def test_admission_rejects_a_forged_request_started_hash(working):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    requests = _request_records(run, trials, calls)
+    requests[0] = replace(requests[0], request_sha256="0" * 64)
+    with pytest.raises(RuntimeError, match="request-started hash"):
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            request_starts=requests,
+            ledger_events=events,
+            evidence=evidence,
         )
 
 
@@ -704,6 +807,7 @@ def test_admission_rejects_raw_provider_evidence_contradictions(working, mutatio
             run,
             trials,
             calls=calls,
+            request_starts=_request_records(run, trials, calls),
             ledger_events=events,
             evidence=evidence,
         )
@@ -730,6 +834,7 @@ def test_admission_fails_closed_without_generation_evidence(working):
             run,
             trials,
             calls=calls,
+            request_starts=_request_records(run, trials, calls),
             ledger_events=events,
             evidence=evidence,
         )
@@ -878,6 +983,7 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
             run,
             trials,
             calls=calls,
+            request_starts=_request_records(run, trials, calls),
             ledger_events=events,
             evidence=evidence,
         )
@@ -910,6 +1016,7 @@ def test_admission_accepts_a_complete_accounting_recovery_revision_chain(working
         run,
         trials,
         calls=calls,
+        request_starts=_request_records(run, trials, calls),
         ledger_events=events,
         evidence=evidence,
     )
@@ -936,6 +1043,7 @@ def test_admission_requires_exact_evidence_revision_chains(working, mutation):
             run,
             trials,
             calls=calls,
+            request_starts=_request_records(run, trials, calls),
             ledger_events=events,
             evidence=evidence,
         )
@@ -970,6 +1078,7 @@ def test_admission_rejects_nonfinite_or_negative_resources(working, trial_overri
             forged_run,
             trials,
             calls=calls,
+            request_starts=_request_records(forged_run, trials, calls),
             ledger_events=events,
             evidence=evidence,
         )
@@ -1243,6 +1352,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
             run,
             trials,
             calls=calls,
+            request_starts=_request_records(run, trials, calls),
             ledger_events=events,
             evidence=evidence,
         )
@@ -1274,6 +1384,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
     assert len(bundle.runs()) == 4
     assert pq.read_table(bundle.root / "calls.parquet").num_rows == 20
     assert len((bundle.root / "transcripts.jsonl").read_text().splitlines()) == 20
+    assert len((bundle.root / "request-started.jsonl").read_text().splitlines()) == 20
     assert len((bundle.root / "ledger.jsonl").read_text().splitlines()) == 40
 
 

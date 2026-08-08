@@ -252,6 +252,9 @@ def test_complete_run_records_every_trial_and_spend(tmp_path):
     ]
     assert len(trials) == 5
     assert {row["trial_id"] for row in trials} == set(run.expected_trial_ids)
+    requests = read_jsonl(tmp_path / "run-state/request-started.jsonl")
+    assert len(requests) == 5
+    assert {row["call_id"] for row in requests} == {request.call_id for request in executor.calls}
 
 
 def test_invalid_answer_is_complete_incorrect_and_not_retried(tmp_path):
@@ -362,6 +365,49 @@ def test_resume_converges_after_every_durable_append_boundary(tmp_path, transiti
     assert len(executor.calls) == 5
     assert len({request.call_id for request in executor.calls}) == 5
     assert _ledger(tmp_path).totals() == pytest.approx((0.005, 0.0))
+
+
+@pytest.mark.parametrize(
+    ("transition", "initial_executor_calls"),
+    [("request_started", 0), ("provider_returned", 1)],
+)
+def test_resume_quarantines_a_started_request_without_evidence(
+    tmp_path, transition, initial_executor_calls
+):
+    full_task, full_run = _task_and_run()
+    sample = list(full_task.dataset.samples)[0]
+    task = Task(
+        dataset=MemoryDataset(samples=[sample]),
+        solver=full_task.solver,
+        scorer=full_task.scorer,
+        config=full_task.config,
+        metadata=full_task.metadata,
+    )
+    run = replace(full_run, expected_trial_ids=full_run.expected_trial_ids[:1])
+    first = InMemoryExecutor([_success()])
+    with pytest.raises(_SimulatedCrash, match=transition):
+        _orchestrator(
+            tmp_path,
+            first,
+            transition_observer=_CrashOnceAfter(transition),
+        ).execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+    assert len(first.calls) == initial_executor_calls
+
+    resume = InMemoryExecutor([_success()])
+    with pytest.raises(RuntimeError, match="ambiguous.*refusing to resend"):
+        _orchestrator(tmp_path, resume).execute(
+            run, task, approve_paid_run=True, max_spend_usd=30.0
+        )
+    assert resume.calls == []
+    requests = read_jsonl(tmp_path / "run-state/request-started.jsonl")
+    assert len(requests) == 1
+    assert len(requests[0]["request_sha256"]) == 64
+    assert not (tmp_path / "run-state/transcripts.jsonl").exists()
+    assert not (tmp_path / "run-state/calls.jsonl").exists()
+    assert json.loads((tmp_path / "run-state/run.json").read_text())["status"] == "ambiguous"
+    observed, reserved = _ledger(tmp_path).totals()
+    assert observed == 0.0
+    assert reserved > 0.0
 
 
 def test_billed_provider_error_settles_exactly_without_a_trial(tmp_path):

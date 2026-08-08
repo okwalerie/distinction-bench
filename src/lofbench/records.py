@@ -5,12 +5,20 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from hashlib import blake2b, sha256
 from typing import Any, Literal
 
 from lofbench.provider_evidence import ProviderEvidenceEnvelope
 
-RunStatus = Literal["planned", "probed", "complete", "admitted", "rejected"]
+RunStatus = Literal[
+    "planned",
+    "probed",
+    "ambiguous",
+    "complete",
+    "admitted",
+    "rejected",
+]
 
 
 def deterministic_id(prefix: str, payload: dict[str, Any]) -> str:
@@ -169,6 +177,55 @@ class CallRecord:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class RequestStartedRecord:
+    """Durable intent written immediately before one external execution attempt."""
+
+    call_id: str
+    trial_id: str
+    run_id: str
+    attempt: int
+    request_sha256: str
+    started_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> RequestStartedRecord:
+        expected = {
+            "call_id",
+            "trial_id",
+            "run_id",
+            "attempt",
+            "request_sha256",
+            "started_at",
+        }
+        if set(value) != expected:
+            raise RuntimeError("request-started record schema is invalid")
+        if not all(
+            isinstance(value[field], str)
+            for field in ("call_id", "trial_id", "run_id", "request_sha256", "started_at")
+        ):
+            raise RuntimeError("request-started record values are invalid")
+        if (
+            isinstance(value["attempt"], bool)
+            or not isinstance(value["attempt"], int)
+            or value["attempt"] < 1
+        ):
+            raise RuntimeError("request-started attempt is invalid")
+        digest = value["request_sha256"]
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise RuntimeError("request-started hash is invalid")
+        try:
+            started = datetime.fromisoformat(value["started_at"])
+        except (ValueError, OverflowError) as exc:
+            raise RuntimeError("request-started timestamp is invalid") from exc
+        if started.tzinfo is None:
+            raise RuntimeError("request-started timestamp is invalid")
+        return cls(**value)
 
 
 @dataclass(frozen=True)

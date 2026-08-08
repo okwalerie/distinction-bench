@@ -32,15 +32,16 @@ from lofbench.records import (
     AttemptEvidence,
     CallRecord,
     LedgerEvent,
+    RequestStartedRecord,
     RunManifest,
     TrialRecord,
     execution_spec_identity,
 )
 from lofbench.renderers.pipeline.composed import ComposedRenderer
-from lofbench.run_models import call_id_for, trial_id_for
+from lofbench.run_models import call_id_for, request_sha256_for, trial_id_for
 from lofbench.suites import LoadedSuite, load_suite
 
-BUNDLE_SCHEMA_VERSION = 6
+BUNDLE_SCHEMA_VERSION = 7
 _ROOT_FILES = {
     "human-trial.schema.json",
     "release.json",
@@ -52,6 +53,7 @@ _ROOT_FILES = {
     "profiles.parquet",
     "effects.parquet",
     "transcripts.jsonl",
+    "request-started.jsonl",
     "ledger.jsonl",
 }
 
@@ -227,6 +229,7 @@ class ReleaseBundle:
         write_human_trial_schema(root / "human-trial.schema.json")
         (root / "runs.jsonl").write_text("")
         (root / "transcripts.jsonl").write_text("")
+        (root / "request-started.jsonl").write_text("")
         (root / "ledger.jsonl").write_text("")
         _write_rows(root / "trials.parquet", [], pa.schema([("trial_id", pa.string())]))
         _write_rows(root / "calls.parquet", [], pa.schema([("call_id", pa.string())]))
@@ -387,6 +390,7 @@ class ReleaseBundle:
         trials: Iterable[TrialRecord],
         *,
         calls: Iterable[CallRecord] = (),
+        request_starts: Iterable[RequestStartedRecord] = (),
         ledger_events: Iterable[LedgerEvent] = (),
         evidence: Iterable[AttemptEvidence] = (),
     ) -> None:
@@ -417,9 +421,17 @@ class ReleaseBundle:
         if set(trial_ids) != set(run.expected_trial_ids):
             raise RuntimeError("run is incomplete for its declared trial ids")
         call_values = list(calls)
+        request_values = list(request_starts)
         ledger_values = list(ledger_events)
         evidence_values = list(evidence)
-        self._validate_run_accounting(run, rows, call_values, ledger_values, evidence_values)
+        self._validate_run_accounting(
+            run,
+            rows,
+            call_values,
+            request_values,
+            ledger_values,
+            evidence_values,
+        )
 
         existing_runs = self.runs()
         if run.run_id in {item.run_id for item in existing_runs}:
@@ -435,10 +447,16 @@ class ReleaseBundle:
             for line in (self.root / "ledger.jsonl").read_text().splitlines()
             if line.strip()
         ]
+        existing_requests = [
+            RequestStartedRecord.from_dict(json.loads(line))
+            for line in (self.root / "request-started.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
         self._validate_release_accounting(
             [*existing_runs, admitted],
             existing_trials + rows,
             existing_calls + [call.to_dict() for call in call_values],
+            [*existing_requests, *request_values],
             [*existing_ledger, *ledger_values],
         )
         with (self.root / "runs.jsonl").open("a") as handle:
@@ -451,6 +469,9 @@ class ReleaseBundle:
                 handle.write(_json_line(event.to_dict()))
         with (self.root / "transcripts.jsonl").open("a") as handle:
             for record in evidence_values:
+                handle.write(_json_line(record.to_dict()))
+        with (self.root / "request-started.jsonl").open("a") as handle:
+            for record in request_values:
                 handle.write(_json_line(record.to_dict()))
         self.manifest["admitted_run_ids"] = sorted([*self.manifest["admitted_run_ids"], run.run_id])
         self._write_manifest()
@@ -540,6 +561,7 @@ class ReleaseBundle:
         run: RunManifest,
         trials: list[dict[str, Any]],
         calls: list[CallRecord],
+        request_starts: list[RequestStartedRecord],
         ledger_events: list[LedgerEvent],
         evidence: list[AttemptEvidence],
     ) -> None:
@@ -586,6 +608,40 @@ class ReleaseBundle:
         trial_by_id = {row["trial_id"]: row for row in trials}
         if set(by_trial) != set(trial_by_id):
             raise RuntimeError("call trial ids do not match admitted trials")
+        request_values = [
+            RequestStartedRecord.from_dict(record.to_dict()) for record in request_starts
+        ]
+        requests_by_call = {record.call_id: record for record in request_values}
+        if len(requests_by_call) != len(request_values) or set(requests_by_call) != {
+            call.call_id for call in calls
+        }:
+            raise RuntimeError("request-started records do not equal the exact call set")
+        for call in calls:
+            request = requests_by_call[call.call_id]
+            trial = trial_by_id[call.trial_id]
+            if (request.trial_id, request.run_id, request.attempt) != (
+                call.trial_id,
+                call.run_id,
+                call.attempt,
+            ):
+                raise RuntimeError("request-started identity does not match its call")
+            expected_hash = request_sha256_for(
+                call_id=call.call_id,
+                trial_id=call.trial_id,
+                run_id=call.run_id,
+                attempt=call.attempt,
+                prompt_hash=trial["prompt_hash"],
+                model_payload_sha256=trial["model_payload_sha256"],
+            )
+            if request.request_sha256 != expected_hash:
+                raise RuntimeError("request-started hash does not match its trial")
+            try:
+                if datetime.fromisoformat(request.started_at) > datetime.fromisoformat(
+                    call.started_at
+                ):
+                    raise RuntimeError("request-started timestamp follows provider execution")
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("request-started/call timing is invalid") from exc
         for trial_id, trial_calls in by_trial.items():
             trial_calls.sort(key=lambda call: call.attempt)
             if [call.attempt for call in trial_calls] != list(range(1, len(trial_calls) + 1)):
@@ -719,6 +775,7 @@ class ReleaseBundle:
         runs: list[RunManifest],
         trials: list[dict[str, Any]],
         call_rows: list[dict[str, Any]],
+        request_starts: list[RequestStartedRecord],
         ledger_events: list[LedgerEvent],
     ) -> None:
         admitted = {run.run_id: run for run in runs if run.status == "admitted"}
@@ -744,10 +801,23 @@ class ReleaseBundle:
         request_ids = [call.provider_request_id for call in calls if call.provider_request_id]
         if len(request_ids) != len(set(request_ids)):
             raise RuntimeError("release contains duplicate provider request ids")
+        request_values = [
+            RequestStartedRecord.from_dict(record.to_dict()) for record in request_starts
+        ]
+        requests_by_call = {record.call_id: record for record in request_values}
+        if len(requests_by_call) != len(request_values) or set(requests_by_call) != set(
+            expected_calls
+        ):
+            raise RuntimeError(
+                "release request-started records do not equal the provider-attempt set"
+            )
         for call_id, expected in expected_calls.items():
             call = calls_by_id[call_id]
             if (call.trial_id, call.run_id, call.attempt) != expected:
                 raise RuntimeError("release call identity does not match its derived call id")
+            request = requests_by_call[call_id]
+            if (request.trial_id, request.run_id, request.attempt) != expected:
+                raise RuntimeError("release request-started identity is invalid")
 
         ledger_by_call: dict[str, list[LedgerEvent]] = {}
         for event in ledger_events:
@@ -908,6 +978,14 @@ class ReleaseBundle:
             if line.strip()
         ]
         try:
+            request_rows = [
+                RequestStartedRecord.from_dict(json.loads(line))
+                for line in (self.root / "request-started.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+        except (TypeError, KeyError) as exc:
+            raise RuntimeError("request-started record schema is invalid") from exc
+        try:
             evidence_rows = [
                 AttemptEvidence.from_dict(json.loads(line))
                 for line in (self.root / "transcripts.jsonl").read_text().splitlines()
@@ -944,12 +1022,19 @@ class ReleaseBundle:
                     run,
                     run_trials,
                     [CallRecord(**row) for row in call_rows if row["run_id"] == run.run_id],
+                    [record for record in request_rows if record.run_id == run.run_id],
                     [event for event in ledger_rows if event.run_id == run.run_id],
                     [record for record in evidence_rows if record.run_id == run.run_id],
                 )
         if {record.call_id for record in evidence_rows} != {row["call_id"] for row in call_rows}:
             raise RuntimeError("release attempt evidence does not equal the exact call set")
-        self._validate_release_accounting(runs, trial_rows, call_rows, ledger_rows)
+        self._validate_release_accounting(
+            runs,
+            trial_rows,
+            call_rows,
+            request_rows,
+            ledger_rows,
+        )
         self._verified_metric_rows(suite=suite, runs=runs, trials=trial_rows)
         self._validate_application_policy(
             suite=suite,

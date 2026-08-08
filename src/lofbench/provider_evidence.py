@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,9 +18,31 @@ AttemptStatus = Literal[
     "accounting_unknown",
 ]
 
-AUDIT_SAFE_RESPONSE_HEADERS = frozenset(
-    {"content-type", "x-generation-id", "x-request-id", "x-openrouter-request-id"}
+AUDIT_SAFE_RESPONSE_HEADERS = frozenset({"content-type", "x-generation-id"})
+_GENERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SAFE_CONTENT_TYPES = frozenset({"application/json", "application/problem+json"})
+_SENSITIVE_VALUE_MARKERS = (
+    "api-key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "cookie",
+    "secret",
 )
+
+
+def _canonical_response_header(name: str, value: str) -> tuple[str, str] | None:
+    normalized_name = name.lower()
+    lowered_value = value.lower()
+    if any(marker in lowered_value for marker in _SENSITIVE_VALUE_MARKERS):
+        return None
+    if normalized_name == "content-type":
+        if lowered_value not in _SAFE_CONTENT_TYPES:
+            return None
+        return normalized_name, lowered_value
+    if normalized_name == "x-generation-id" and _GENERATION_ID.fullmatch(value):
+        return normalized_name, value
+    return None
 
 
 def sanitize_response_headers(
@@ -32,9 +55,9 @@ def sanitize_response_headers(
             if len(row) != 2 or not all(isinstance(item, str) for item in row):
                 continue
             name, value = row
-            normalized = name.lower()
-            if normalized in AUDIT_SAFE_RESPONSE_HEADERS:
-                sanitized.append((normalized, value))
+            canonical = _canonical_response_header(name, value)
+            if canonical is not None:
+                sanitized.append(canonical)
     except TypeError:
         return ()
     return tuple(sanitized)
@@ -49,8 +72,7 @@ def validate_response_headers(rows: Any) -> tuple[tuple[str, str], ...]:
     if any(
         len(row) != 2
         or not all(isinstance(item, str) for item in row)
-        or row[0] != row[0].lower()
-        or row[0] not in AUDIT_SAFE_RESPONSE_HEADERS
+        or _canonical_response_header(*row) != row
         for row in headers
     ):
         raise RuntimeError("provider evidence response headers are invalid")

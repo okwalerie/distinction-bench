@@ -28,8 +28,9 @@ never a second authority. every run identity content-binds those registry bytes,
 selected forms and cells, its selected protocol, and its endpoint/execution evidence.
 
 a sealed release bundle remains the sole publication interface. it admits one typed,
-digest-linked attempt-evidence record for every provider call; calls link to trials,
-and trials, calls, the release ledger, and derived aggregates must close exactly.
+digest-linked request-start intent and attempt-evidence record for every provider call;
+calls link to trials, and request intents, evidence, calls, trials, the release ledger,
+and derived aggregates must close exactly.
 analysis and the public site consume this validated projection and must not reach
 around it to mutable registries, self-asserted rows, or loose logs.
 

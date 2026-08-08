@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,32 @@ def trial_id_for(run_id: str, abstract_form_id: str, dialect_id: str) -> str:
 
 def call_id_for(trial_id: str, attempt: int) -> str:
     return deterministic_id("call", {"trial_id": trial_id, "attempt": attempt})
+
+
+def request_sha256_for(
+    *,
+    call_id: str,
+    trial_id: str,
+    run_id: str,
+    attempt: int,
+    prompt_hash: str,
+    model_payload_sha256: str,
+) -> str:
+    """Hash the exact provider-neutral intent before crossing the executor seam."""
+    canonical = json.dumps(
+        {
+            "schema_version": 1,
+            "call_id": call_id,
+            "trial_id": trial_id,
+            "run_id": run_id,
+            "attempt": attempt,
+            "prompt_hash": prompt_hash,
+            "model_payload_sha256": model_payload_sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(canonical.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

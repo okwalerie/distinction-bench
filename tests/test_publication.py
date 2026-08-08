@@ -74,6 +74,21 @@ def test_scan_rejects_unknown_response_header_names_and_secret_values(tmp_path: 
         scan_publication(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("x-generation-id", "request with spaces"),
+        ("x-generation-id", "authorization-secret"),
+        ("x-generation-id", "x" * 129),
+        ("content-type", "application/json; charset=utf-8"),
+    ],
+)
+def test_scan_rejects_unsafe_allowlisted_response_header_values(tmp_path, name, value):
+    (tmp_path / "unsafe.json").write_text(json.dumps({"response_headers": [[name, value]]}))
+    with pytest.raises(RuntimeError, match="response header"):
+        scan_publication(tmp_path)
+
+
 def test_public_sanitizer_drops_metadata_and_redacts_secret_values(monkeypatch):
     secret = "opaque-sanitizer-secret"
     monkeypatch.setenv("OPENROUTER_API_KEY", secret)
@@ -106,7 +121,12 @@ def test_inspect_export_is_compact_and_scanned(tmp_path: Path):
     (release / "suite.json").write_text("{}")
     (release / "protocols.json").write_text("{}")
     write_human_trial_schema(release / "human-trial.schema.json")
-    for name in ("runs.jsonl", "transcripts.jsonl", "ledger.jsonl"):
+    for name in (
+        "runs.jsonl",
+        "transcripts.jsonl",
+        "request-started.jsonl",
+        "ledger.jsonl",
+    ):
         (release / name).write_text("")
     for name in ("trials.parquet", "calls.parquet", "profiles.parquet", "effects.parquet"):
         pq.write_table(pa.table({"id": pa.array([], type=pa.string())}), release / name)

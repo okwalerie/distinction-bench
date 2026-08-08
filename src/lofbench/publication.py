@@ -213,6 +213,7 @@ def export_inspect_bundle(release_root: Path, out: Path) -> Path:
         "profiles.parquet",
         "effects.parquet",
         "transcripts.jsonl",
+        "request-started.jsonl",
         "ledger.jsonl",
     )
     temporary = out.parent / f".{out.name}.working"

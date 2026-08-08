@@ -36,7 +36,6 @@ def test_http_evidence_round_trip_retains_malformed_body_status_headers_and_timi
     assert source.response_headers == (
         ("content-type", "application/json"),
         ("x-generation-id", "generation-1"),
-        ("x-request-id", "request-1"),
     )
     assert ProviderEvidenceSource.from_dict(source.to_dict()) == source
 
@@ -79,3 +78,78 @@ def test_http_evidence_rejects_unapproved_published_response_headers(name):
     forged["response_headers"] = [[name, "opaque-value"]]
     with pytest.raises(RuntimeError, match="response headers"):
         ProviderEvidenceSource.from_dict(forged)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "request with spaces",
+        "request\twith-tab",
+        "request\nwith-newline",
+        "request;separator",
+        "request/slash",
+        "Bearer-secret",
+        "cookie-secret",
+        "api-key-secret",
+        "x" * 129,
+        "request-\x7f",
+    ],
+)
+def test_http_evidence_rejects_unsafe_generation_id_values(value):
+    source = ProviderEvidenceSource.capture_http(
+        label="provider.response.v1",
+        sequence=1,
+        request_started_at="2026-08-08T00:00:00+00:00",
+        response_finished_at="2026-08-08T00:00:01+00:00",
+        request_method="POST",
+        request_url="https://provider.invalid/chat",
+        http_status=200,
+        response_headers=(),
+        raw_body=b"{}",
+    )
+    forged = source.to_dict()
+    forged["response_headers"] = [["x-generation-id", value]]
+    with pytest.raises(RuntimeError, match="response headers"):
+        ProviderEvidenceSource.from_dict(forged)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["text/plain", "application/json; charset=utf-8", "application/json\nset-cookie:x"],
+)
+def test_http_evidence_rejects_unapproved_content_type_values(value):
+    source = ProviderEvidenceSource.capture_http(
+        label="provider.response.v1",
+        sequence=1,
+        request_started_at="2026-08-08T00:00:00+00:00",
+        response_finished_at="2026-08-08T00:00:01+00:00",
+        request_method="POST",
+        request_url="https://provider.invalid/chat",
+        http_status=200,
+        response_headers=(),
+        raw_body=b"{}",
+    )
+    forged = source.to_dict()
+    forged["response_headers"] = [["content-type", value]]
+    with pytest.raises(RuntimeError, match="response headers"):
+        ProviderEvidenceSource.from_dict(forged)
+
+
+def test_http_capture_drops_allowlisted_names_with_unsafe_values():
+    source = ProviderEvidenceSource.capture_http(
+        label="provider.response.v1",
+        sequence=1,
+        request_started_at="2026-08-08T00:00:00+00:00",
+        response_finished_at="2026-08-08T00:00:01+00:00",
+        request_method="POST",
+        request_url="https://provider.invalid/chat",
+        http_status=200,
+        response_headers=(
+            ("content-type", "application/json; charset=utf-8"),
+            ("x-generation-id", "Bearer-secret"),
+            ("x-generation-id", "safe-id_123.456"),
+        ),
+        raw_body=b"{}",
+    )
+    assert source.response_headers == (("x-generation-id", "safe-id_123.456"),)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
@@ -20,8 +21,21 @@ from lofbench.provider_evidence import (
     ProviderEvidenceEnvelope,
     fail_closed_projection,
 )
-from lofbench.records import AttemptEvidence, CallRecord, RunManifest, TrialRecord
-from lofbench.run_models import ExecutionRequest, TrialExecutor, call_id_for, trial_id_for
+from lofbench.records import (
+    AttemptEvidence,
+    CallRecord,
+    RequestStartedRecord,
+    RunManifest,
+    RunStatus,
+    TrialRecord,
+)
+from lofbench.run_models import (
+    ExecutionRequest,
+    TrialExecutor,
+    call_id_for,
+    request_sha256_for,
+    trial_id_for,
+)
 from lofbench.state_io import append_jsonl_fsynced, read_jsonl, write_json_atomic
 
 MAX_TRANSPORT_ATTEMPTS = 3
@@ -33,6 +47,14 @@ def _effective_calls(rows: list[dict]) -> list[dict]:
     for row in rows:
         by_id[row["call_id"]] = row
     return list(by_id.values())
+
+
+def _request_starts(rows: list[dict]) -> dict[str, RequestStartedRecord]:
+    records = [RequestStartedRecord.from_dict(row) for row in rows]
+    by_id = {record.call_id: record for record in records}
+    if len(by_id) != len(records):
+        raise RuntimeError("run state contains duplicate request-started records")
+    return by_id
 
 
 def _latest_evidence(rows: list[dict]) -> dict[str, AttemptEvidence]:
@@ -214,13 +236,18 @@ class RunOrchestrator:
             completion_evidence_sha256=evidence.evidence_sha256,
         )
 
-    def _write_run_state(self, run: RunManifest) -> RunManifest:
+    def _write_run_state(
+        self,
+        run: RunManifest,
+        *,
+        status_override: RunStatus | None = None,
+    ) -> RunManifest:
         trials = read_jsonl(self.state_dir / "trials.jsonl")
         calls = _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
         complete = {row["trial_id"] for row in trials} == set(run.expected_trial_ids)
         updated = replace(
             run,
-            status="complete" if complete else "probed",
+            status=status_override or ("complete" if complete else "probed"),
             attempts=len(calls),
             token_usage={
                 key: sum(row[key] for row in calls)
@@ -265,11 +292,23 @@ class RunOrchestrator:
             for trial_id in run.expected_trial_ids
             for attempt in range(1, run.max_transport_attempts + 1)
         }
+        request_hashes = {
+            call_id: request_sha256_for(
+                call_id=call_id,
+                trial_id=trial_id,
+                run_id=run.run_id,
+                attempt=attempt,
+                prompt_hash=samples_by_trial[trial_id].metadata["prompt_hash"],
+                model_payload_sha256=samples_by_trial[trial_id].metadata["model_payload_sha256"],
+            )
+            for call_id, (trial_id, attempt) in call_identity.items()
+        }
         inferred_here: set[str] = set()
         recovered_here: set[str] = set()
 
         while True:
             evidence_by_call = _latest_evidence(read_jsonl(self.state_dir / "transcripts.jsonl"))
+            request_starts = _request_starts(read_jsonl(self.state_dir / "request-started.jsonl"))
             call_rows = _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
             calls_by_id = {row["call_id"]: row for row in call_rows}
             trial_rows = read_jsonl(self.state_dir / "trials.jsonl")
@@ -282,7 +321,9 @@ class RunOrchestrator:
             events_by_call: dict[str, list] = {}
             for event in self.ledger.events_for_run(run.run_id):
                 events_by_call.setdefault(event.call_id, []).append(event)
-            initiated = set(events_by_call) | set(evidence_by_call) | set(calls_by_id)
+            initiated = (
+                set(events_by_call) | set(request_starts) | set(evidence_by_call) | set(calls_by_id)
+            )
             if initiated - set(call_identity):
                 raise RuntimeError("run state contains an unexpected call")
 
@@ -290,6 +331,7 @@ class RunOrchestrator:
             # evidence before a new inference is considered.
             changed = False
             reserve_only: list[str] = []
+            ambiguous: list[str] = []
             for call_id in call_identity:
                 if call_id not in initiated:
                     continue
@@ -306,13 +348,27 @@ class RunOrchestrator:
                 ):
                     raise RuntimeError("run ledger identity is invalid")
                 reservation = events[0].amount_usd
+                request_start = request_starts.get(call_id)
+                if request_start is not None and (
+                    request_start.call_id != call_id
+                    or request_start.trial_id != trial_id
+                    or request_start.run_id != run.run_id
+                    or request_start.attempt != attempt
+                    or request_start.request_sha256 != request_hashes[call_id]
+                ):
+                    raise RuntimeError("run request-started identity is invalid")
                 evidence = evidence_by_call.get(call_id)
                 persisted_call = calls_by_id.get(call_id)
                 if evidence is None:
                     if persisted_call is not None or len(events) == 2:
                         raise RuntimeError("run state contains a call without evidence")
-                    reserve_only.append(call_id)
+                    if request_start is None:
+                        reserve_only.append(call_id)
+                    else:
+                        ambiguous.append(call_id)
                     continue
+                if request_start is None:
+                    raise RuntimeError("run evidence has no request-started record")
                 if (
                     evidence.call_id != call_id
                     or evidence.trial_id != trial_id
@@ -402,11 +458,28 @@ class RunOrchestrator:
             if changed:
                 continue
 
-            # A reservation is the durable intent for exactly one inference.
-            # Resumption reuses its deterministic call id.
+            if ambiguous:
+                self._write_run_state(run, status_override="ambiguous")
+                raise RuntimeError("request outcome is ambiguous; refusing to resend inference")
+
+            # A reservation is safe to execute only until the durable request
+            # marker exists. Started-without-evidence is quarantined above.
             if reserve_only:
                 call_id = reserve_only[0]
                 trial_id, attempt = call_identity[call_id]
+                request_start = RequestStartedRecord(
+                    call_id=call_id,
+                    trial_id=trial_id,
+                    run_id=run.run_id,
+                    attempt=attempt,
+                    request_sha256=request_hashes[call_id],
+                    started_at=datetime.now(UTC).isoformat(),
+                )
+                append_jsonl_fsynced(
+                    self.state_dir / "request-started.jsonl",
+                    request_start.to_dict(),
+                )
+                self._observe("request_started", call_id)
                 result = self.executor.execute(
                     ExecutionRequest(
                         run=run,
@@ -417,6 +490,7 @@ class RunOrchestrator:
                         call_id=call_id,
                     )
                 )
+                self._observe("provider_returned", call_id)
                 evidence = AttemptEvidence.capture(
                     call_id=call_id,
                     trial_id=trial_id,

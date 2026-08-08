@@ -30,7 +30,13 @@ from lofbench.publication import (
     archive_release,
     export_inspect_bundle,
 )
-from lofbench.records import AttemptEvidence, CallRecord, RunManifest, TrialRecord
+from lofbench.records import (
+    AttemptEvidence,
+    CallRecord,
+    RequestStartedRecord,
+    RunManifest,
+    TrialRecord,
+)
 from lofbench.release_bundle import ReleaseBundle
 from lofbench.run_models import ExecutionSpec, TrialExecutor, plan_run
 from lofbench.state_io import read_jsonl, write_json_atomic
@@ -354,6 +360,10 @@ def main(argv: list[str] | None = None) -> int:
             run,
             [TrialRecord(**row) for row in read_jsonl(state_dir / "trials.jsonl")],
             calls=[CallRecord(**row) for row in effective_calls.values()],
+            request_starts=[
+                RequestStartedRecord.from_dict(row)
+                for row in read_jsonl(state_dir / "request-started.jsonl")
+            ],
             ledger_events=_ledger(args.state_root).events_for_run(run.run_id),
             evidence=[
                 AttemptEvidence.from_dict(row)
