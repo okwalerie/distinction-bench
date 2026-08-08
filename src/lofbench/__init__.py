@@ -15,6 +15,7 @@ from lofbench.core import (
     string_depth,
     string_to_form,
 )
+from lofbench.metrics import compute_controlled_effects, compute_profiles
 from lofbench.protocols import PROTOCOLS, ProtocolSpec, get_protocol
 from lofbench.records import CallRecord, RunManifest, TrialRecord
 from lofbench.release_bundle import ReleaseBundle
@@ -58,6 +59,8 @@ __all__ = [
     "TrialRecord",
     "CallRecord",
     "ReleaseBundle",
+    "compute_profiles",
+    "compute_controlled_effects",
 ]
 
 __version__ = "0.2.0"
