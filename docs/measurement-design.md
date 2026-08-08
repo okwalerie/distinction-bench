@@ -218,7 +218,7 @@ to version 1 scores (section 12); they show only that the tiers separate difficu
 
 ## 7. Frozen suite v1 composition
 
-The suite is a checked-in file, `suites/v1.json`. It holds the suite version, an
+The suite is `src/lofbench/registries/suites-v1.json`. It holds the suite version, an
 explicit id-to-form table, the list of structured dialect specs, the factor grid,
 and, per stimulus, the resolved render inputs and a payload hash. A run cites
 `--suite v1`. Scores are always reported per suite version. Adding a dialect creates

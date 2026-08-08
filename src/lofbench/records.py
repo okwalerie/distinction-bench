@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from hashlib import blake2b, sha256
 from typing import Any, Literal
 
+from dbench.provider_evidence import ProviderEvidenceEnvelope
+
 RunStatus = Literal["planned", "probed", "complete", "admitted", "rejected"]
 
 
@@ -36,7 +38,7 @@ EXECUTION_SPEC_FIELDS = (
 RUN_IDENTITY_FIELDS = (
     "suite_version",
     "form_set",
-    "dialect_set",
+    "dialect_id",
     "protocol_id",
     *EXECUTION_SPEC_FIELDS,
     "authority",
@@ -62,7 +64,7 @@ class RunManifest:
     run_id: str
     suite_version: str
     form_set: str
-    dialect_set: str
+    dialect_id: str
     protocol_id: str
     requested_model_id: str
     resolved_model_id: str
@@ -169,33 +171,23 @@ class CallRecord:
 
 @dataclass(frozen=True)
 class AttemptEvidence:
-    """The deterministic public evidence projection for one provider attempt."""
+    """Immutable raw provider evidence linked to one benchmark attempt."""
 
     evidence_sha256: str
     call_id: str
     trial_id: str
     run_id: str
     attempt: int
-    status: str
-    started_at: str
-    finished_at: str
-    response_text: str
-    provider_request_id: str
-    resolved_model_id: str
-    provider: str
-    endpoint: str
-    input_tokens: int
-    output_tokens: int
-    reasoning_tokens: int
-    observed_cost_usd: float
-    latency_ms: float
-    error_type: str
-    raw_transcript: dict[str, Any]
+    provider_evidence: ProviderEvidenceEnvelope
 
     def digest_material(self) -> dict[str, Any]:
-        value = asdict(self)
-        value.pop("evidence_sha256")
-        return value
+        return {
+            "call_id": self.call_id,
+            "trial_id": self.trial_id,
+            "run_id": self.run_id,
+            "attempt": self.attempt,
+            "provider_evidence": self.provider_evidence.to_dict(),
+        }
 
     def authoritative_digest(self) -> str:
         canonical = json.dumps(
@@ -208,14 +200,30 @@ class AttemptEvidence:
         return sha256(canonical.encode()).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {"evidence_sha256": self.evidence_sha256, **self.digest_material()}
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AttemptEvidence:
-        return cls(**value)
+        return cls(
+            evidence_sha256=value["evidence_sha256"],
+            call_id=value["call_id"],
+            trial_id=value["trial_id"],
+            run_id=value["run_id"],
+            attempt=value["attempt"],
+            provider_evidence=ProviderEvidenceEnvelope.from_dict(
+                value["provider_evidence"]
+            ),
+        )
 
     @classmethod
     def capture(cls, **kwargs: Any) -> AttemptEvidence:
+        if isinstance(kwargs.get("provider_evidence"), dict):
+            kwargs = {
+                **kwargs,
+                "provider_evidence": ProviderEvidenceEnvelope.from_dict(
+                    kwargs["provider_evidence"]
+                ),
+            }
         provisional = cls(evidence_sha256="", **kwargs)
         return cls(evidence_sha256=provisional.authoritative_digest(), **kwargs)
 

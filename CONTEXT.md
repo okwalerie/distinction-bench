@@ -21,8 +21,8 @@ normal value when the same containment tree is rendered through different dialec
 ## boundaries
 
 the renderer registry is a development interface. the exact git blobs at the
-release's recorded source commit for `suites/v1.json` and the packaged protocol
-registry freeze
+release's recorded source commit for the packaged `registries/suites-v1.json` and
+`registries/protocols-v1.json` freeze
 the experiment definitions. copied registry files in a release are evidence copies,
 never a second authority. every run identity content-binds those registry bytes, its
 selected forms and cells, its selected protocol, and its endpoint/execution evidence.

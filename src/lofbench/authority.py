@@ -10,7 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-SUITE_REGISTRY_GIT_PATH = "suites/v1.json"
+SUITE_REGISTRY_GIT_PATH = "src/lofbench/registries/suites-v1.json"
 PROTOCOL_REGISTRY_GIT_PATH = "src/lofbench/registries/protocols-v1.json"
 
 

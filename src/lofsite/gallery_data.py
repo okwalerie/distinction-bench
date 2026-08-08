@@ -4,7 +4,7 @@ No FastHTML imports here -- `pages/gallery.py` turns these dataclasses into
 markup, so this module is unit-testable without spinning up the app. Every
 structure below comes from iterating live registries
 (`lofbench.renderers.list_renderers`, `lofbench.renderers.pipeline.spec.
-DIALECT_SPECS`) and the checked-in `suites/v1.json` (via `lofbench.suites.
+DIALECT_SPECS`) and the checked-in packaged suite registry (via `lofbench.suites.
 load_suite`) -- never a hand-written dialect list, per the gallery plan's
 binding constraint that a new dialect registered anywhere in `lofbench`
 appears on the next request with zero gallery edits.
@@ -155,7 +155,7 @@ def _exemplar_forms() -> tuple[str, str]:
     """Shallow: the first form (by `form_id` order) with difficulty
     "1. easy" (deterministically `lof_001`). Deep: the first form with
     difficulty "5. extra" (deterministically `lof_097`). Loaded from
-    `suites/v1.json` -- see the gallery plan's "Exemplar forms" section for
+    `registries/suites-v1.json` -- see the gallery plan's "Exemplar forms" section for
     why these are real frozen forms rather than a new ad-hoc generation.
     """
     forms = load_suite().forms

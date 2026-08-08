@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH
+from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH, SUITE_REGISTRY_GIT_PATH
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.release_bundle import ReleaseBundle
-from lofbench.suites import SUITES_DIR
+from lofbench.suites import DEFAULT_SUITE_REGISTRY
 from lofsite.build import build_site, verify_site_tree
 
 
@@ -22,13 +22,14 @@ def authority_repository(tmp_path_factory):
     )
     subprocess.run(["git", "config", "user.name", "test"], cwd=repository, check=True)
     (repository / "anchor").write_text("test\n")
-    (repository / "suites").mkdir()
+    suite_target = repository / SUITE_REGISTRY_GIT_PATH
+    suite_target.parent.mkdir(parents=True)
     protocol_target = repository / PROTOCOL_REGISTRY_GIT_PATH
-    protocol_target.parent.mkdir(parents=True)
-    shutil.copyfile(SUITES_DIR / "v1.json", repository / "suites/v1.json")
+    protocol_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(DEFAULT_SUITE_REGISTRY, suite_target)
     shutil.copyfile(DEFAULT_PROTOCOL_REGISTRY, protocol_target)
     subprocess.run(
-        ["git", "add", "anchor", "suites", "src"], cwd=repository, check=True
+        ["git", "add", "anchor", "src"], cwd=repository, check=True
     )
     subprocess.run(["git", "commit", "-qm", "test"], cwd=repository, check=True)
     return repository

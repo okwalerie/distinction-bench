@@ -7,15 +7,20 @@ import json
 import math
 import subprocess
 from collections.abc import Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from dbench.provider_evidence import (
+    project_provider_evidence,
+    validate_openrouter_run_policy,
+)
 from lofbench.authority import (
     AuthorityManifest,
     authority_from_git,
@@ -38,7 +43,7 @@ from lofbench.renderers.pipeline.composed import ComposedRenderer
 from lofbench.run_models import call_id_for, trial_id_for
 from lofbench.suites import LoadedSuite, load_suite
 
-BUNDLE_SCHEMA_VERSION = 5
+BUNDLE_SCHEMA_VERSION = 6
 _ROOT_FILES = {
     "human-trial.schema.json",
     "release.json",
@@ -52,12 +57,32 @@ _ROOT_FILES = {
     "transcripts.jsonl",
     "ledger.jsonl",
 }
-_SAMPLE_PROTOCOLS = {
-    "reduce-infer-v1",
-    "reduce-taught-v1",
-    "transcribe-infer-v1",
-    "transcribe-taught-v1",
-}
+@dataclass(frozen=True)
+class PublicationView:
+    """Validated, read-only inputs available to publication consumers."""
+
+    root: Path
+    release_id: str
+    status: str
+    suite_version: str
+    stimuli_materialized: bool
+    expected_run_ids: tuple[str, ...]
+    sample_contract: Mapping[str, Any] | None
+    paid_run_approval: Mapping[str, Any] | None
+    suite: LoadedSuite
+    protocols: Mapping[str, ProtocolSpec]
+    runs: tuple[RunManifest, ...]
+    trials: tuple[Mapping[str, Any], ...]
+    profiles: tuple[Mapping[str, Any], ...]
+    effects: tuple[Mapping[str, Any], ...]
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(child) for key, child in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(child) for child in value)
+    return value
 
 
 def _utc_now() -> str:
@@ -419,14 +444,14 @@ class ReleaseBundle:
             raise RuntimeError("run lacks normalized prompt/completion/image pricing")
         if run.form_set not in suite.form_sets:
             raise RuntimeError(f"run uses unknown frozen form set {run.form_set!r}")
-        if run.dialect_set not in suite.specs:
-            raise RuntimeError(f"run uses unknown frozen dialect {run.dialect_set!r}")
+        if run.dialect_id not in suite.specs:
+            raise RuntimeError(f"run uses unknown frozen dialect {run.dialect_id!r}")
         form_ids = tuple(suite.form_sets[run.form_set])
         expected_authority = derive_run_authority(
             suite_bytes=suite_bytes,
             protocol_bytes=protocol_bytes,
             form_ids=form_ids,
-            dialect_id=run.dialect_set,
+            dialect_id=run.dialect_id,
             protocol_id=run.protocol_id,
             execution_spec=execution_spec_identity(run.to_dict()),
             catalog_retrieved_at=run.catalog_retrieved_at,
@@ -435,7 +460,7 @@ class ReleaseBundle:
         if run.authority != expected_authority.to_dict():
             raise RuntimeError("run authority digests do not match the recorded registries")
         authoritative_trial_ids = tuple(
-            trial_id_for(run.run_id, form_id, run.dialect_set) for form_id in form_ids
+            trial_id_for(run.run_id, form_id, run.dialect_id) for form_id in form_ids
         )
         if run.expected_trial_ids != authoritative_trial_ids:
             raise RuntimeError("run expected trial ids do not match its frozen form set")
@@ -443,24 +468,24 @@ class ReleaseBundle:
         cells = {
             (cell["abstract_form_id"], cell["dialect_id"]): cell for cell in suite.cells
         }
-        dialect = suite.specs[run.dialect_set]
+        dialect = suite.specs[run.dialect_id]
         allowed_forms = set(form_ids)
         for trial in trials:
             form_id = trial["abstract_form_id"]
             if form_id not in allowed_forms:
                 raise RuntimeError("trial abstract_form_id is not in the run's frozen form set")
             form = forms[form_id]
-            cell = cells[(form_id, run.dialect_set)]
+            cell = cells[(form_id, run.dialect_id)]
             parse_status, prediction, correct = protocol.parse_answer(
                 trial["response_text"],
                 expected_normal_value=form["normal_value"],
                 expected_tree=form["abstract_form"],
             )
             authorities = {
-                "trial_id": trial_id_for(run.run_id, form_id, run.dialect_set),
+                "trial_id": trial_id_for(run.run_id, form_id, run.dialect_id),
                 "run_id": run.run_id,
                 "suite_version": run.suite_version,
-                "dialect_id": run.dialect_set,
+                "dialect_id": run.dialect_id,
                 "protocol_id": run.protocol_id,
                 "execution_surface": run.execution_surface,
                 "requested_model_id": run.requested_model_id,
@@ -573,11 +598,19 @@ class ReleaseBundle:
             call = calls_by_id[call_id]
             if record.evidence_sha256 != record.authoritative_digest():
                 raise RuntimeError("attempt evidence digest does not match its content")
-            authorities = {
+            links = {
                 "call_id": call.call_id,
                 "trial_id": call.trial_id,
                 "run_id": call.run_id,
                 "attempt": call.attempt,
+            }
+            for field, expected in links.items():
+                if getattr(record, field) != expected:
+                    raise RuntimeError(f"attempt evidence contradicts its call for {field}")
+            projection = project_provider_evidence(
+                record.provider_evidence, run.to_dict()
+            )
+            authorities = {
                 "status": call.status,
                 "started_at": call.started_at,
                 "finished_at": call.finished_at,
@@ -593,14 +626,15 @@ class ReleaseBundle:
                 "error_type": call.error_type,
             }
             for field, expected in authorities.items():
-                if getattr(record, field) != expected:
+                if getattr(projection, field) != expected:
                     raise RuntimeError(f"attempt evidence contradicts its call for {field}")
-            if sha256(record.response_text.encode()).hexdigest() != call.response_sha256:
+            if sha256(projection.response_text.encode()).hexdigest() != call.response_sha256:
                 raise RuntimeError("attempt evidence response does not match its call hash")
             if call.status == "complete":
                 trial = trial_by_id[call.trial_id]
                 if (
-                    trial["response_text"] != record.response_text
+                    trial["response_text"] != projection.response_text
+                    or trial["error_type"] != projection.error_type
                     or trial["completion_evidence_sha256"] != record.evidence_sha256
                 ):
                     raise RuntimeError("completion evidence contradicts its trial")
@@ -773,6 +807,35 @@ class ReleaseBundle:
             trials=_read_rows(self.root / "trials.parquet"),
         )
 
+    def publication(self) -> PublicationView:
+        """Return the sole validated view consumed by site/export publication."""
+        self.validate()
+        suite = load_suite(
+            version=self.manifest["suite_version"], path=self.root / "suite.json"
+        )
+        protocols = load_protocol_registry(self.root / "protocols.json")
+        profiles, effects = self._verified_metric_rows(
+            suite=suite,
+            runs=self.runs(),
+            trials=_read_rows(self.root / "trials.parquet"),
+        )
+        return PublicationView(
+            root=self.root,
+            release_id=self.manifest["release_id"],
+            status=self.manifest["status"],
+            suite_version=self.manifest["suite_version"],
+            stimuli_materialized=bool(self.manifest.get("stimuli_materialized")),
+            expected_run_ids=tuple(self.manifest["expected_run_ids"]),
+            sample_contract=_freeze(self.manifest.get("sample_contract")),
+            paid_run_approval=_freeze(self.manifest.get("paid_run_approval")),
+            suite=suite,
+            protocols=MappingProxyType(protocols),
+            runs=tuple(self.runs()),
+            trials=tuple(_freeze(row) for row in _read_rows(self.root / "trials.parquet")),
+            profiles=tuple(_freeze(row) for row in profiles),
+            effects=tuple(_freeze(row) for row in effects),
+        )
+
     def _artifact_paths(self) -> list[Path]:
         return sorted(
             path for path in self.root.rglob("*") if path.is_file() and path.name != "release.json"
@@ -905,7 +968,7 @@ class ReleaseBundle:
             raise RuntimeError("sample contract is attached to the wrong release id")
         expected_protocols = set(contract["protocol_ids"])
         if (
-            expected_protocols != _SAMPLE_PROTOCOLS
+            expected_protocols != set(self.manifest["protocol_ids"])
             or contract["form_set"] != "probe"
             or contract["dialect_id"] != "enclosure.plain-v1"
             or contract["execution_surface"] != "direct_api"
@@ -926,12 +989,12 @@ class ReleaseBundle:
                 or len(run.expected_trial_ids) != contract["trials_per_run"]
                 or run.max_transport_attempts != contract["max_transport_attempts"]
                 or run.execution_surface != contract["execution_surface"]
-                or run.dialect_set != contract["dialect_id"]
+                or run.dialect_id != contract["dialect_id"]
                 for run in runs
             ):
                 raise RuntimeError("sample run shape does not match the contract")
             for field in (
-                "dialect_set",
+                "dialect_id",
                 "requested_model_id",
                 "resolved_model_id",
                 "endpoint",
@@ -940,32 +1003,7 @@ class ReleaseBundle:
                 if len({getattr(run, field) for run in runs}) != 1:
                     raise RuntimeError(f"sample runs do not share one {field}")
             for run in runs:
-                selected = run.catalog_row.get("selected_endpoint", {})
-                zdr_selected = run.catalog_row.get("zdr_selected_endpoint", {})
-                endpoint_identity = (
-                    run.resolved_model_id,
-                    selected.get("tag"),
-                    selected.get("provider_name"),
-                )
-                if (
-                    run.routing_policy.get("order") != [run.endpoint]
-                    or run.routing_policy.get("allow_fallbacks") is not False
-                    or run.routing_policy.get("data_collection") != "deny"
-                    or run.routing_policy.get("zdr") is not True
-                    or run.privacy_policy.get("data_collection") != "deny"
-                    or run.privacy_policy.get("zdr") is not True
-                    or run.privacy_policy.get("authenticated_zdr_catalog") is not True
-                    or run.generation.get("max_retries") != 0
-                    or run.catalog_row.get("authenticated") is not True
-                    or endpoint_identity
-                    != (
-                        zdr_selected.get("model_id"),
-                        zdr_selected.get("tag"),
-                        zdr_selected.get("provider_name"),
-                    )
-                    or selected.get("pricing") != zdr_selected.get("pricing")
-                ):
-                    raise RuntimeError("sample run lacks exact authenticated ZDR routing proof")
+                validate_openrouter_run_policy(run.to_dict())
         admitted = [run for run in runs if run.status == "admitted"]
         if admitted:
             expected_forms = set(

@@ -35,7 +35,8 @@ FULL_FORMS_PER_TIER = 80
 CORE_FORMS_PER_TIER = 24
 GENERATION_SEED = 20260704
 EXCLUDED_DIALECT_IDS = frozenset({"circle"})
-SUITES_DIR = Path(__file__).resolve().parents[2] / "suites"
+SUITE_REGISTRIES_DIR = Path(__file__).with_name("registries")
+DEFAULT_SUITE_REGISTRY = SUITE_REGISTRIES_DIR / "suites-v1.json"
 
 _SPATIAL_ARCHETYPES = {
     "blocks@1",
@@ -394,7 +395,7 @@ class LoadedSuite:
 
 
 def _suite_path(version: str) -> Path:
-    return SUITES_DIR / f"{version}.json"
+    return SUITE_REGISTRIES_DIR / f"suites-{version}.json"
 
 
 def freeze_suite(

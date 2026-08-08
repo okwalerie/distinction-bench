@@ -10,12 +10,10 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-import pyarrow.parquet as pq
-
-from lofbench.protocols import ProtocolSpec, load_protocol_registry
+from lofbench.protocols import ProtocolSpec
 from lofbench.records import RunManifest
-from lofbench.release_bundle import ReleaseBundle
-from lofbench.suites import LoadedSuite, load_suite
+from lofbench.release_bundle import PublicationView, ReleaseBundle
+from lofbench.suites import LoadedSuite
 
 _DOWNLOADS = (
     "suite.json",
@@ -105,9 +103,13 @@ def verify_site_tree(expected: Path, rebuilt: Path) -> None:
         raise RuntimeError("rebuilt site tree does not match the sealed bundle site")
 
 
-def _overview(bundle: ReleaseBundle, suite: LoadedSuite, protocols: dict[str, ProtocolSpec]) -> str:
-    runs = bundle.runs()
-    trials = pq.read_table(bundle.root / "trials.parquet").num_rows
+def _overview(
+    publication: PublicationView,
+    suite: LoadedSuite,
+    protocols: dict[str, ProtocolSpec],
+) -> str:
+    runs = publication.runs
+    trials = len(publication.trials)
     families = {spec.family for spec in suite.specs.values()}
     metrics = (
         (len(suite.forms), "frozen abstract forms"),
@@ -123,14 +125,14 @@ def _overview(bundle: ReleaseBundle, suite: LoadedSuite, protocols: dict[str, Pr
     )
     caveat = (
         "this is a protocol smoke test, not a benchmark result or model ranking."
-        if bundle.manifest.get("sample_contract")
+        if publication.sample_contract
         else "results shown here are only admitted bundle records."
     )
     return (
         "<h1>distinction benchmark</h1>"
         "<p class=lede>an inspectable benchmark of whether a model can preserve laws of form "
         "structure and reduce it across genuinely different representational dialects.</p>"
-        f"<p class=notice>release <strong>{_e(bundle.manifest['release_id'])}</strong>: "
+        f"<p class=notice>release <strong>{_e(publication.release_id)}</strong>: "
         f"{_e(caveat)}</p>"
         f"<section class=grid>{cards}</section><h2>the claim</h2>"
         "<p>competence and representational invariance are reported separately. a model can be "
@@ -260,17 +262,17 @@ def _records_table(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> str:
 
 
 def _worked_path(
-    bundle: ReleaseBundle,
+    publication: PublicationView,
     runs: list[RunManifest],
     profiles: list[dict[str, Any]],
 ) -> str:
-    trials = pq.read_table(bundle.root / "trials.parquet").to_pylist()
+    trials = publication.trials
     if not runs or not trials:
         return "<p class=notice>no admitted trial is available for a worked path.</p>"
     run = runs[0]
     trial = next(row for row in trials if row["run_id"] == run.run_id)
-    suite = load_suite(version=run.suite_version, path=bundle.root / "suite.json")
-    protocols = load_protocol_registry(bundle.root / "protocols.json")
+    suite = publication.suite
+    protocols = publication.protocols
     form = next(
         item for item in suite.forms if item["abstract_form_id"] == trial["abstract_form_id"]
     )
@@ -444,13 +446,13 @@ def _reasoning_contrasts(profiles: list[dict[str, Any]]) -> str:
 
 
 def _runs_page(
-    bundle: ReleaseBundle,
+    publication: PublicationView,
     profiles: list[dict[str, Any]],
     effects: list[dict[str, Any]],
 ) -> str:
-    runs = bundle.runs()
-    suite = load_suite(version=bundle.manifest["suite_version"], path=bundle.root / "suite.json")
-    trials = pq.read_table(bundle.root / "trials.parquet").to_pylist()
+    runs = list(publication.runs)
+    suite = publication.suite
+    trials = publication.trials
     grouped: dict[str, list[RunManifest]] = {"direct_api": [], "agent": []}
     for run in runs:
         grouped["direct_api" if run.execution_surface == "direct_api" else "agent"].append(run)
@@ -461,7 +463,7 @@ def _runs_page(
         rows = "".join(
             f"<tr><td><code>{_e(run.run_id)}</code></td>"
             f"<td>{_e(run.requested_model_id)}<br>{_e(run.resolved_model_id)}</td>"
-            f"<td>{_e(run.protocol_id)}<br>{_e(run.dialect_set)}</td>"
+            f"<td>{_e(run.protocol_id)}<br>{_e(run.dialect_id)}</td>"
             f"<td>{_e(run.execution_surface)}<br>{_e(run.provider)}<br>"
             f"<code>{_e(run.endpoint)}</code></td>"
             f"<td><code>{_e(json.dumps(run.reasoning, sort_keys=True))}</code></td>"
@@ -539,7 +541,7 @@ def _runs_page(
         f"{provenance}"
         "<h2>worked result path</h2><p>one admitted result traced from the frozen "
         "abstract form through its dialect payload and exact protocol to parsing and scoring.</p>"
-        f"<section class=grid>{_worked_path(bundle, runs, profiles)}</section>"
+        f"<section class=grid>{_worked_path(publication, runs, profiles)}</section>"
         "<h2>competence + invariance profiles</h2>"
         f"{profile_table}"
         "<h2>controlled dialect effects</h2>"
@@ -633,15 +635,15 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
     )
 
 
-def _downloads(bundle: ReleaseBundle) -> str:
+def _downloads(publication: PublicationView) -> str:
     rows = "".join(
         f'<tr><td><a href="downloads/{_e(name)}">{_e(name)}</a></td>'
-        f"<td>{(bundle.root / name).stat().st_size}</td>"
-        f"<td><code>{sha256((bundle.root / name).read_bytes()).hexdigest()}</code></td></tr>"
+        f"<td>{(publication.root / name).stat().st_size}</td>"
+        f"<td><code>{sha256((publication.root / name).read_bytes()).hexdigest()}</code></td></tr>"
         for name in _DOWNLOADS
     )
     citation = (
-        f"distinction benchmark contributors ({bundle.manifest['release_id']}). "
+        f"distinction benchmark contributors ({publication.release_id}). "
         "distinction benchmark: laws of form representation invariance evaluation."
     )
     return (
@@ -662,13 +664,13 @@ def _downloads(bundle: ReleaseBundle) -> str:
 
 def build_site(release_dir: Path, out: Path) -> None:
     bundle = ReleaseBundle.open(release_dir)
-    bundle.validate()
+    publication = bundle.publication()
     try:
-        out.resolve().relative_to((bundle.root / "site").resolve())
+        out.resolve().relative_to((publication.root / "site").resolve())
         inside_bundle_site = True
     except ValueError:
         inside_bundle_site = False
-    if bundle.manifest["status"] != "sealed" and not inside_bundle_site:
+    if publication.status != "sealed" and not inside_bundle_site:
         raise RuntimeError("a working bundle may only build its own site/ directory")
     if out.exists():
         if any(out.iterdir()):
@@ -676,24 +678,34 @@ def build_site(release_dir: Path, out: Path) -> None:
     else:
         out.mkdir(parents=True)
 
-    suite = load_suite(version=bundle.manifest["suite_version"], path=bundle.root / "suite.json")
-    protocols = load_protocol_registry(bundle.root / "protocols.json")
-    profiles, effects = bundle.verified_metric_rows()
-    _write(out / "index.html", _page("what is tested", _overview(bundle, suite, protocols)))
+    suite = publication.suite
+    protocols = publication.protocols
+    profiles = list(publication.profiles)
+    effects = list(publication.effects)
+    _write(
+        out / "index.html",
+        _page("what is tested", _overview(publication, suite, protocols)),
+    )
     _write(out / "forms.html", _page("forms + protocols", _forms(suite, protocols)))
     _write(out / "atlas.html", _page("dialect atlas", _atlas(out, suite)))
-    _write(out / "runs.html", _page("models + runs", _runs_page(bundle, profiles, effects)))
+    _write(
+        out / "runs.html",
+        _page("models + runs", _runs_page(publication, profiles, effects)),
+    )
     _write(
         out / "human.html",
-        _page("human pilot", _human(suite, protocols, bundle.manifest["release_id"])),
+        _page("human pilot", _human(suite, protocols, publication.release_id)),
     )
-    _write(out / "downloads.html", _page("downloads + citation", _downloads(bundle)))
+    _write(
+        out / "downloads.html",
+        _page("downloads + citation", _downloads(publication)),
+    )
     downloads = out / "downloads"
     downloads.mkdir()
     for name in _DOWNLOADS:
-        shutil.copyfile(bundle.root / name, downloads / name)
-    if bundle.manifest.get("stimuli_materialized"):
-        shutil.copytree(bundle.root / "stimuli", out / "assets" / "stimuli")
+        shutil.copyfile(publication.root / name, downloads / name)
+    if publication.stimuli_materialized:
+        shutil.copytree(publication.root / "stimuli", out / "assets" / "stimuli")
     (out / "CNAME").write_text("distinction.valeriekim.ca\n")
 
 

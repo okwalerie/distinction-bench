@@ -469,6 +469,27 @@ than beginning the broad sweep.
 
 ## Reset 2026-08-08 by agent:codex-root
 
+## Review Cycle 5 Findings — canonical provider-evidence projection
+
+the fifth review proved that `AttemptEvidence` still permits sibling typed assertions
+to contradict its opaque raw transcript. replace that split trust path with one typed,
+immutable provider-evidence envelope owned by the application adapter and one pure
+projection used both to construct and to validate all attempt/call/trial fields.
+retain the exact chat response and any generation-accounting lookup response with
+deterministic source labels and timing; fail closed when required lookup evidence is
+absent. derive completion, request/model/provider/endpoint identity, usage, cost,
+latency, and error semantics solely from the projection, including trial errors.
+
+also package the exact frozen suite registry beside the protocol registry, rename the
+singular public `dialect_set` field to `dialect_id` before paid execution, and deepen
+the `ReleaseBundle` publication interface so cli/site consumers do not interpret its
+mutable internals or provider sample policy independently. update adr 0001 to describe
+the implemented boundary. add adversarial contradiction, missing-generation,
+installed-wheel, and dialect-identity regressions while preserving the prior forgery
+matrix. run focused, full, clean-room, and wheel-install gates without model calls,
+commit the result, and return db-14 to independent review tied to
+`ev_01KZHD2KCS0N6MHCW1JHJJ90HA`.
+
 ## Review Cycle 4 Findings — sealed authority and evidence closure
 
 the fourth adversarial review proved that the bundle still had two parallel trust
@@ -503,3 +524,5 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-seal-boundary
+
+## Reset 2026-08-08 by agent:codex-root

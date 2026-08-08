@@ -41,9 +41,7 @@ WORKDIR /app
 # Project metadata + lockfile first for a cache-friendly dependency layer.
 COPY pyproject.toml uv.lock README.org ./
 COPY src ./src
-# Checked-in frozen suite: the gallery page reads /app/suites/v1.json via
-# lofbench.suites.load_suite (SUITES_DIR = <repo>/suites). Without it /gallery 500s.
-COPY suites ./suites
+# The frozen suite and protocol authorities are package data under src/lofbench/registries.
 
 # Full main deps + the `site` extra. main deps are not optional: lofsite.data
 # imports lofbench.pipeline (-> inspect_ai, pandas, pyarrow) and lofsite.rendering

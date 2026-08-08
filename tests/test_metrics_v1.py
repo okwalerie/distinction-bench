@@ -14,7 +14,7 @@ def _run(model: str, expected: tuple[str, ...]) -> RunManifest:
     return RunManifest.plan(
         suite_version="v1",
         form_set="probe",
-        dialect_set="test",
+        dialect_id="test",
         protocol_id="reduce-infer-v1",
         requested_model_id=model,
         resolved_model_id=model,

@@ -10,10 +10,11 @@ from typing import Any
 from inspect_ai import Task
 from inspect_ai.dataset import Sample
 
+from dbench.provider_evidence import ProviderEvidenceEnvelope
 from lofbench.authority import derive_run_authority
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.records import RunManifest, deterministic_id, execution_spec_identity
-from lofbench.suites import SUITES_DIR
+from lofbench.suites import DEFAULT_SUITE_REGISTRY
 
 
 def trial_id_for(run_id: str, abstract_form_id: str, dialect_id: str) -> str:
@@ -62,18 +63,7 @@ class ExecutionRequest:
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    response_text: str = ""
-    resolved_model_id: str = ""
-    endpoint: str = ""
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    reasoning_tokens: int | None = None
-    observed_cost_usd: float | None = None
-    latency_ms: float = 0.0
-    provider_request_id: str = ""
-    transcript: dict[str, Any] | None = None
-    transport_error: bool = False
-    error_type: str = ""
+    provider_evidence: ProviderEvidenceEnvelope
 
 
 class TrialExecutor(ABC):
@@ -101,7 +91,7 @@ def plan_run(
     *,
     suite_version: str,
     form_set: str,
-    dialect_set: str,
+    dialect_id: str,
     protocol_id: str,
     execution: ExecutionSpec,
     suite_registry_path: Path | None = None,
@@ -114,10 +104,10 @@ def plan_run(
         raise RuntimeError("task dataset does not match its selected form metadata")
     execution_values = asdict(execution)
     authority = derive_run_authority(
-        suite_bytes=(suite_registry_path or SUITES_DIR / f"{suite_version}.json").read_bytes(),
+        suite_bytes=(suite_registry_path or DEFAULT_SUITE_REGISTRY).read_bytes(),
         protocol_bytes=(protocol_registry_path or DEFAULT_PROTOCOL_REGISTRY).read_bytes(),
         form_ids=form_ids,
-        dialect_id=dialect_set,
+        dialect_id=dialect_id,
         protocol_id=protocol_id,
         execution_spec=execution_spec_identity(execution_values),
         catalog_retrieved_at=execution.catalog_retrieved_at,
@@ -126,7 +116,7 @@ def plan_run(
     base = RunManifest.plan(
         suite_version=suite_version,
         form_set=form_set,
-        dialect_set=dialect_set,
+        dialect_id=dialect_id,
         protocol_id=protocol_id,
         requested_model_id=execution.requested_model_id,
         resolved_model_id=execution.resolved_model_id,

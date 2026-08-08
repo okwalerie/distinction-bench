@@ -15,7 +15,7 @@ loopback only (`127.0.0.1:8094`), matching the existing `explorer-gallery` /
 
 | File | Role |
 |------|------|
-| `Containerfile` | Builds the image: `python:3.11-slim` + cairosvg native libs + `uv sync --extra site` + baked artifacts + `suites/v1.json`. |
+| `Containerfile` | Builds the image: `python:3.11-slim` + cairosvg native libs + `uv sync --extra site` + packaged frozen registries. |
 | `.containerignore` | Keeps `logs/`, `.git`, `.venv`, caches out of the build context. Passed explicitly (`--ignorefile`) because the context is the repo root. |
 | `lofsite.container` | The Quadlet unit. Installs to `~/.config/containers/systemd/lofsite.container`. |
 | `lofsite.service` | Legacy illustrative non-quadlet unit from DB-6 phase 1. Superseded by `lofsite.container`; kept for reference only. |
@@ -30,8 +30,7 @@ loopback only (`127.0.0.1:8094`), matching the existing `explorer-gallery` /
   and `lofsite.rendering` imports `lofbench.renderers` (→ cairosvg). So the full
   main deps are required, not just the `site` extra, and cairosvg's native libs
   (`libcairo2`, `libpango*`, `libgdk-pixbuf`, `libffi8`) must be in the image.
-- `/gallery` reads `/app/suites/v1.json` (`lofbench.suites.SUITES_DIR` =
-  `<repo>/suites`), so `suites/` must be baked in too.
+- `/gallery` reads the installed `lofbench/registries/suites-v1.json` package data.
 
 ## Redeploy (two commands)
 

@@ -6,10 +6,15 @@ import json
 import os
 import subprocess
 import tempfile
-import time
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
+from dbench.provider_evidence import (
+    AGENT_CLI_SOURCE,
+    ProviderEvidenceEnvelope,
+    ProviderEvidenceSource,
+)
 from lofbench.run_models import ExecutionRequest, ExecutionResult, TrialExecutor
 
 _AGENT_ENV_ALLOWLIST = frozenset(
@@ -31,6 +36,10 @@ _AGENT_ENV_ALLOWLIST = frozenset(
         "XDG_DATA_HOME",
     }
 )
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def agent_subprocess_env(
@@ -84,16 +93,56 @@ class AgentCliExecutor(TrialExecutor):
     def argv(self, request: ExecutionRequest, schema_path: Path, output_path: Path) -> list[str]:
         raise NotImplementedError
 
+    def _result(
+        self,
+        *,
+        request: ExecutionRequest,
+        started_at: str,
+        returncode: int,
+        output_text: str = "",
+        stdout: str = "",
+        stderr: str = "",
+    ) -> ExecutionResult:
+        payload = {
+            "command": self.command,
+            "returncode": returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "output_text": output_text,
+            "resolved_model_id": request.run.resolved_model_id,
+            "request_id": (
+                f"subscription:{self.command}:{request.run.run_id}:"
+                f"{request.sample.id}:{request.attempt}"
+            ),
+        }
+        return ExecutionResult(
+            provider_evidence=ProviderEvidenceEnvelope(
+                schema_version=1,
+                adapter_id="agent-cli-v1",
+                request_started_at=started_at,
+                response_finished_at=_now(),
+                sources=(
+                    ProviderEvidenceSource(
+                        label=AGENT_CLI_SOURCE,
+                        payload_json=json.dumps(
+                            payload,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ),
+                    ),
+                ),
+            )
+        )
+
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        started_at = _now()
         if not isinstance(request.sample.input, str):
-            return ExecutionResult(
-                error_type="agent_cli_text_only",
-                transport_error=True,
-                input_tokens=0,
-                output_tokens=0,
-                reasoning_tokens=0,
-                observed_cost_usd=0.0,
-                transcript={"surface": self.command, "error_type": "agent_cli_text_only"},
+            return self._result(
+                request=request,
+                started_at=started_at,
+                returncode=-2,
+                stderr="agent_cli_text_only",
             )
         with tempfile.TemporaryDirectory(prefix="lofbench-agent-") as directory:
             root = Path(directory)
@@ -104,7 +153,6 @@ class AgentCliExecutor(TrialExecutor):
             if hasattr(schema, "model_dump"):
                 schema = schema.model_dump(mode="json", exclude_none=True)
             schema_path.write_text(json.dumps(schema))
-            started = time.monotonic()
             completed = subprocess.run(
                 self.argv(request, schema_path, output_path),
                 cwd=root,
@@ -117,35 +165,20 @@ class AgentCliExecutor(TrialExecutor):
             if self.command == "claude" and completed.returncode == 0:
                 output_path.write_text(completed.stdout)
             if completed.returncode != 0 or not output_path.exists():
-                latency_ms = (time.monotonic() - started) * 1000
-                return ExecutionResult(
-                    transport_error=True,
-                    error_type=f"{self.command}_exit_{completed.returncode}",
-                    observed_cost_usd=0.0,
-                    input_tokens=0,
-                    output_tokens=0,
-                    reasoning_tokens=0,
-                    latency_ms=latency_ms,
-                    transcript={
-                        "surface": self.command,
-                        "returncode": completed.returncode,
-                        "stderr": completed.stderr,
-                    },
+                return self._result(
+                    request=request,
+                    started_at=started_at,
+                    returncode=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
                 )
-            return ExecutionResult(
-                response_text=output_path.read_text(),
-                resolved_model_id=request.run.resolved_model_id,
-                endpoint=self.command,
-                input_tokens=0,
-                output_tokens=0,
-                reasoning_tokens=0,
-                observed_cost_usd=0.0,
-                latency_ms=(time.monotonic() - started) * 1000,
-                provider_request_id=(
-                    f"subscription:{self.command}:{request.run.run_id}:"
-                    f"{request.sample.id}:{request.attempt}"
-                ),
-                transcript={"surface": self.command, "stderr": completed.stderr},
+            return self._result(
+                request=request,
+                started_at=started_at,
+                returncode=0,
+                output_text=output_path.read_text(),
+                stdout=completed.stdout,
+                stderr=completed.stderr,
             )
 
 

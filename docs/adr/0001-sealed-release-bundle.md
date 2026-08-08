@@ -14,8 +14,10 @@ response while leaving self-asserted trial rows internally plausible.
 ## decision
 
 one versioned release bundle is the only publication interface. the immutable
-experiment authority is the exact `suites/v1.json` and packaged protocol-registry git blobs
-at the source commit recorded in its `AuthorityManifest`. bundle-local copies are
+experiment authority is the exact packaged
+`src/lofbench/registries/suites-v1.json` and
+`src/lofbench/registries/protocols-v1.json` git blobs at the source commit recorded
+in its `AuthorityManifest`. bundle-local copies are
 evidence: validation checks their byte sha256 and git blob identity against that tree,
 never against the current working tree. a self-contained copy can check the recorded
 digests; sealing and repository-aware validation additionally check `git show` at the
@@ -26,17 +28,28 @@ the exact selected forms and cells, the selected protocol, endpoint-catalog evid
 and the provider-neutral execution spec. this projection is part of the sole run-id
 function and is reconstructed during planning, admission, and validation.
 
-each provider call has exactly one `AttemptEvidence` row. its canonical digest covers
-the completion, request id, resolved model, provider, endpoint, usage, cost, latency,
-status, and a deterministic redacted raw transcript projection. `CallRecord` links to
-that digest and the completed `TrialRecord` links to the final attempt. admission
-requires exact evidence/call/trial/ledger closure and recomputes all run aggregates.
-derived profiles and site files remain reproducible consumers. sealing lists and
-hashes every file and makes the directory immutable by convention and validation.
+each provider call has exactly one `AttemptEvidence` row. it retains an immutable,
+deterministically labelled `ProviderEvidenceEnvelope`: the exact raw chat response,
+the exact raw generation-accounting response, and local request/response timestamps.
+one pure projector derives completion, request id, resolved model, provider, endpoint,
+usage, cost, latency, status, and error. orchestration consumes only that projection;
+admission reruns it and compares every call/trial field. the direct openrouter adapter
+uses the provider's chat-completions endpoint rather than treating an opaque inspect
+sample dump as raw authority. missing generation evidence fails closed.
 
-the `release_bundle` module exposes only `create_working`, `open`, `admit_run`,
-`validate`, and `seal`. renderer registries, inspect logs, and site code are inputs or
-adapters, never alternative authorities.
+`CallRecord` links the envelope digest and the completed `TrialRecord` links the final
+attempt. trial error semantics are replayed from that evidence. admission requires
+exact evidence/call/trial/ledger closure and recomputes all run aggregates. derived
+profiles and site files remain reproducible consumers. sealing lists and hashes every
+file and makes the directory immutable by convention and validation.
+
+the `release_bundle` module's mutation interface is `create_working`, `admit_run`,
+`materialize_stimuli`, and `seal`; `open`, `validate`, and `validate_planned_run`
+enforce the same authority before operations. publication consumers use
+`publication`, a validated read-only view containing the frozen suite/protocols,
+admitted records, and recomputed metrics. renderer registries, provider adapters,
+inspect logs, cli policy, and site code are inputs or consumers, never alternative
+authorities.
 
 ## consequences
 
@@ -44,8 +57,8 @@ adapters, never alternative authorities.
   hashes.
 - changing any checked-in registry, selected cell set, protocol, endpoint catalog, or
   execution specification creates a different run identity.
-- redaction cannot remove or rewrite accounting and completion identity fields; it is
-  confined to the declared raw-evidence projection.
+- raw provider responses are retained byte-for-byte as json text; secrets belong to
+  request headers and never enter the envelope.
 - a renderer or analysis edit cannot revise an existing sealed release.
 - working runs remain mutable until admitted; incomplete or provenance-deficient runs
   cannot enter a sealed bundle.

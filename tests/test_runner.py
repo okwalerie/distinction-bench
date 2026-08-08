@@ -3,12 +3,20 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from inspect_ai import Task
 from inspect_ai.dataset import MemoryDataset
 
 from dbench.config import load_env_file
+from dbench.provider_evidence import (
+    OPENROUTER_CHAT_SOURCE,
+    OPENROUTER_ERROR_SOURCE,
+    OPENROUTER_GENERATION_SOURCE,
+    ProviderEvidenceEnvelope,
+    ProviderEvidenceSource,
+)
 from lofbench.accounting import SpendLedger
 from lofbench.orchestration import RunOrchestrator
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
@@ -18,7 +26,7 @@ from lofbench.run_models import (
     InMemoryExecutor,
     plan_run,
 )
-from lofbench.suites import SUITES_DIR
+from lofbench.suites import DEFAULT_SUITE_REGISTRY
 from lofbench.tasks.single import single_lof_task
 
 
@@ -54,7 +62,7 @@ def _task_and_run(protocol: str = "reduce-infer-v1"):
         task,
         suite_version="v1",
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id=protocol,
         execution=_execution(),
     )
@@ -72,10 +80,67 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
         "observed_cost_usd": 0.001,
         "latency_ms": 20.0,
         "provider_request_id": "request-test",
-        "transcript": {"adapter": "in-memory", "response": value},
+        "transport_error": False,
+        "error_type": "",
     }
     values.update(overrides)
-    return ExecutionResult(**values)
+    started = datetime(2026, 8, 8, tzinfo=UTC)
+    finished = started + timedelta(milliseconds=values["latency_ms"])
+    if values["transport_error"]:
+        sources = (
+            ProviderEvidenceSource(
+                label=OPENROUTER_ERROR_SOURCE,
+                payload_json=json.dumps(
+                    {"error_type": values["error_type"] or "TransportError"}
+                ),
+            ),
+        )
+    else:
+        generation = {
+            "id": values["provider_request_id"],
+            "model": values["resolved_model_id"],
+            "provider_name": (
+                "Example Provider"
+                if values["endpoint"] == "example-provider"
+                else values["endpoint"]
+            ),
+        }
+        if values["observed_cost_usd"] is not None:
+            generation["total_cost"] = values["observed_cost_usd"]
+        sources = (
+            ProviderEvidenceSource(
+                label=OPENROUTER_CHAT_SOURCE,
+                payload_json=json.dumps(
+                    {
+                        "id": values["provider_request_id"],
+                        "model": values["resolved_model_id"],
+                        "choices": [
+                            {"message": {"content": values["response_text"]}}
+                        ],
+                        "usage": {
+                            "prompt_tokens": values["input_tokens"],
+                            "completion_tokens": values["output_tokens"],
+                            "completion_tokens_details": {
+                                "reasoning_tokens": values["reasoning_tokens"]
+                            },
+                        },
+                    }
+                ),
+            ),
+            ProviderEvidenceSource(
+                label=OPENROUTER_GENERATION_SOURCE,
+                payload_json=json.dumps({"data": generation}),
+            ),
+        )
+    return ExecutionResult(
+        provider_evidence=ProviderEvidenceEnvelope(
+            schema_version=1,
+            adapter_id="openrouter-direct-v1",
+            request_started_at=started.isoformat(),
+            response_finished_at=finished.isoformat(),
+            sources=sources,
+        )
+    )
 
 
 def _ledger(tmp_path, *, global_cap: float = 30.0, cohort_cap: float = 30.0):
@@ -246,7 +311,7 @@ def test_single_attempt_mode_never_retries_a_sample_run_call(tmp_path):
         task,
         suite_version="v1",
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id="reduce-infer-v1",
         execution=replace(_execution(), max_transport_attempts=1),
     )
@@ -292,7 +357,7 @@ def test_unknown_catalog_pricing_stops_before_request(tmp_path):
         task,
         suite_version="v1",
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id="reduce-infer-v1",
         execution=replace(_execution(), pricing={}),
     )
@@ -382,7 +447,7 @@ def test_run_identity_changes_with_execution_defining_configuration(field, value
         task,
         suite_version="v1",
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id="reduce-infer-v1",
         execution=execution,
     )
@@ -399,7 +464,7 @@ def test_run_identity_changes_with_protocol_registry_bytes(tmp_path):
         task,
         suite_version="v1",
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id="reduce-infer-v1",
         execution=_execution(),
         protocol_registry_path=changed_registry,
@@ -409,7 +474,7 @@ def test_run_identity_changes_with_protocol_registry_bytes(tmp_path):
 
 def test_run_identity_changes_with_suite_registry_bytes(tmp_path):
     task, original = _task_and_run()
-    payload = json.loads((SUITES_DIR / "v1.json").read_text())
+    payload = json.loads(DEFAULT_SUITE_REGISTRY.read_text())
     payload["header"]["authority_test_marker"] = "different suite"
     changed_registry = tmp_path / "suite.json"
     changed_registry.write_text(json.dumps(payload))
@@ -417,7 +482,7 @@ def test_run_identity_changes_with_suite_registry_bytes(tmp_path):
         task,
         suite_version="v1",
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id="reduce-infer-v1",
         execution=_execution(),
         suite_registry_path=changed_registry,
@@ -453,7 +518,7 @@ def test_run_identity_changes_with_the_exact_selected_form_cells():
         altered_task,
         suite_version="v1",
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id="reduce-infer-v1",
         execution=_execution(),
     )
@@ -471,3 +536,23 @@ def test_run_result_fields_do_not_create_a_second_identity_definition():
         cost_usd=5.0,
     )
     assert completed.authoritative_run_id() == run.run_id
+
+
+def test_distinct_singular_dialect_ids_create_distinct_run_identities():
+    reference_task, reference = _task_and_run()
+    prose_task = single_lof_task(
+        form_set="probe", dialect="prose.containment-plain-v1"
+    )
+    prose = plan_run(
+        prose_task,
+        suite_version="v1",
+        form_set="probe",
+        dialect_id="prose.containment-plain-v1",
+        protocol_id="reduce-infer-v1",
+        execution=_execution(),
+    )
+    assert reference_task.metadata["form_ids"] == prose_task.metadata["form_ids"]
+    assert reference.dialect_id == "parens.reference-v1"
+    assert prose.dialect_id == "prose.containment-plain-v1"
+    assert "dialect_set" not in reference.to_dict()
+    assert reference.run_id != prose.run_id

@@ -18,7 +18,7 @@ from lofbench.core import (
 from lofbench.metrics import compute_controlled_effects, compute_profiles
 from lofbench.protocols import PROTOCOLS, ProtocolSpec, get_protocol
 from lofbench.records import CallRecord, RunManifest, TrialRecord
-from lofbench.release_bundle import ReleaseBundle
+from lofbench.release_bundle import PublicationView, ReleaseBundle
 from lofbench.renderers import (
     FormRenderer,
     RenderedForm,
@@ -59,6 +59,7 @@ __all__ = [
     "TrialRecord",
     "CallRecord",
     "ReleaseBundle",
+    "PublicationView",
     "compute_profiles",
     "compute_controlled_effects",
 ]

@@ -11,7 +11,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH, derive_run_authority
+from dbench.provider_evidence import (
+    OPENROUTER_CHAT_SOURCE,
+    OPENROUTER_ERROR_SOURCE,
+    OPENROUTER_GENERATION_SOURCE,
+    ProviderEvidenceEnvelope,
+    ProviderEvidenceSource,
+)
+from lofbench.authority import (
+    PROTOCOL_REGISTRY_GIT_PATH,
+    SUITE_REGISTRY_GIT_PATH,
+    derive_run_authority,
+)
 from lofbench.metrics import write_release_metrics
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY, get_protocol
 from lofbench.records import (
@@ -24,8 +35,73 @@ from lofbench.records import (
 )
 from lofbench.release_bundle import ReleaseBundle
 from lofbench.run_models import call_id_for, trial_id_for
-from lofbench.suites import SUITES_DIR, load_suite
+from lofbench.suites import DEFAULT_SUITE_REGISTRY, load_suite
 from lofsite.build import build_site
+
+
+def _provider_envelope(
+    run: RunManifest,
+    *,
+    response_text: str,
+    request_id: str,
+    started_at: str,
+    finished_at: str,
+    input_tokens: int = 20,
+    output_tokens: int = 4,
+    reasoning_tokens: int = 0,
+    cost_usd: float = 0.001,
+) -> ProviderEvidenceEnvelope:
+    selected = run.catalog_row["selected_endpoint"]
+    chat = {
+        "id": request_id,
+        "model": run.resolved_model_id,
+        "choices": [{"message": {"content": response_text}}],
+        "usage": {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "completion_tokens_details": {"reasoning_tokens": reasoning_tokens},
+        },
+    }
+    generation = {
+        "data": {
+            "id": request_id,
+            "model": run.resolved_model_id,
+            "provider_name": selected["provider_name"],
+            "total_cost": cost_usd,
+        }
+    }
+    return ProviderEvidenceEnvelope(
+        schema_version=1,
+        adapter_id="openrouter-direct-v1",
+        request_started_at=started_at,
+        response_finished_at=finished_at,
+        sources=(
+            ProviderEvidenceSource(
+                label=OPENROUTER_CHAT_SOURCE,
+                payload_json=json.dumps(chat),
+            ),
+            ProviderEvidenceSource(
+                label=OPENROUTER_GENERATION_SOURCE,
+                payload_json=json.dumps(generation),
+            ),
+        ),
+    )
+
+
+def _replace_evidence_source(
+    envelope: ProviderEvidenceEnvelope,
+    label: str,
+    payload: dict,
+) -> ProviderEvidenceEnvelope:
+    return replace(
+        envelope,
+        sources=tuple(
+            replace(source, payload_json=json.dumps(payload))
+            if source.label == label
+            else source
+            for source in envelope.sources
+        ),
+    )
 
 
 def _clean_repository(path: Path) -> Path:
@@ -34,21 +110,27 @@ def _clean_repository(path: Path) -> Path:
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.name", "test"], cwd=path, check=True)
     (path / "anchor").write_text("test\n")
-    (path / "suites").mkdir()
+    suite_target = path / SUITE_REGISTRY_GIT_PATH
+    suite_target.parent.mkdir(parents=True)
     protocol_target = path / PROTOCOL_REGISTRY_GIT_PATH
-    protocol_target.parent.mkdir(parents=True)
-    shutil.copyfile(SUITES_DIR / "v1.json", path / "suites/v1.json")
+    protocol_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(DEFAULT_SUITE_REGISTRY, suite_target)
     shutil.copyfile(DEFAULT_PROTOCOL_REGISTRY, protocol_target)
-    subprocess.run(["git", "add", "anchor", "suites", "src"], cwd=path, check=True)
+    subprocess.run(["git", "add", "anchor", "src"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-qm", "test"], cwd=path, check=True)
     return path
 
 
-def _run(*, status: str = "complete", suite_version: str = "v1") -> RunManifest:
+def _run(
+    *,
+    status: str = "complete",
+    suite_version: str = "v1",
+    max_transport_attempts: int = 1,
+) -> RunManifest:
     values = dict(
         suite_version=suite_version,
         form_set="probe",
-        dialect_set="parens.reference-v1",
+        dialect_id="parens.reference-v1",
         protocol_id="reduce-infer-v1",
         requested_model_id="example/model",
         resolved_model_id="example/model-20260808",
@@ -62,7 +144,7 @@ def _run(*, status: str = "complete", suite_version: str = "v1") -> RunManifest:
         generation={"temperature": 0, "max_tokens": 512, "max_retries": 0},
         billing_channel="test",
         cohort="test-release",
-        max_transport_attempts=1,
+        max_transport_attempts=max_transport_attempts,
         expected_trial_ids=(),
         pricing={"prompt": 0.000001, "completion": 0.000002, "image": 0.000001},
         authority={},
@@ -71,23 +153,29 @@ def _run(*, status: str = "complete", suite_version: str = "v1") -> RunManifest:
         token_usage={"input_tokens": 100, "output_tokens": 20, "reasoning_tokens": 0},
         latency_ms=50.0,
         cost_usd=0.005,
+        catalog_row={
+            "selected_endpoint": {
+                "tag": "provider/example",
+                "provider_name": "Example Provider",
+            }
+        },
     )
     form_ids = load_suite().form_sets["probe"]
     values["authority"] = derive_run_authority(
-        suite_bytes=(SUITES_DIR / "v1.json").read_bytes(),
+        suite_bytes=DEFAULT_SUITE_REGISTRY.read_bytes(),
         protocol_bytes=DEFAULT_PROTOCOL_REGISTRY.read_bytes(),
         form_ids=form_ids,
-        dialect_id=values["dialect_set"],
+        dialect_id=values["dialect_id"],
         protocol_id=values["protocol_id"],
         execution_spec=execution_spec_identity(values),
         catalog_retrieved_at="",
-        catalog_row={},
+        catalog_row=values["catalog_row"],
     ).to_dict()
     run = RunManifest.plan(**values)
     return replace(
         run,
         expected_trial_ids=tuple(
-            trial_id_for(run.run_id, form_id, run.dialect_set) for form_id in form_ids
+            trial_id_for(run.run_id, form_id, run.dialect_id) for form_id in form_ids
         ),
     )
 
@@ -99,7 +187,7 @@ def _trial(run: RunManifest, form_index: int = 0, **overrides) -> TrialRecord:
     cell = next(
         item
         for item in suite.cells
-        if item["abstract_form_id"] == form_id and item["dialect_id"] == run.dialect_set
+        if item["abstract_form_id"] == form_id and item["dialect_id"] == run.dialect_id
     )
     protocol = get_protocol(run.protocol_id)
     response_text = (
@@ -113,11 +201,11 @@ def _trial(run: RunManifest, form_index: int = 0, **overrides) -> TrialRecord:
         expected_tree=form["abstract_form"],
     )
     values = {
-        "trial_id": trial_id_for(run.run_id, form_id, run.dialect_set),
+        "trial_id": trial_id_for(run.run_id, form_id, run.dialect_id),
         "run_id": run.run_id,
         "suite_version": run.suite_version,
         "abstract_form_id": form_id,
-        "dialect_id": run.dialect_set,
+        "dialect_id": run.dialect_id,
         "protocol_id": run.protocol_id,
         "execution_surface": run.execution_surface,
         "requested_model_id": run.requested_model_id,
@@ -125,7 +213,7 @@ def _trial(run: RunManifest, form_index: int = 0, **overrides) -> TrialRecord:
         "provider": run.provider,
         "endpoint": run.endpoint,
         "prompt_hash": protocol.prompt_hash(
-            reading_rule=suite.specs[run.dialect_set].reading_rule,
+            reading_rule=suite.specs[run.dialect_id].reading_rule,
             model_payload_sha256=cell["model_payload_sha256"],
         ),
         "symbolic_payload_hash": cell["symbolic_payload_hash"],
@@ -164,28 +252,20 @@ def _accounting(
     for index, trial_id in enumerate(run.expected_trial_ids, start=1):
         trial = trials_by_id[trial_id]
         call_id = call_id_for(trial_id, 1)
-        started_at = f"2026-08-08T00:00:0{index}+00:00"
-        finished_at = f"2026-08-08T00:00:1{index}+00:00"
+        started_at = f"2026-08-08T00:00:0{index}.000000+00:00"
+        finished_at = f"2026-08-08T00:00:0{index}.010000+00:00"
         record = AttemptEvidence.capture(
             call_id=call_id,
             trial_id=trial_id,
             run_id=run.run_id,
             attempt=1,
-            status="complete",
-            started_at=started_at,
-            finished_at=finished_at,
-            response_text=trial.response_text,
-            provider_request_id=f"request_{index}",
-            resolved_model_id=run.resolved_model_id,
-            provider=run.provider,
-            endpoint=run.endpoint,
-            input_tokens=20,
-            output_tokens=4,
-            reasoning_tokens=0,
-            observed_cost_usd=0.001,
-            latency_ms=10.0,
-            error_type="",
-            raw_transcript={"response_text": trial.response_text},
+            provider_evidence=_provider_envelope(
+                run,
+                response_text=trial.response_text,
+                request_id=f"request_{index}",
+                started_at=started_at,
+                finished_at=finished_at,
+            ),
         )
         call = CallRecord(
             call_id=call_id,
@@ -484,7 +564,7 @@ def test_bundle_protocol_copy_is_evidence_not_mutable_authority(working):
 
 def test_authority_validation_reads_recorded_git_tree_not_worktree(working):
     bundle, repository, _run_manifest = working
-    source_suite = repository / "suites/v1.json"
+    source_suite = repository / SUITE_REGISTRY_GIT_PATH
     original = source_suite.read_bytes()
     source_suite.write_text("forged current worktree")
     try:
@@ -496,8 +576,18 @@ def test_authority_validation_reads_recorded_git_tree_not_worktree(working):
 def test_admission_rejects_incomplete_contradictory_attempt_evidence(working):
     bundle, _repository, run = working
     trials, calls, events, evidence = _accounting(run, _trials(run))
+    chat_source = next(
+        source
+        for source in evidence[0].provider_evidence.sources
+        if source.label == OPENROUTER_CHAT_SOURCE
+    )
+    chat = json.loads(chat_source.payload_json)
+    chat["choices"][0]["message"]["content"] = '{"value":"contradictory"}'
     contradictory = replace(
-        evidence[0], response_text='{"value":"contradictory"}'
+        evidence[0],
+        provider_evidence=_replace_evidence_source(
+            evidence[0].provider_evidence, OPENROUTER_CHAT_SOURCE, chat
+        ),
     )
     with pytest.raises(RuntimeError, match="evidence|transcript"):
         bundle.admit_run(
@@ -510,27 +600,213 @@ def test_admission_rejects_incomplete_contradictory_attempt_evidence(working):
 
 
 @pytest.mark.parametrize(
-    ("field", "bad_value"),
+    "mutation",
     [
-        ("response_text", '{"value":"unlinked"}'),
-        ("provider_request_id", "request_forged"),
-        ("resolved_model_id", "forged/model"),
-        ("provider", "forged-provider"),
-        ("endpoint", "forged-endpoint"),
-        ("input_tokens", 999),
-        ("output_tokens", 999),
-        ("reasoning_tokens", 999),
-        ("observed_cost_usd", 0.123),
-        ("latency_ms", 999.0),
+        "completion",
+        "request_id",
+        "model",
+        "provider",
+        "endpoint",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cost",
+        "latency",
+        "error",
     ],
 )
-def test_admission_rejects_attempt_evidence_contradictions(working, field, bad_value):
+def test_admission_rejects_raw_provider_evidence_contradictions(working, mutation):
     bundle, _repository, run = working
     trials, calls, events, evidence = _accounting(run, _trials(run))
+    envelope = evidence[0].provider_evidence
+    chat_source = next(
+        source for source in envelope.sources if source.label == OPENROUTER_CHAT_SOURCE
+    )
+    generation_source = next(
+        source
+        for source in envelope.sources
+        if source.label == OPENROUTER_GENERATION_SOURCE
+    )
+    chat = json.loads(chat_source.payload_json)
+    generation = json.loads(generation_source.payload_json)
+    if mutation == "completion":
+        chat["choices"][0]["message"]["content"] = '{"value":"forged"}'
+    elif mutation == "request_id":
+        chat["id"] = generation["data"]["id"] = "request_forged"
+    elif mutation == "model":
+        chat["model"] = generation["data"]["model"] = "forged/model"
+    elif mutation in {"provider", "endpoint"}:
+        generation["data"]["provider_name"] = "forged-provider"
+    elif mutation == "input_tokens":
+        chat["usage"]["prompt_tokens"] = 999
+    elif mutation == "output_tokens":
+        chat["usage"]["completion_tokens"] = 999
+    elif mutation == "reasoning_tokens":
+        chat["usage"]["completion_tokens_details"]["reasoning_tokens"] = 999
+    elif mutation == "cost":
+        generation["data"]["total_cost"] = 0.123
+    elif mutation == "latency":
+        envelope = replace(
+            envelope, response_finished_at="2026-08-08T00:00:01+00:00"
+        )
+    else:
+        chat = {"error": {"type": "forged_error"}}
+    envelope = _replace_evidence_source(envelope, OPENROUTER_CHAT_SOURCE, chat)
+    envelope = _replace_evidence_source(
+        envelope, OPENROUTER_GENERATION_SOURCE, generation
+    )
     material = evidence[0].digest_material()
-    material[field] = bad_value
+    material["provider_evidence"] = envelope.to_dict()
     evidence[0] = AttemptEvidence.capture(**material)
+    calls[0] = replace(calls[0], evidence_sha256=evidence[0].evidence_sha256)
+    trials[0] = replace(
+        trials[0], completion_evidence_sha256=evidence[0].evidence_sha256
+    )
+
     with pytest.raises(RuntimeError, match="evidence"):
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=evidence,
+        )
+
+
+def test_admission_fails_closed_without_generation_evidence(working):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    envelope = replace(
+        evidence[0].provider_evidence,
+        sources=tuple(
+            source
+            for source in evidence[0].provider_evidence.sources
+            if source.label != OPENROUTER_GENERATION_SOURCE
+        ),
+    )
+    material = evidence[0].digest_material()
+    material["provider_evidence"] = envelope.to_dict()
+    evidence[0] = AttemptEvidence.capture(**material)
+    calls[0] = replace(calls[0], evidence_sha256=evidence[0].evidence_sha256)
+    trials[0] = replace(
+        trials[0], completion_evidence_sha256=evidence[0].evidence_sha256
+    )
+    with pytest.raises(RuntimeError, match="evidence"):
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=evidence,
+        )
+
+
+def test_completed_trial_error_type_is_derived_from_final_attempt_evidence(working):
+    bundle, _repository, run = working
+    with pytest.raises(RuntimeError, match="completion evidence"):
+        _admit(bundle, run, _trials(run, error_type="forged_error"))
+
+
+def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authority_repository):
+    run = _run(max_transport_attempts=2)
+    bundle = ReleaseBundle.create_working(
+        tmp_path / "release",
+        release_id="v1.0.0-test",
+        repository_url="https://example.invalid/repo",
+        repository_root=authority_repository,
+        expected_run_ids=(run.run_id,),
+        spend_caps_usd={"global": 30.0, "cohorts": {"test-release": 30.0}},
+    )
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    original_call = calls[0]
+    original_evidence = evidence[0]
+    completed_call_id = call_id_for(original_call.trial_id, 2)
+    completed_material = original_evidence.digest_material()
+    completed_material.update(call_id=completed_call_id, attempt=2)
+    completed_evidence = AttemptEvidence.capture(**completed_material)
+    calls[0] = replace(
+        original_call,
+        call_id=completed_call_id,
+        attempt=2,
+        evidence_sha256=completed_evidence.evidence_sha256,
+    )
+    evidence[0] = completed_evidence
+    trials[0] = replace(
+        trials[0],
+        attempt_count=2,
+        completion_evidence_sha256=completed_evidence.evidence_sha256,
+    )
+    events[:2] = [replace(event, call_id=completed_call_id) for event in events[:2]]
+
+    failed_envelope = ProviderEvidenceEnvelope(
+        schema_version=1,
+        adapter_id="openrouter-direct-v1",
+        request_started_at="2026-08-08T00:00:00.000000+00:00",
+        response_finished_at="2026-08-08T00:00:00.005000+00:00",
+        sources=(
+            ProviderEvidenceSource(
+                label=OPENROUTER_ERROR_SOURCE,
+                payload_json=json.dumps({"error_type": "TimeoutError"}),
+            ),
+        ),
+    )
+    failed_evidence = AttemptEvidence.capture(
+        call_id=original_call.call_id,
+        trial_id=original_call.trial_id,
+        run_id=run.run_id,
+        attempt=1,
+        provider_evidence=failed_envelope,
+    )
+    failed_call = replace(
+        original_call,
+        started_at=failed_envelope.request_started_at,
+        finished_at=failed_envelope.response_finished_at,
+        status="transport_error",
+        observed_cost_usd=0.0,
+        resolved_model_id="",
+        latency_ms=5.0,
+        input_tokens=0,
+        output_tokens=0,
+        reasoning_tokens=0,
+        provider_request_id="",
+        error_type="TimeoutError",
+        response_sha256=sha256(b"").hexdigest(),
+        evidence_sha256=failed_evidence.evidence_sha256,
+    )
+    calls.insert(0, failed_call)
+    evidence.insert(0, failed_evidence)
+    events[:0] = [
+        LedgerEvent(
+            event_type="reserved",
+            call_id=failed_call.call_id,
+            trial_id=failed_call.trial_id,
+            run_id=run.run_id,
+            cohort=run.cohort,
+            amount_usd=failed_call.reserved_cost_usd,
+            at=failed_call.started_at,
+        ),
+        LedgerEvent(
+            event_type="settled",
+            call_id=failed_call.call_id,
+            trial_id=failed_call.trial_id,
+            run_id=run.run_id,
+            cohort=run.cohort,
+            amount_usd=0.0,
+            at=failed_call.finished_at,
+        ),
+    ]
+    run = replace(run, attempts=6, latency_ms=55.0)
+
+    forged_envelope = _replace_evidence_source(
+        failed_envelope,
+        OPENROUTER_ERROR_SOURCE,
+        {"error_type": "ForgedError"},
+    )
+    forged_material = failed_evidence.digest_material()
+    forged_material["provider_evidence"] = forged_envelope.to_dict()
+    evidence[0] = AttemptEvidence.capture(**forged_material)
+    calls[0] = replace(calls[0], evidence_sha256=evidence[0].evidence_sha256)
+    with pytest.raises(RuntimeError, match="evidence contradicts.*error_type"):
         bundle.admit_run(
             run,
             trials,
@@ -629,7 +905,7 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
     values = dict(
         suite_version="v1",
         form_set="probe",
-        dialect_set="enclosure.plain-v1",
+        dialect_id="enclosure.plain-v1",
         protocol_id=protocol_id,
         requested_model_id="example/vision-model",
         resolved_model_id="example/vision-model",
@@ -677,10 +953,10 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
         },
     )
     values["authority"] = derive_run_authority(
-        suite_bytes=(SUITES_DIR / "v1.json").read_bytes(),
+        suite_bytes=DEFAULT_SUITE_REGISTRY.read_bytes(),
         protocol_bytes=DEFAULT_PROTOCOL_REGISTRY.read_bytes(),
         form_ids=form_ids,
-        dialect_id=values["dialect_set"],
+        dialect_id=values["dialect_id"],
         protocol_id=protocol_id,
         execution_spec=execution_spec_identity(values),
         catalog_retrieved_at="",
@@ -690,7 +966,7 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
     return replace(
         run,
         expected_trial_ids=tuple(
-            trial_id_for(run.run_id, form_id, run.dialect_set) for form_id in form_ids
+            trial_id_for(run.run_id, form_id, run.dialect_id) for form_id in form_ids
         ),
     )
 
@@ -701,7 +977,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
     cells = {
         cell["abstract_form_id"]: cell
         for cell in suite.cells
-        if cell["dialect_id"] == run.dialect_set
+        if cell["dialect_id"] == run.dialect_id
     }
     protocol = get_protocol(run.protocol_id)
     trials = []
@@ -724,29 +1000,21 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
             expected_tree=form["abstract_form"],
         )
         call_id = call_id_for(trial_id, 1)
-        started_at = f"2026-08-08T00:00:0{index}+00:00"
-        finished_at = f"2026-08-08T00:00:1{index}+00:00"
+        started_at = f"2026-08-08T00:00:0{index}.000000+00:00"
+        finished_at = f"2026-08-08T00:00:0{index}.010000+00:00"
         provider_request_id = f"request:{run.protocol_id}:{index}"
         record = AttemptEvidence.capture(
             call_id=call_id,
             trial_id=trial_id,
             run_id=run.run_id,
             attempt=1,
-            status="complete",
-            started_at=started_at,
-            finished_at=finished_at,
-            response_text=response_text,
-            provider_request_id=provider_request_id,
-            resolved_model_id=run.resolved_model_id,
-            provider=run.provider,
-            endpoint=run.endpoint,
-            input_tokens=20,
-            output_tokens=4,
-            reasoning_tokens=0,
-            observed_cost_usd=0.001,
-            latency_ms=10.0,
-            error_type="",
-            raw_transcript={"response_text": response_text},
+            provider_evidence=_provider_envelope(
+                run,
+                response_text=response_text,
+                request_id=provider_request_id,
+                started_at=started_at,
+                finished_at=finished_at,
+            ),
         )
         trials.append(
             TrialRecord(
@@ -754,7 +1022,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                 run_id=run.run_id,
                 suite_version=run.suite_version,
                 abstract_form_id=form_id,
-                dialect_id=run.dialect_set,
+                dialect_id=run.dialect_id,
                 protocol_id=run.protocol_id,
                 execution_surface=run.execution_surface,
                 requested_model_id=run.requested_model_id,
@@ -762,7 +1030,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                 provider=run.provider,
                 endpoint=run.endpoint,
                 prompt_hash=protocol.prompt_hash(
-                    reading_rule=suite.specs[run.dialect_set].reading_rule,
+                    reading_rule=suite.specs[run.dialect_id].reading_rule,
                     model_payload_sha256=cell["model_payload_sha256"],
                 ),
                 symbolic_payload_hash=cell["symbolic_payload_hash"],

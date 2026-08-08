@@ -4,11 +4,16 @@ import io
 import json
 import urllib.request
 
-import inspect_ai
 import pytest
 from test_runner import _task_and_run
 
-from dbench.openrouter import OpenRouterInspectExecutor, fetch_openrouter_endpoint
+from dbench.openrouter import OpenRouterExecutor, fetch_openrouter_endpoint
+from dbench.provider_evidence import (
+    OPENROUTER_CHAT_SOURCE,
+    OPENROUTER_ERROR_SOURCE,
+    OPENROUTER_GENERATION_SOURCE,
+    project_provider_evidence,
+)
 from lofbench.run_models import ExecutionRequest
 
 
@@ -171,16 +176,37 @@ def test_multimodal_endpoint_requires_explicit_image_pricing(monkeypatch):
         )
 
 
-def test_direct_executor_disables_inspect_and_sdk_retries(monkeypatch, tmp_path):
+def test_direct_executor_retains_exact_chat_and_generation_evidence(monkeypatch, tmp_path):
     task, run = _task_and_run()
-    captured = {}
+    requests: list[urllib.request.Request] = []
 
-    def inspect_eval(*args, **kwargs):
-        captured.update(kwargs)
-        return []
+    chat = {
+        "id": "request-1",
+        "model": "example/model",
+        "choices": [{"message": {"content": '{"value":"marked"}'}}],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "completion_tokens_details": {"reasoning_tokens": 1},
+        },
+    }
+    generation = {
+        "data": {
+            "id": "request-1",
+            "model": "example/model",
+            "provider_name": "Example Provider",
+            "total_cost": 0.001,
+        }
+    }
 
-    monkeypatch.setattr(inspect_ai, "eval", inspect_eval)
-    result = OpenRouterInspectExecutor(api_key="opaque-test-key").execute(
+    def urlopen(request, timeout):
+        assert timeout == 30
+        requests.append(request)
+        payload = generation if "/generation?" in request.full_url else chat
+        return _Response(json.dumps(payload).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    result = OpenRouterExecutor(api_key="opaque-test-key").execute(
         ExecutionRequest(
             run=run,
             task=task,
@@ -189,9 +215,58 @@ def test_direct_executor_disables_inspect_and_sdk_retries(monkeypatch, tmp_path)
             log_dir=tmp_path,
         )
     )
-    assert result.transport_error is True
-    assert captured["retry_on_error"] == 0
-    assert captured["max_retries"] == 0
-    assert captured["model_args"]["max_retries"] == 0
-    assert captured["model_args"]["provider"] == run.routing_policy
-    assert captured["model_args"]["api_key"] == "opaque-test-key"
+    labels = {source.label for source in result.provider_evidence.sources}
+    assert labels == {OPENROUTER_CHAT_SOURCE, OPENROUTER_GENERATION_SOURCE}
+    assert result.provider_evidence.sources[0].payload_json == json.dumps(chat)
+    assert result.provider_evidence.sources[1].payload_json == json.dumps(generation)
+    projection = project_provider_evidence(result.provider_evidence, run.to_dict())
+    assert projection.response_text == '{"value":"marked"}'
+    assert projection.provider_request_id == "request-1"
+    assert projection.input_tokens == 10
+    assert projection.output_tokens == 2
+    assert projection.reasoning_tokens == 1
+    assert projection.observed_cost_usd == 0.001
+    assert len(requests) == 2
+    request_payload = json.loads(requests[0].data)
+    assert request_payload["provider"] == run.routing_policy
+    assert request_payload["model"] == run.requested_model_id
+    assert "max_retries" not in request_payload
+
+
+def test_direct_executor_projects_generation_lookup_error_from_retained_evidence(
+    monkeypatch, tmp_path
+):
+    task, run = _task_and_run()
+    chat = {
+        "id": "request-1",
+        "model": "example/model",
+        "choices": [{"message": {"content": '{"value":"marked"}'}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+    }
+    calls = 0
+
+    def urlopen(_request, timeout):
+        nonlocal calls
+        assert timeout == 30
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("generation lookup unavailable")
+        return _Response(json.dumps(chat).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    result = OpenRouterExecutor(api_key="opaque-test-key").execute(
+        ExecutionRequest(
+            run=run,
+            task=task,
+            sample=list(task.dataset.samples)[0],
+            attempt=1,
+            log_dir=tmp_path,
+        )
+    )
+    assert {source.label for source in result.provider_evidence.sources} == {
+        OPENROUTER_CHAT_SOURCE,
+        OPENROUTER_ERROR_SOURCE,
+    }
+    projection = project_provider_evidence(result.provider_evidence, run.to_dict())
+    assert projection.status == "accounting_unknown"
+    assert projection.error_type == "RuntimeError"

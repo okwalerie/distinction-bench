@@ -19,7 +19,7 @@ import pytest
 from inspect_ai import eval as inspect_eval
 from inspect_ai.model import ModelOutput, get_model
 
-from lofbench.suites import SUITES_DIR
+from lofbench.suites import DEFAULT_SUITE_REGISTRY
 from lofbench.tasks.composite import composite_lof_task
 from lofbench.tasks.single import adhoc_single_lof_task, single_lof_task
 
@@ -53,7 +53,7 @@ class TestPublicSuiteTask:
         )
 
     def test_payload_tamper_fails_during_task_construction(self, tmp_path):
-        value = json.loads((SUITES_DIR / "v1.json").read_text())
+        value = json.loads(DEFAULT_SUITE_REGISTRY.read_text())
         cell = next(
             item
             for item in value["cells"]

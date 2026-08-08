@@ -1,10 +1,9 @@
-"""Authenticated OpenRouter discovery and Inspect execution adapter."""
+"""Authenticated OpenRouter discovery and direct evidence-retaining adapter."""
 
 from __future__ import annotations
 
 import json
 import math
-import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -12,9 +11,14 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 from typing import Any
 
-from inspect_ai import Task
-from inspect_ai.dataset import MemoryDataset
-
+from dbench.provider_evidence import (
+    OPENROUTER_CHAT_SOURCE,
+    OPENROUTER_ERROR_SOURCE,
+    OPENROUTER_GENERATION_SOURCE,
+    ProviderEvidenceEnvelope,
+    ProviderEvidenceSource,
+)
+from lofbench.protocols import get_protocol
 from lofbench.run_models import (
     ExecutionRequest,
     ExecutionResult,
@@ -29,13 +33,33 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _authenticated_json(url: str, api_key: str) -> dict[str, Any]:
+def _authenticated_json(
+    url: str,
+    api_key: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
+    body = (
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+        if payload is not None
+        else None
+    )
     request = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bearer {api_key}"},
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
     )
     with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-        return json.load(response)
+        raw = response.read().decode("utf-8")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise RuntimeError("provider response is not a json object")
+    return value, raw
 
 
 @dataclass(frozen=True)
@@ -76,9 +100,7 @@ class EndpointSelection:
                 "zdr": True,
                 "authenticated_zdr_catalog": True,
             },
-            sdk_version=(
-                f"inspect-ai={version('inspect-ai')};openai={version('openai')}"
-            ),
+            sdk_version=f"lofbench={version('lofbench')};transport=stdlib-urllib",
             reasoning={"effort": "default"},
             generation={"temperature": 0, "max_tokens": 512, "max_retries": 0},
             billing_channel="openrouter-limited-key",
@@ -119,8 +141,10 @@ def fetch_openrouter_endpoint(
 ) -> EndpointSelection:
     """Select the cheapest exact endpoint proven present in the ZDR catalog."""
     quoted = urllib.parse.quote(model_id, safe="/")
-    model_payload = _authenticated_json(f"{_API_ROOT}/models/{quoted}/endpoints", api_key)
-    zdr_payload = _authenticated_json(f"{_API_ROOT}/endpoints/zdr", api_key)
+    model_payload, _model_raw = _authenticated_json(
+        f"{_API_ROOT}/models/{quoted}/endpoints", api_key
+    )
+    zdr_payload, _zdr_raw = _authenticated_json(f"{_API_ROOT}/endpoints/zdr", api_key)
     model = model_payload.get("data", {})
     if model.get("id") != model_id:
         raise RuntimeError(f"openrouter did not return exact requested model {model_id!r}")
@@ -179,8 +203,31 @@ def fetch_openrouter_endpoint(
     )
 
 
-class OpenRouterInspectExecutor(TrialExecutor):
-    """One-call Inspect adapter pinned to an admitted OpenRouter endpoint."""
+def _message_payload(request: ExecutionRequest) -> list[dict[str, Any]]:
+    protocol = get_protocol(request.run.protocol_id)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": protocol.system_text}
+    ]
+    if isinstance(request.sample.input, str):
+        messages.append({"role": "user", "content": request.sample.input})
+        return messages
+    for message in request.sample.input:
+        content: list[dict[str, Any]] = []
+        for item in message.content:
+            if getattr(item, "type", "") == "text":
+                content.append({"type": "text", "text": item.text})
+            elif getattr(item, "type", "") == "image":
+                content.append(
+                    {"type": "image_url", "image_url": {"url": item.image}}
+                )
+            else:
+                raise RuntimeError("unsupported public sample content")
+        messages.append({"role": message.role, "content": content})
+    return messages
+
+
+class OpenRouterExecutor(TrialExecutor):
+    """Direct one-call OpenRouter adapter retaining exact provider responses."""
 
     def __init__(self, *, api_key: str) -> None:
         if not api_key:
@@ -188,87 +235,72 @@ class OpenRouterInspectExecutor(TrialExecutor):
         self.api_key = api_key
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
-        from inspect_ai import eval as inspect_eval
-
         if request.run.generation.get("max_retries") != 0:
             raise RuntimeError("direct-api runs must disable model and SDK retries")
-        task = Task(
-            dataset=MemoryDataset(samples=[request.sample], name="one_public_trial"),
-            solver=request.task.solver,
-            scorer=request.task.scorer,
-            config=request.task.config,
-            metadata=request.task.metadata,
-        )
-        started = time.monotonic()
+        protocol = get_protocol(request.run.protocol_id)
+        started_at = _now()
+        response_finished_at = started_at
+        sources: list[ProviderEvidenceSource] = []
         try:
-            logs = inspect_eval(
-                task,
-                model=f"openrouter/{request.run.requested_model_id}",
-                model_args={
-                    "api_key": self.api_key,
+            chat, chat_raw = _authenticated_json(
+                f"{_API_ROOT}/chat/completions",
+                self.api_key,
+                method="POST",
+                payload={
+                    "model": request.run.requested_model_id,
+                    "messages": _message_payload(request),
                     "provider": request.run.routing_policy,
-                    "max_retries": 0,
+                    "temperature": request.run.generation["temperature"],
+                    "max_tokens": request.run.generation["max_tokens"],
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": protocol.protocol_id,
+                            "strict": True,
+                            "schema": protocol.response_json_schema,
+                        },
+                    },
                 },
-                display="none",
-                log_dir=str(request.log_dir),
-                log_samples=True,
-                retry_on_error=0,
-                max_retries=0,
+            )
+            response_finished_at = _now()
+            sources.append(
+                ProviderEvidenceSource(
+                    label=OPENROUTER_CHAT_SOURCE,
+                    payload_json=chat_raw,
+                )
+            )
+            request_id = chat.get("id")
+            if not isinstance(request_id, str) or not request_id:
+                raise RuntimeError("chat response omitted provider request id")
+            query = urllib.parse.urlencode({"id": request_id})
+            _generation, generation_raw = _authenticated_json(
+                f"{_API_ROOT}/generation?{query}", self.api_key
+            )
+            sources.append(
+                ProviderEvidenceSource(
+                    label=OPENROUTER_GENERATION_SOURCE,
+                    payload_json=generation_raw,
+                )
             )
         except Exception as exc:
-            return ExecutionResult(
-                transport_error=True,
-                error_type=type(exc).__name__,
-                latency_ms=(time.monotonic() - started) * 1000,
+            if not sources:
+                response_finished_at = _now()
+            sources.append(
+                ProviderEvidenceSource(
+                    label=OPENROUTER_ERROR_SOURCE,
+                    payload_json=json.dumps(
+                        {"error_type": type(exc).__name__},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
             )
-        if len(logs) != 1 or logs[0].status != "success" or not logs[0].samples:
-            return ExecutionResult(
-                transport_error=True,
-                error_type=logs[0].status if logs else "missing_log",
-                latency_ms=(time.monotonic() - started) * 1000,
-            )
-        sample = logs[0].samples[0]
-        model_events = [event for event in sample.events if event.event == "model"]
-        if not model_events:
-            return ExecutionResult(transport_error=True, error_type="missing_model_event")
-        event = model_events[-1]
-        raw = event.call.response if event.call else {}
-        usage = event.output.usage
-        raw_usage = raw.get("usage", {}) if isinstance(raw, dict) else {}
-        cost = raw_usage.get("cost")
-        provider = raw.get("provider", "") if isinstance(raw, dict) else ""
-        request_id = raw.get("id", "") if isinstance(raw, dict) else ""
-        generation: dict[str, Any] = {}
-        if request_id and (cost is None or not provider):
-            query = urllib.parse.urlencode({"id": request_id})
-            try:
-                generation = _authenticated_json(
-                    f"{_API_ROOT}/generation?{query}",
-                    self.api_key,
-                ).get("data", {})
-            except Exception:  # noqa: BLE001 - accounting fails closed downstream
-                generation = {}
-        cost = cost if cost is not None else generation.get("total_cost")
-        provider = provider or generation.get("provider_name", "")
-        expected_provider = request.run.catalog_row.get("selected_endpoint", {}).get(
-            "provider_name"
-        )
-        observed_endpoint = request.run.endpoint if provider == expected_provider else provider
         return ExecutionResult(
-            response_text=event.output.completion,
-            resolved_model_id=event.output.model.removeprefix("openrouter/"),
-            endpoint=observed_endpoint,
-            input_tokens=(usage.input_tokens if usage else generation.get("native_tokens_prompt")),
-            output_tokens=(
-                usage.output_tokens if usage else generation.get("native_tokens_completion")
-            ),
-            reasoning_tokens=(
-                (usage.reasoning_tokens or 0)
-                if usage
-                else generation.get("native_tokens_reasoning", 0)
-            ),
-            observed_cost_usd=float(cost) if cost is not None else None,
-            latency_ms=sample.total_time * 1000,
-            provider_request_id=request_id,
-            transcript=sample.model_dump(mode="json", exclude={"attachments"}),
+            provider_evidence=ProviderEvidenceEnvelope(
+                schema_version=1,
+                adapter_id="openrouter-direct-v1",
+                request_started_at=started_at,
+                response_finished_at=response_finished_at,
+                sources=tuple(sources),
+            )
         )

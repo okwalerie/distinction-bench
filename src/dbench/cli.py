@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from dbench.agent_cli import (
     cli_version,
 )
 from dbench.config import load_env_file
-from dbench.openrouter import OpenRouterInspectExecutor, fetch_openrouter_endpoint
+from dbench.openrouter import OpenRouterExecutor, fetch_openrouter_endpoint
 from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
 from lofbench.authority import authority_from_git
 from lofbench.metrics import write_release_metrics
@@ -30,7 +31,7 @@ from lofbench.records import AttemptEvidence, CallRecord, RunManifest, TrialReco
 from lofbench.release_bundle import ReleaseBundle
 from lofbench.run_models import ExecutionSpec, TrialExecutor, plan_run
 from lofbench.state_io import read_jsonl, write_json_atomic
-from lofbench.suites import load_suite
+from lofbench.suites import DEFAULT_SUITE_REGISTRY, load_suite
 from lofbench.tasks.single import single_lof_task
 
 COHORT_CAPS_USD = {"sample": 30.0, "broad": 18.0, "frontier": 7.5, "reserve": 4.5}
@@ -72,7 +73,7 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--state-root", type=Path, required=True)
     plan.add_argument("--release-id", required=True)
     plan.add_argument("--repository-url", required=True)
-    plan.add_argument("--suite", type=Path, default=Path("suites/v1.json"))
+    plan.add_argument("--suite", type=Path, default=DEFAULT_SUITE_REGISTRY)
     plan.add_argument("--model", required=True)
     plan.add_argument("--form-set", default="probe")
     plan.add_argument("--dialect", required=True)
@@ -167,7 +168,7 @@ def _validate_sample_plan(args: argparse.Namespace) -> dict[str, object] | None:
 
 def _validate_probe_run(
     run: RunManifest,
-    sample_contract: dict[str, object] | None,
+    sample_contract: Mapping[str, object] | None,
 ) -> None:
     if run.form_set != "probe":
         raise RuntimeError("probe command requires the frozen probe form set")
@@ -225,7 +226,7 @@ def _plan(args: argparse.Namespace) -> int:
             task,
             suite_version=suite.suite_version,
             form_set=args.form_set,
-            dialect_set=args.dialect,
+            dialect_id=args.dialect,
             protocol_id=protocol_id,
             execution=execution,
             suite_registry_path=args.suite,
@@ -311,7 +312,7 @@ def _plan(args: argparse.Namespace) -> int:
 
 def _executor(run: RunManifest, *, secrets: dict[str, str]) -> TrialExecutor:
     if run.execution_surface == "direct_api":
-        return OpenRouterInspectExecutor(api_key=secrets.get("OPENROUTER_API_KEY", ""))
+        return OpenRouterExecutor(api_key=secrets.get("OPENROUTER_API_KEY", ""))
     environment = agent_subprocess_env(secret_names=secrets)
     if run.execution_surface == "codex_cli":
         return CodexCliExecutor(environment=environment)
@@ -374,17 +375,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "export-inspect":
         bundle = ReleaseBundle.open(args.release)
-        bundle.validate()
-        if bundle.manifest["status"] != "sealed":
+        publication = bundle.publication()
+        if publication.status != "sealed":
             raise RuntimeError("inspect export requires a sealed bundle")
-        export_inspect_bundle(bundle.root, args.out)
+        export_inspect_bundle(publication.root, args.out)
         return 0
     if args.command == "archive":
         bundle = ReleaseBundle.open(args.release)
-        bundle.validate()
-        if bundle.manifest["status"] != "sealed":
+        publication = bundle.publication()
+        if publication.status != "sealed":
             raise RuntimeError("archive requires a sealed bundle")
-        archive_release(bundle.root, args.out)
+        archive_release(publication.root, args.out)
         return 0
 
     values = _load_secret_env(args.env_file)
@@ -392,16 +393,16 @@ def main(argv: list[str] | None = None) -> int:
     run = RunManifest.from_dict(json.loads((state_dir / "run.json").read_text()))
     bundle = ReleaseBundle.open(args.release, repository_root=Path.cwd())
     bundle.require_repository_state(Path.cwd())
-    bundle.validate()
-    if run.run_id not in bundle.manifest["expected_run_ids"]:
+    publication = bundle.publication()
+    if run.run_id not in publication.expected_run_ids:
         raise RuntimeError("run is not declared by this release bundle")
     bundle.validate_planned_run(run)
     if args.command == "probe":
-        _validate_probe_run(run, bundle.manifest.get("sample_contract"))
+        _validate_probe_run(run, publication.sample_contract)
     if run.execution_surface == "direct_api" and "OPENROUTER_API_KEY" not in values:
         raise RuntimeError("direct-api execution requires OPENROUTER_API_KEY")
     if run.billing_channel != "subscription_unmetered" and args.approve_paid_run:
-        approval = bundle.manifest.get("paid_run_approval") or {}
+        approval = publication.paid_run_approval or {}
         if (
             approval.get("max_spend_usd") != DEFAULT_GLOBAL_CAP_USD
             or run.run_id not in approval.get("run_ids", [])
@@ -412,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     task = single_lof_task(
         suite=str(args.release / "suite.json"),
         form_set=run.form_set,
-        dialect=run.dialect_set,
+        dialect=run.dialect_id,
         protocol=run.protocol_id,
     )
     updated = RunOrchestrator(
