@@ -18,6 +18,9 @@ from dbench.agent_cli import (
 )
 from dbench.config import load_env_file
 from dbench.openrouter import OpenRouterExecutor, fetch_openrouter_endpoint
+from dbench.provider_evidence import project_provider_evidence, projector_for_run
+from dbench.publication import open_release
+from dbench.release_policy import validate_sample_release
 from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
 from lofbench.authority import authority_from_git
 from lofbench.metrics import write_release_metrics
@@ -261,6 +264,8 @@ def _plan(args: argparse.Namespace) -> int:
             "global": DEFAULT_GLOBAL_CAP_USD,
             "cohorts": dict(COHORT_CAPS_USD),
         },
+        evidence_projector=project_provider_evidence,
+        release_policy_validator=validate_sample_release,
     )
     cost_sheet: dict[str, object] = {
         "model_id": args.model,
@@ -343,10 +348,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "admit":
         state_dir = _state_dir(args)
         run = RunManifest.from_dict(json.loads((state_dir / "run.json").read_text()))
-        ReleaseBundle.open(args.release, repository_root=Path.cwd()).admit_run(
+        call_rows = read_jsonl(state_dir / "calls.jsonl")
+        effective_calls = {row["call_id"]: row for row in call_rows}
+        open_release(args.release, repository_root=Path.cwd()).admit_run(
             run,
             [TrialRecord(**row) for row in read_jsonl(state_dir / "trials.jsonl")],
-            calls=[CallRecord(**row) for row in read_jsonl(state_dir / "calls.jsonl")],
+            calls=[CallRecord(**row) for row in effective_calls.values()],
             ledger_events=_ledger(args.state_root).events_for_run(run.run_id),
             evidence=[
                 AttemptEvidence.from_dict(row)
@@ -356,32 +363,32 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "seal":
         values = _load_secret_env(args.env_file)
-        ReleaseBundle.open(args.release, repository_root=Path.cwd()).seal(
+        open_release(args.release, repository_root=Path.cwd()).seal(
             repository_root=Path.cwd(), publication_environment=values
         )
         return 0
     if args.command == "prepare":
         from lofsite.build import build_site
 
-        bundle = ReleaseBundle.open(args.release, repository_root=Path.cwd())
+        bundle = open_release(args.release, repository_root=Path.cwd())
         if bundle.manifest["status"] != "working":
             raise RuntimeError("prepare requires a working release bundle")
         suite = load_suite(
             version=bundle.manifest["suite_version"], path=bundle.root / "suite.json"
         )
         write_release_metrics(bundle.root, suite=suite, runs=bundle.runs())
-        build_site(bundle.root, bundle.root / "site")
+        build_site(bundle.publication(), bundle.root / "site")
         bundle.validate()
         return 0
     if args.command == "export-inspect":
-        bundle = ReleaseBundle.open(args.release)
+        bundle = open_release(args.release)
         publication = bundle.publication()
         if publication.status != "sealed":
             raise RuntimeError("inspect export requires a sealed bundle")
         export_inspect_bundle(publication.root, args.out)
         return 0
     if args.command == "archive":
-        bundle = ReleaseBundle.open(args.release)
+        bundle = open_release(args.release)
         publication = bundle.publication()
         if publication.status != "sealed":
             raise RuntimeError("archive requires a sealed bundle")
@@ -391,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
     values = _load_secret_env(args.env_file)
     state_dir = _state_dir(args)
     run = RunManifest.from_dict(json.loads((state_dir / "run.json").read_text()))
-    bundle = ReleaseBundle.open(args.release, repository_root=Path.cwd())
+    bundle = open_release(args.release, repository_root=Path.cwd())
     bundle.require_repository_state(Path.cwd())
     publication = bundle.publication()
     if run.run_id not in publication.expected_run_ids:
@@ -416,10 +423,15 @@ def main(argv: list[str] | None = None) -> int:
         dialect=run.dialect_id,
         protocol=run.protocol_id,
     )
+    executor = _executor(run, secrets=values)
     updated = RunOrchestrator(
         state_dir,
-        _executor(run, secrets=values),
+        executor,
         ledger=_ledger(args.state_root),
+        evidence_projector=projector_for_run(run.to_dict()),
+        accounting_recoverer=(
+            executor.recover_accounting if isinstance(executor, OpenRouterExecutor) else None
+        ),
     ).execute(
         run,
         task,

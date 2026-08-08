@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from test_runner import _task_and_run
 
 from dbench.agent_cli import ClaudeCliExecutor, CodexCliExecutor, agent_subprocess_env
 from dbench.cli import _executor, _load_secret_env, _parser, _validate_probe_run
+from dbench.provider_evidence import project_agent_cli_evidence
 from lofbench.run_models import ExecutionRequest
 
 
@@ -49,9 +51,7 @@ def test_cli_adapter_commands_pin_model_schema_and_tool_policy(tmp_path):
     assert ["--json-schema", schema.read_text()] == claude[claude.index("--json-schema") :][:2]
 
 
-def test_agent_subprocess_receives_explicit_environment_without_sentinels(
-    tmp_path, monkeypatch
-):
+def test_agent_subprocess_receives_explicit_environment_without_sentinels(tmp_path, monkeypatch):
     task, run = _task_and_run()
     sample = list(task.dataset.samples)[0]
     request = ExecutionRequest(
@@ -81,6 +81,31 @@ def test_agent_subprocess_receives_explicit_environment_without_sentinels(
     assert "DBENCH_SECRET" not in child_environment
     assert openrouter_sentinel not in child_environment.values()
     assert dbench_sentinel not in child_environment.values()
+
+
+def test_agent_timeout_returns_durable_transport_evidence(tmp_path, monkeypatch):
+    task, run = _task_and_run()
+    request = ExecutionRequest(
+        run=run,
+        task=task,
+        sample=list(task.dataset.samples)[0],
+        attempt=1,
+        log_dir=tmp_path / "logs",
+    )
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("codex", 300, output="partial", stderr="timed out")
+
+    monkeypatch.setattr("dbench.agent_cli.subprocess.run", timeout)
+    result = CodexCliExecutor(environment={}).execute(request)
+    source = result.provider_evidence.sources[0]
+    payload = source.payload()
+    assert payload["process_error"] == "TimeoutExpired"
+    assert payload["stdout"] == "partial"
+    assert payload["stderr"] == "timed out"
+    projection = project_agent_cli_evidence(result.provider_evidence, run.to_dict())
+    assert projection.status == "transport_error"
+    assert projection.error_type == "TimeoutExpired"
 
 
 def test_env_file_loading_does_not_mutate_process_environment(tmp_path, monkeypatch):

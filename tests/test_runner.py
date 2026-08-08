@@ -12,14 +12,13 @@ from inspect_ai.dataset import MemoryDataset
 from dbench.config import load_env_file
 from dbench.provider_evidence import (
     OPENROUTER_CHAT_SOURCE,
-    OPENROUTER_ERROR_SOURCE,
     OPENROUTER_GENERATION_SOURCE,
-    ProviderEvidenceEnvelope,
-    ProviderEvidenceSource,
+    project_openrouter_evidence,
 )
 from lofbench.accounting import SpendLedger
 from lofbench.orchestration import RunOrchestrator
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
+from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
 from lofbench.run_models import (
     ExecutionResult,
     ExecutionSpec,
@@ -81,6 +80,7 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
         "latency_ms": 20.0,
         "provider_request_id": "request-test",
         "transport_error": False,
+        "provider_error": False,
         "error_type": "",
     }
     values.update(overrides)
@@ -88,34 +88,69 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
     finished = started + timedelta(milliseconds=values["latency_ms"])
     if values["transport_error"]:
         sources = (
-            ProviderEvidenceSource(
-                label=OPENROUTER_ERROR_SOURCE,
-                payload_json=json.dumps(
-                    {"error_type": values["error_type"] or "TransportError"}
-                ),
+            ProviderEvidenceSource.capture_http(
+                label=OPENROUTER_CHAT_SOURCE,
+                sequence=1,
+                request_started_at=started.isoformat(),
+                response_finished_at=finished.isoformat(),
+                request_method="POST",
+                request_url="https://openrouter.ai/api/v1/chat/completions",
+                http_status=None,
+                response_headers=(),
+                raw_body=b"",
+                transport_error=values["error_type"] or "TransportError",
+            ),
+        )
+    elif values["provider_error"]:
+        sources = (
+            ProviderEvidenceSource.capture_http(
+                label=OPENROUTER_CHAT_SOURCE,
+                sequence=1,
+                request_started_at=started.isoformat(),
+                response_finished_at=finished.isoformat(),
+                request_method="POST",
+                request_url="https://openrouter.ai/api/v1/chat/completions",
+                http_status=503,
+                response_headers=(),
+                raw_body=b'{"error":{"type":"busy"}}',
             ),
         )
     else:
+        provider_name = (
+            "Example Provider" if values["endpoint"] == "example-provider" else values["endpoint"]
+        )
         generation = {
             "id": values["provider_request_id"],
             "model": values["resolved_model_id"],
-            "provider_name": (
-                "Example Provider"
-                if values["endpoint"] == "example-provider"
-                else values["endpoint"]
-            ),
+            "provider_name": provider_name,
+            "native_tokens_prompt": values["input_tokens"],
+            "native_tokens_completion": values["output_tokens"],
+            "native_tokens_reasoning": values["reasoning_tokens"],
+            "latency": values["latency_ms"],
+            "finish_reason": "stop",
         }
         if values["observed_cost_usd"] is not None:
             generation["total_cost"] = values["observed_cost_usd"]
         sources = (
-            ProviderEvidenceSource(
+            ProviderEvidenceSource.capture_http(
                 label=OPENROUTER_CHAT_SOURCE,
-                payload_json=json.dumps(
+                sequence=1,
+                request_started_at=started.isoformat(),
+                response_finished_at=finished.isoformat(),
+                request_method="POST",
+                request_url="https://openrouter.ai/api/v1/chat/completions",
+                http_status=200,
+                response_headers=(),
+                raw_body=json.dumps(
                     {
                         "id": values["provider_request_id"],
                         "model": values["resolved_model_id"],
+                        "provider": provider_name,
                         "choices": [
-                            {"message": {"content": values["response_text"]}}
+                            {
+                                "message": {"content": values["response_text"]},
+                                "finish_reason": "stop",
+                            }
                         ],
                         "usage": {
                             "prompt_tokens": values["input_tokens"],
@@ -125,19 +160,24 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
                             },
                         },
                     }
-                ),
+                ).encode(),
             ),
-            ProviderEvidenceSource(
+            ProviderEvidenceSource.capture_http(
                 label=OPENROUTER_GENERATION_SOURCE,
-                payload_json=json.dumps({"data": generation}),
+                sequence=1,
+                request_started_at=finished.isoformat(),
+                response_finished_at=finished.isoformat(),
+                request_method="GET",
+                request_url="https://openrouter.ai/api/v1/generation?id=request-test",
+                http_status=200,
+                response_headers=(),
+                raw_body=json.dumps({"data": generation}).encode(),
             ),
         )
     return ExecutionResult(
         provider_evidence=ProviderEvidenceEnvelope(
-            schema_version=1,
-            adapter_id="openrouter-direct-v1",
-            request_started_at=started.isoformat(),
-            response_finished_at=finished.isoformat(),
+            schema_version=2,
+            adapter_id="openrouter-direct-v2",
             sources=sources,
         )
     )
@@ -156,6 +196,7 @@ def _orchestrator(tmp_path, executor, **ledger_caps):
         tmp_path / "run-state",
         executor,
         ledger=_ledger(tmp_path, **ledger_caps),
+        evidence_projector=project_openrouter_evidence,
     )
 
 
@@ -215,7 +256,7 @@ def test_invalid_answer_is_complete_incorrect_and_not_retried(tmp_path):
     assert len(executor.calls) == 5
 
 
-def test_transport_failure_retries_then_completes(tmp_path):
+def test_paid_transport_uncertainty_persists_and_keeps_reservation(tmp_path):
     task, run = _task_and_run()
     transient = _success(
         transport_error=True,
@@ -223,21 +264,25 @@ def test_transport_failure_retries_then_completes(tmp_path):
         response_text="",
         observed_cost_usd=0.0,
     )
-    executor = InMemoryExecutor([transient, _success()] + [_success()] * 4)
-    result = _orchestrator(tmp_path, executor).execute(
-        run, task, approve_paid_run=True, max_spend_usd=30.0
-    )
-    assert result.status == "complete"
-    assert len(executor.calls) == 6
+    executor = InMemoryExecutor([transient])
+    with pytest.raises(RuntimeError, match="accounting is unknown"):
+        _orchestrator(tmp_path, executor).execute(
+            run, task, approve_paid_run=True, max_spend_usd=30.0
+        )
     calls = [
         json.loads(line) for line in (tmp_path / "run-state/calls.jsonl").read_text().splitlines()
     ]
-    assert calls[0]["status"] == "transport_error"
+    assert len(calls) == 1
+    assert calls[0]["status"] == "accounting_unknown"
+    assert len((tmp_path / "run-state/transcripts.jsonl").read_text().splitlines()) == 1
+    observed, reserved = _ledger(tmp_path).totals()
+    assert observed == 0.0
+    assert reserved > 0.0
 
 
-def test_three_transport_failures_leave_trial_missing(tmp_path):
+def test_three_provider_errors_leave_trial_missing_and_never_score(tmp_path):
     task, run = _task_and_run()
-    transient = _success(transport_error=True, observed_cost_usd=0.0)
+    transient = _success(provider_error=True, observed_cost_usd=0.0)
     executor = InMemoryExecutor([transient] * 3 + [_success()] * 4)
     result = _orchestrator(tmp_path, executor).execute(
         run, task, approve_paid_run=True, max_spend_usd=30.0
@@ -287,7 +332,7 @@ def test_complete_resume_does_not_duplicate_paid_calls(tmp_path):
 def test_missing_usage_or_cost_stops_immediately(tmp_path):
     task, run = _task_and_run()
     executor = InMemoryExecutor([_success(observed_cost_usd=None)])
-    with pytest.raises(RuntimeError, match="omitted price or usage"):
+    with pytest.raises(RuntimeError, match="accounting is unknown"):
         _orchestrator(tmp_path, executor).execute(
             run, task, approve_paid_run=True, max_spend_usd=30.0
         )
@@ -295,8 +340,11 @@ def test_missing_usage_or_cost_stops_immediately(tmp_path):
         json.loads(line) for line in (tmp_path / "run-state/calls.jsonl").read_text().splitlines()
     ]
     assert calls[0]["status"] == "accounting_unknown"
+    observed, reserved = _ledger(tmp_path).totals()
+    assert observed == 0.0
+    assert reserved > 0.0
     resume = InMemoryExecutor([_success()] * 5)
-    with pytest.raises(RuntimeError, match="unresolved provider-accounting"):
+    with pytest.raises(RuntimeError, match="unresolved provider accounting"):
         _orchestrator(tmp_path, resume).execute(
             run, task, approve_paid_run=True, max_spend_usd=30.0
         )
@@ -305,7 +353,7 @@ def test_missing_usage_or_cost_stops_immediately(tmp_path):
 
 def test_single_attempt_mode_never_retries_a_sample_run_call(tmp_path):
     task, _run = _task_and_run()
-    transient = _success(transport_error=True, observed_cost_usd=0.0)
+    transient = _success(provider_error=True, observed_cost_usd=0.0)
     executor = InMemoryExecutor([transient] + [_success()] * 4)
     run = plan_run(
         task,
@@ -326,19 +374,19 @@ def test_single_attempt_mode_never_retries_a_sample_run_call(tmp_path):
 def test_endpoint_fallback_and_model_substitution_stop(tmp_path):
     task, run = _task_and_run()
     fallback = InMemoryExecutor([_success(endpoint="other-provider")])
-    with pytest.raises(RuntimeError, match="fallback"):
+    with pytest.raises(RuntimeError, match="accounting is unknown"):
         _orchestrator(tmp_path / "fallback", fallback).execute(
             run, task, approve_paid_run=True, max_spend_usd=30.0
         )
     substituted = InMemoryExecutor([_success(resolved_model_id="other/model")])
-    with pytest.raises(RuntimeError, match="different model"):
+    with pytest.raises(RuntimeError, match="accounting is unknown"):
         _orchestrator(tmp_path / "substitute", substituted).execute(
             run, task, approve_paid_run=True, max_spend_usd=30.0
         )
-    with pytest.raises(RuntimeError, match="identity gate"):
-        _orchestrator(
-            tmp_path / "substitute", InMemoryExecutor([_success()] * 5)
-        ).execute(run, task, approve_paid_run=True, max_spend_usd=30.0)
+    with pytest.raises(RuntimeError, match="unresolved provider accounting"):
+        _orchestrator(tmp_path / "substitute", InMemoryExecutor([_success()] * 5)).execute(
+            run, task, approve_paid_run=True, max_spend_usd=30.0
+        )
 
 
 def test_cohort_budget_exhaustion_aborts_before_next_request(tmp_path):
@@ -374,13 +422,21 @@ def test_release_ledger_enforces_aggregate_cap_across_run_directories(tmp_path):
     second_task, second_run = _task_and_run("reduce-taught-v1")
     ledger = _ledger(tmp_path, global_cap=0.015, cohort_cap=0.015)
     first = InMemoryExecutor([_success()] * 5)
-    completed = RunOrchestrator(tmp_path / "first-run", first, ledger=ledger).execute(
-        first_run, first_task, approve_paid_run=True, max_spend_usd=30.0
-    )
+    completed = RunOrchestrator(
+        tmp_path / "first-run",
+        first,
+        ledger=ledger,
+        evidence_projector=project_openrouter_evidence,
+    ).execute(first_run, first_task, approve_paid_run=True, max_spend_usd=30.0)
     assert completed.cost_usd == pytest.approx(0.005)
     second = InMemoryExecutor([_success()] * 5)
     with pytest.raises(RuntimeError, match="global cap"):
-        RunOrchestrator(tmp_path / "second-run", second, ledger=ledger).execute(
+        RunOrchestrator(
+            tmp_path / "second-run",
+            second,
+            ledger=ledger,
+            evidence_projector=project_openrouter_evidence,
+        ).execute(
             second_run,
             second_task,
             approve_paid_run=True,
@@ -540,9 +596,7 @@ def test_run_result_fields_do_not_create_a_second_identity_definition():
 
 def test_distinct_singular_dialect_ids_create_distinct_run_identities():
     reference_task, reference = _task_and_run()
-    prose_task = single_lof_task(
-        form_set="probe", dialect="prose.containment-plain-v1"
-    )
+    prose_task = single_lof_task(form_set="probe", dialect="prose.containment-plain-v1")
     prose = plan_run(
         prose_task,
         suite_version="v1",

@@ -14,3 +14,6 @@ Pages deployment accepts only a release asset named
 `distinction-bench-<tag>.tar.gz`. Its extracted root must be a sealed release
 bundle. The workflow validates the bundle checksums before building; a working,
 edited, incomplete, or unlisted artifact is rejected.
+
+site generation accepts only the validated, read-only publication view returned by
+`dbench.publication.open_release(...).publication()`.

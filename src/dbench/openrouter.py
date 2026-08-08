@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -13,12 +16,11 @@ from typing import Any
 
 from dbench.provider_evidence import (
     OPENROUTER_CHAT_SOURCE,
-    OPENROUTER_ERROR_SOURCE,
     OPENROUTER_GENERATION_SOURCE,
-    ProviderEvidenceEnvelope,
-    ProviderEvidenceSource,
+    project_openrouter_evidence,
 )
 from lofbench.protocols import get_protocol
+from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
 from lofbench.run_models import (
     ExecutionRequest,
     ExecutionResult,
@@ -27,19 +29,41 @@ from lofbench.run_models import (
 )
 
 _API_ROOT = "https://openrouter.ai/api/v1"
+_GENERATION_LOOKUP_ATTEMPTS = 3
+_GENERATION_BACKOFF_SECONDS = (0.1, 0.25)
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _authenticated_json(
+def _headers(response: Any) -> tuple[tuple[str, str], ...]:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return ()
+    rows = headers.raw_items() if hasattr(headers, "raw_items") else headers.items()
+    return tuple((str(name), str(value)) for name, value in rows)
+
+
+def _read_response(response: Any) -> tuple[bytes, Exception | None]:
+    chunks: list[bytes] = []
+    try:
+        while chunk := response.read(65536):
+            chunks.append(chunk)
+    except Exception as exc:
+        return b"".join(chunks), exc
+    return b"".join(chunks), None
+
+
+def _request_exchange(
     url: str,
     api_key: str,
     *,
+    label: str,
+    sequence: int,
     method: str = "GET",
     payload: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any], str]:
+) -> ProviderEvidenceSource:
     body = (
         json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
         if payload is not None
@@ -54,12 +78,74 @@ def _authenticated_json(
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-        raw = response.read().decode("utf-8")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise RuntimeError("provider response is not a json object")
-    return value, raw
+    started_at = _now()
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+            status = getattr(response, "status", None)
+            if status is None and hasattr(response, "getcode"):
+                status = response.getcode()
+            status = 200 if status is None else int(status)
+            headers = _headers(response)
+            raw, read_error = _read_response(response)
+        return ProviderEvidenceSource.capture_http(
+            label=label,
+            sequence=sequence,
+            request_started_at=started_at,
+            response_finished_at=_now(),
+            request_method=method,
+            request_url=url,
+            http_status=status,
+            response_headers=headers,
+            raw_body=raw,
+            transport_error=(type(read_error).__name__ if read_error else ""),
+            transport_error_message=(str(read_error) if read_error else ""),
+        )
+    except urllib.error.HTTPError as exc:
+        raw, read_error = _read_response(exc)
+        return ProviderEvidenceSource.capture_http(
+            label=label,
+            sequence=sequence,
+            request_started_at=started_at,
+            response_finished_at=_now(),
+            request_method=method,
+            request_url=url,
+            http_status=exc.code,
+            response_headers=_headers(exc),
+            raw_body=raw,
+            transport_error=(type(read_error).__name__ if read_error else ""),
+            transport_error_message=(str(read_error) if read_error else ""),
+        )
+    except Exception as exc:
+        return ProviderEvidenceSource.capture_http(
+            label=label,
+            sequence=sequence,
+            request_started_at=started_at,
+            response_finished_at=_now(),
+            request_method=method,
+            request_url=url,
+            http_status=None,
+            response_headers=(),
+            raw_body=b"",
+            transport_error=type(exc).__name__,
+            transport_error_message=str(exc),
+        )
+
+
+def _authenticated_json(url: str, api_key: str) -> tuple[dict[str, Any], str]:
+    source = _request_exchange(
+        url,
+        api_key,
+        label="openrouter.catalog.response.v1",
+        sequence=1,
+    )
+    value = source.payload()
+    if (
+        source.http_status is None
+        or not 200 <= source.http_status < 300
+        or not isinstance(value, dict)
+    ):
+        raise RuntimeError("provider catalog response is not a successful json object")
+    return value, source.body_text
 
 
 @dataclass(frozen=True)
@@ -205,9 +291,7 @@ def fetch_openrouter_endpoint(
 
 def _message_payload(request: ExecutionRequest) -> list[dict[str, Any]]:
     protocol = get_protocol(request.run.protocol_id)
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": protocol.system_text}
-    ]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": protocol.system_text}]
     if isinstance(request.sample.input, str):
         messages.append({"role": "user", "content": request.sample.input})
         return messages
@@ -217,9 +301,7 @@ def _message_payload(request: ExecutionRequest) -> list[dict[str, Any]]:
             if getattr(item, "type", "") == "text":
                 content.append({"type": "text", "text": item.text})
             elif getattr(item, "type", "") == "image":
-                content.append(
-                    {"type": "image_url", "image_url": {"url": item.image}}
-                )
+                content.append({"type": "image_url", "image_url": {"url": item.image}})
             else:
                 raise RuntimeError("unsupported public sample content")
         messages.append({"role": message.role, "content": content})
@@ -229,78 +311,112 @@ def _message_payload(request: ExecutionRequest) -> list[dict[str, Any]]:
 class OpenRouterExecutor(TrialExecutor):
     """Direct one-call OpenRouter adapter retaining exact provider responses."""
 
-    def __init__(self, *, api_key: str) -> None:
+    def __init__(self, *, api_key: str, sleeper: Callable[[float], None] = time.sleep) -> None:
         if not api_key:
             raise ValueError("OpenRouter execution requires an API key")
         self.api_key = api_key
+        self.sleeper = sleeper
+
+    def _generation_sources(
+        self,
+        request_id: str,
+        *,
+        first_sequence: int = 1,
+    ) -> tuple[ProviderEvidenceSource, ...]:
+        query = urllib.parse.urlencode({"id": request_id})
+        rows: list[ProviderEvidenceSource] = []
+        for offset in range(_GENERATION_LOOKUP_ATTEMPTS):
+            source = _request_exchange(
+                f"{_API_ROOT}/generation?{query}",
+                self.api_key,
+                label=OPENROUTER_GENERATION_SOURCE,
+                sequence=first_sequence + offset,
+            )
+            rows.append(source)
+            payload = source.payload()
+            if (
+                source.http_status is not None
+                and 200 <= source.http_status < 300
+                and isinstance(payload, dict)
+                and isinstance(payload.get("data"), dict)
+                and "error" not in payload
+            ):
+                break
+            if offset < _GENERATION_LOOKUP_ATTEMPTS - 1:
+                try:
+                    self.sleeper(_GENERATION_BACKOFF_SECONDS[offset])
+                except Exception:
+                    break
+        return tuple(rows)
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         if request.run.generation.get("max_retries") != 0:
             raise RuntimeError("direct-api runs must disable model and SDK retries")
         protocol = get_protocol(request.run.protocol_id)
-        started_at = _now()
-        response_finished_at = started_at
-        sources: list[ProviderEvidenceSource] = []
-        try:
-            chat, chat_raw = _authenticated_json(
-                f"{_API_ROOT}/chat/completions",
-                self.api_key,
-                method="POST",
-                payload={
-                    "model": request.run.requested_model_id,
-                    "messages": _message_payload(request),
-                    "provider": request.run.routing_policy,
-                    "temperature": request.run.generation["temperature"],
-                    "max_tokens": request.run.generation["max_tokens"],
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": protocol.protocol_id,
-                            "strict": True,
-                            "schema": protocol.response_json_schema,
-                        },
+        chat_source = _request_exchange(
+            f"{_API_ROOT}/chat/completions",
+            self.api_key,
+            label=OPENROUTER_CHAT_SOURCE,
+            sequence=1,
+            method="POST",
+            payload={
+                "model": request.run.requested_model_id,
+                "messages": _message_payload(request),
+                "provider": request.run.routing_policy,
+                "temperature": request.run.generation["temperature"],
+                "max_tokens": request.run.generation["max_tokens"],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": protocol.protocol_id,
+                        "strict": True,
+                        "schema": protocol.response_json_schema,
                     },
                 },
-            )
-            response_finished_at = _now()
-            sources.append(
-                ProviderEvidenceSource(
-                    label=OPENROUTER_CHAT_SOURCE,
-                    payload_json=chat_raw,
-                )
-            )
-            request_id = chat.get("id")
-            if not isinstance(request_id, str) or not request_id:
-                raise RuntimeError("chat response omitted provider request id")
-            query = urllib.parse.urlencode({"id": request_id})
-            _generation, generation_raw = _authenticated_json(
-                f"{_API_ROOT}/generation?{query}", self.api_key
-            )
-            sources.append(
-                ProviderEvidenceSource(
-                    label=OPENROUTER_GENERATION_SOURCE,
-                    payload_json=generation_raw,
-                )
-            )
-        except Exception as exc:
-            if not sources:
-                response_finished_at = _now()
-            sources.append(
-                ProviderEvidenceSource(
-                    label=OPENROUTER_ERROR_SOURCE,
-                    payload_json=json.dumps(
-                        {"error_type": type(exc).__name__},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                )
-            )
+            },
+        )
+        sources = [chat_source]
+        chat = chat_source.payload()
+        request_id = chat.get("id") if isinstance(chat, dict) else None
+        if isinstance(request_id, str) and request_id:
+            sources.extend(self._generation_sources(request_id))
         return ExecutionResult(
             provider_evidence=ProviderEvidenceEnvelope(
-                schema_version=1,
-                adapter_id="openrouter-direct-v1",
-                request_started_at=started_at,
-                response_finished_at=response_finished_at,
+                schema_version=2,
+                adapter_id="openrouter-direct-v2",
                 sources=tuple(sources),
             )
         )
+
+    def recover_accounting(
+        self,
+        evidence: ProviderEvidenceEnvelope,
+        _run: Mapping[str, Any],
+    ) -> ProviderEvidenceEnvelope:
+        chat = next(
+            (source for source in evidence.sources if source.label == OPENROUTER_CHAT_SOURCE),
+            None,
+        )
+        payload = chat.payload() if chat is not None else None
+        request_id = payload.get("id") if isinstance(payload, dict) else None
+        if not isinstance(request_id, str) or not request_id:
+            return evidence
+        prior = [
+            source for source in evidence.sources if source.label == OPENROUTER_GENERATION_SOURCE
+        ]
+        recovered = self._generation_sources(
+            request_id,
+            first_sequence=max((source.sequence for source in prior), default=0) + 1,
+        )
+        return ProviderEvidenceEnvelope(
+            schema_version=2,
+            adapter_id=evidence.adapter_id,
+            sources=(*evidence.sources, *recovered),
+        )
+
+    @staticmethod
+    def project(
+        evidence: ProviderEvidenceEnvelope,
+        run: Mapping[str, Any],
+    ):
+        return project_openrouter_evidence(evidence, run)

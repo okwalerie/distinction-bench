@@ -13,11 +13,10 @@ import pytest
 
 from dbench.provider_evidence import (
     OPENROUTER_CHAT_SOURCE,
-    OPENROUTER_ERROR_SOURCE,
     OPENROUTER_GENERATION_SOURCE,
-    ProviderEvidenceEnvelope,
-    ProviderEvidenceSource,
+    project_openrouter_evidence,
 )
+from dbench.release_policy import validate_sample_release
 from lofbench.authority import (
     PROTOCOL_REGISTRY_GIT_PATH,
     SUITE_REGISTRY_GIT_PATH,
@@ -25,6 +24,7 @@ from lofbench.authority import (
 )
 from lofbench.metrics import write_release_metrics
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY, get_protocol
+from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
 from lofbench.records import (
     AttemptEvidence,
     CallRecord,
@@ -55,7 +55,8 @@ def _provider_envelope(
     chat = {
         "id": request_id,
         "model": run.resolved_model_id,
-        "choices": [{"message": {"content": response_text}}],
+        "provider": selected["provider_name"],
+        "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
         "usage": {
             "prompt_tokens": input_tokens,
             "completion_tokens": output_tokens,
@@ -68,21 +69,38 @@ def _provider_envelope(
             "model": run.resolved_model_id,
             "provider_name": selected["provider_name"],
             "total_cost": cost_usd,
+            "native_tokens_prompt": input_tokens,
+            "native_tokens_completion": output_tokens,
+            "native_tokens_reasoning": reasoning_tokens,
+            "latency": 10.0,
+            "finish_reason": "stop",
         }
     }
     return ProviderEvidenceEnvelope(
-        schema_version=1,
-        adapter_id="openrouter-direct-v1",
-        request_started_at=started_at,
-        response_finished_at=finished_at,
+        schema_version=2,
+        adapter_id="openrouter-direct-v2",
         sources=(
-            ProviderEvidenceSource(
+            ProviderEvidenceSource.capture_http(
                 label=OPENROUTER_CHAT_SOURCE,
-                payload_json=json.dumps(chat),
+                sequence=1,
+                request_started_at=started_at,
+                response_finished_at=finished_at,
+                request_method="POST",
+                request_url="https://openrouter.ai/api/v1/chat/completions",
+                http_status=200,
+                response_headers=(),
+                raw_body=json.dumps(chat).encode(),
             ),
-            ProviderEvidenceSource(
+            ProviderEvidenceSource.capture_http(
                 label=OPENROUTER_GENERATION_SOURCE,
-                payload_json=json.dumps(generation),
+                sequence=1,
+                request_started_at=finished_at,
+                response_finished_at=finished_at,
+                request_method="GET",
+                request_url=f"https://openrouter.ai/api/v1/generation?id={request_id}",
+                http_status=200,
+                response_headers=(),
+                raw_body=json.dumps(generation).encode(),
             ),
         ),
     )
@@ -96,7 +114,19 @@ def _replace_evidence_source(
     return replace(
         envelope,
         sources=tuple(
-            replace(source, payload_json=json.dumps(payload))
+            ProviderEvidenceSource.capture_http(
+                label=source.label,
+                sequence=source.sequence,
+                request_started_at=source.request_started_at,
+                response_finished_at=source.response_finished_at,
+                request_method=source.request_method,
+                request_url=source.request_url,
+                http_status=source.http_status,
+                response_headers=source.response_headers,
+                raw_body=json.dumps(payload).encode(),
+                transport_error=source.transport_error,
+                transport_error_message=source.transport_error_message,
+            )
             if source.label == label
             else source
             for source in envelope.sources
@@ -221,6 +251,7 @@ def _trial(run: RunManifest, form_index: int = 0, **overrides) -> TrialRecord:
         "parse_status": parse_status,
         "attempt_count": 1,
         "latency_ms": 10.0,
+        "provider_latency_ms": 10.0,
         "input_tokens": 20,
         "output_tokens": 4,
         "reasoning_tokens": 0,
@@ -281,6 +312,7 @@ def _accounting(
             provider=run.provider,
             endpoint=run.endpoint,
             latency_ms=10.0,
+            provider_latency_ms=10.0,
             input_tokens=20,
             output_tokens=4,
             reasoning_tokens=0,
@@ -290,9 +322,7 @@ def _accounting(
         )
         calls.append(call)
         evidence.append(record)
-        linked_trials.append(
-            replace(trial, completion_evidence_sha256=record.evidence_sha256)
-        )
+        linked_trials.append(replace(trial, completion_evidence_sha256=record.evidence_sha256))
         events.extend(
             [
                 LedgerEvent(
@@ -352,6 +382,8 @@ def working(tmp_path, authority_repository):
         repository_root=repository,
         expected_run_ids=(run.run_id,),
         spend_caps_usd={"global": 30.0, "cohorts": {"test-release": 30.0}},
+        evidence_projector=project_openrouter_evidence,
+        release_policy_validator=validate_sample_release,
     )
     return bundle, repository, run
 
@@ -362,7 +394,11 @@ def test_create_validate_admit_and_seal(working):
     _admit(bundle, run, _trials(run))
     _derive(bundle)
     bundle.seal(repository_root=repository)
-    reopened = ReleaseBundle.open(bundle.root)
+    reopened = ReleaseBundle.open(
+        bundle.root,
+        evidence_projector=project_openrouter_evidence,
+        release_policy_validator=validate_sample_release,
+    )
     assert reopened.manifest["status"] == "sealed"
     assert reopened.manifest["admitted_run_ids"] == [run.run_id]
     assert reopened.manifest["files"]
@@ -581,7 +617,7 @@ def test_admission_rejects_incomplete_contradictory_attempt_evidence(working):
         for source in evidence[0].provider_evidence.sources
         if source.label == OPENROUTER_CHAT_SOURCE
     )
-    chat = json.loads(chat_source.payload_json)
+    chat = chat_source.payload()
     chat["choices"][0]["message"]["content"] = '{"value":"contradictory"}'
     contradictory = replace(
         evidence[0],
@@ -623,12 +659,10 @@ def test_admission_rejects_raw_provider_evidence_contradictions(working, mutatio
         source for source in envelope.sources if source.label == OPENROUTER_CHAT_SOURCE
     )
     generation_source = next(
-        source
-        for source in envelope.sources
-        if source.label == OPENROUTER_GENERATION_SOURCE
+        source for source in envelope.sources if source.label == OPENROUTER_GENERATION_SOURCE
     )
-    chat = json.loads(chat_source.payload_json)
-    generation = json.loads(generation_source.payload_json)
+    chat = chat_source.payload()
+    generation = generation_source.payload()
     if mutation == "completion":
         chat["choices"][0]["message"]["content"] = '{"value":"forged"}'
     elif mutation == "request_id":
@@ -647,21 +681,23 @@ def test_admission_rejects_raw_provider_evidence_contradictions(working, mutatio
         generation["data"]["total_cost"] = 0.123
     elif mutation == "latency":
         envelope = replace(
-            envelope, response_finished_at="2026-08-08T00:00:01+00:00"
+            envelope,
+            sources=tuple(
+                replace(source, response_finished_at="2026-08-08T00:00:01+00:00")
+                if source.label == OPENROUTER_CHAT_SOURCE
+                else source
+                for source in envelope.sources
+            ),
         )
     else:
         chat = {"error": {"type": "forged_error"}}
     envelope = _replace_evidence_source(envelope, OPENROUTER_CHAT_SOURCE, chat)
-    envelope = _replace_evidence_source(
-        envelope, OPENROUTER_GENERATION_SOURCE, generation
-    )
+    envelope = _replace_evidence_source(envelope, OPENROUTER_GENERATION_SOURCE, generation)
     material = evidence[0].digest_material()
     material["provider_evidence"] = envelope.to_dict()
     evidence[0] = AttemptEvidence.capture(**material)
     calls[0] = replace(calls[0], evidence_sha256=evidence[0].evidence_sha256)
-    trials[0] = replace(
-        trials[0], completion_evidence_sha256=evidence[0].evidence_sha256
-    )
+    trials[0] = replace(trials[0], completion_evidence_sha256=evidence[0].evidence_sha256)
 
     with pytest.raises(RuntimeError, match="evidence"):
         bundle.admit_run(
@@ -688,9 +724,7 @@ def test_admission_fails_closed_without_generation_evidence(working):
     material["provider_evidence"] = envelope.to_dict()
     evidence[0] = AttemptEvidence.capture(**material)
     calls[0] = replace(calls[0], evidence_sha256=evidence[0].evidence_sha256)
-    trials[0] = replace(
-        trials[0], completion_evidence_sha256=evidence[0].evidence_sha256
-    )
+    trials[0] = replace(trials[0], completion_evidence_sha256=evidence[0].evidence_sha256)
     with pytest.raises(RuntimeError, match="evidence"):
         bundle.admit_run(
             run,
@@ -716,6 +750,8 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
         repository_root=authority_repository,
         expected_run_ids=(run.run_id,),
         spend_caps_usd={"global": 30.0, "cohorts": {"test-release": 30.0}},
+        evidence_projector=project_openrouter_evidence,
+        release_policy_validator=validate_sample_release,
     )
     trials, calls, events, evidence = _accounting(run, _trials(run))
     original_call = calls[0]
@@ -739,14 +775,19 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
     events[:2] = [replace(event, call_id=completed_call_id) for event in events[:2]]
 
     failed_envelope = ProviderEvidenceEnvelope(
-        schema_version=1,
-        adapter_id="openrouter-direct-v1",
-        request_started_at="2026-08-08T00:00:00.000000+00:00",
-        response_finished_at="2026-08-08T00:00:00.005000+00:00",
+        schema_version=2,
+        adapter_id="openrouter-direct-v2",
         sources=(
-            ProviderEvidenceSource(
-                label=OPENROUTER_ERROR_SOURCE,
-                payload_json=json.dumps({"error_type": "TimeoutError"}),
+            ProviderEvidenceSource.capture_http(
+                label=OPENROUTER_CHAT_SOURCE,
+                sequence=1,
+                request_started_at="2026-08-08T00:00:00.000000+00:00",
+                response_finished_at="2026-08-08T00:00:00.005000+00:00",
+                request_method="POST",
+                request_url="https://openrouter.ai/api/v1/chat/completions",
+                http_status=503,
+                response_headers=(),
+                raw_body=json.dumps({"error": {"type": "busy"}}).encode(),
             ),
         ),
     )
@@ -759,17 +800,18 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
     )
     failed_call = replace(
         original_call,
-        started_at=failed_envelope.request_started_at,
-        finished_at=failed_envelope.response_finished_at,
-        status="transport_error",
+        started_at=failed_envelope.sources[0].request_started_at,
+        finished_at=failed_envelope.sources[0].response_finished_at,
+        status="provider_error",
         observed_cost_usd=0.0,
         resolved_model_id="",
         latency_ms=5.0,
+        provider_latency_ms=0.0,
         input_tokens=0,
         output_tokens=0,
         reasoning_tokens=0,
         provider_request_id="",
-        error_type="TimeoutError",
+        error_type="provider_busy",
         response_sha256=sha256(b"").hexdigest(),
         evidence_sha256=failed_evidence.evidence_sha256,
     )
@@ -799,8 +841,8 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
 
     forged_envelope = _replace_evidence_source(
         failed_envelope,
-        OPENROUTER_ERROR_SOURCE,
-        {"error_type": "ForgedError"},
+        OPENROUTER_CHAT_SOURCE,
+        {"error": {"type": "forged"}},
     )
     forged_material = failed_evidence.digest_material()
     forged_material["provider_evidence"] = forged_envelope.to_dict()
@@ -816,8 +858,44 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
         )
 
 
+def test_admission_accepts_a_complete_accounting_recovery_revision_chain(working):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    final = evidence[0]
+    unknown_envelope = replace(
+        final.provider_evidence,
+        sources=tuple(
+            source
+            for source in final.provider_evidence.sources
+            if source.label != OPENROUTER_GENERATION_SOURCE
+        ),
+    )
+    initial = AttemptEvidence.capture(
+        call_id=final.call_id,
+        trial_id=final.trial_id,
+        run_id=final.run_id,
+        attempt=final.attempt,
+        provider_evidence=unknown_envelope,
+    )
+    recovered = initial.revise(final.provider_evidence)
+    evidence[:1] = [initial, recovered]
+    calls[0] = replace(calls[0], evidence_sha256=recovered.evidence_sha256)
+    trials[0] = replace(trials[0], completion_evidence_sha256=recovered.evidence_sha256)
+    bundle.admit_run(
+        run,
+        trials,
+        calls=calls,
+        ledger_events=events,
+        evidence=evidence,
+    )
+    rows = [
+        json.loads(line) for line in (bundle.root / "transcripts.jsonl").read_text().splitlines()
+    ]
+    assert [row["revision"] for row in rows[:2]] == [0, 1]
+
+
 @pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate"])
-def test_admission_requires_exactly_one_evidence_record_per_call(working, mutation):
+def test_admission_requires_exact_evidence_revision_chains(working, mutation):
     bundle, _repository, run = working
     trials, calls, events, evidence = _accounting(run, _trials(run))
     if mutation == "missing":
@@ -842,22 +920,23 @@ def test_admission_requires_exactly_one_evidence_record_per_call(working, mutati
     ("trial_overrides", "run_overrides"),
     [
         ({"latency_ms": float("nan")}, {}),
-        ({"reasoning_tokens": -1}, {"token_usage": {
-            "input_tokens": 100,
-            "output_tokens": 20,
-            "reasoning_tokens": -1,
-        }}),
+        (
+            {"reasoning_tokens": -1},
+            {
+                "token_usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "reasoning_tokens": -1,
+                }
+            },
+        ),
         ({}, {"latency_ms": -1.0}),
         ({}, {"latency_ms": 49.0}),
     ],
 )
-def test_admission_rejects_nonfinite_or_negative_resources(
-    working, trial_overrides, run_overrides
-):
+def test_admission_rejects_nonfinite_or_negative_resources(working, trial_overrides, run_overrides):
     bundle, _repository, run = working
-    trials, calls, events, evidence = _accounting(
-        run, _trials(run, **trial_overrides)
-    )
+    trials, calls, events, evidence = _accounting(run, _trials(run, **trial_overrides))
     if "reasoning_tokens" in trial_overrides:
         calls[0] = replace(calls[0], reasoning_tokens=-1)
     forged_run = replace(run, **run_overrides)
@@ -1038,6 +1117,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                 parse_status=parse_status,
                 attempt_count=1,
                 latency_ms=10.0,
+                provider_latency_ms=10.0,
                 input_tokens=20,
                 output_tokens=4,
                 reasoning_tokens=0,
@@ -1063,6 +1143,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
             provider=run.provider,
             endpoint=run.endpoint,
             latency_ms=10.0,
+            provider_latency_ms=10.0,
             input_tokens=20,
             output_tokens=4,
             reasoning_tokens=0,
@@ -1128,6 +1209,8 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
             "total_attempts": 20,
         },
         spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
+        evidence_projector=project_openrouter_evidence,
+        release_policy_validator=validate_sample_release,
     )
     for run in runs:
         trials, calls, events, evidence = _sample_records(run, form_ids)
@@ -1139,7 +1222,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
             evidence=evidence,
         )
     write_release_metrics(bundle.root, suite=load_suite(), runs=bundle.runs())
-    build_site(bundle.root, bundle.root / "site")
+    build_site(bundle.publication(), bundle.root / "site")
     runs_page = (bundle.root / "site" / "runs.html").read_text()
     for marker in (
         "containment tree and frozen form",
@@ -1193,6 +1276,8 @@ def test_sample_contract_rejects_empty_call_evidence(tmp_path):
             "total_attempts": 20,
         },
         spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
+        evidence_projector=project_openrouter_evidence,
+        release_policy_validator=validate_sample_release,
     )
     trials, _calls, _events, _evidence = _sample_records(run, form_ids)
     with pytest.raises(RuntimeError, match="attempt count"):

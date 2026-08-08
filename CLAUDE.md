@@ -55,6 +55,8 @@ Public runs go through `python -m dbench`; do not invoke Inspect directly for re
 - `cli.py` — release operator commands and approval gates
 - `openrouter.py` — authenticated endpoint/ZDR discovery and the direct API adapter
 - `agent_cli.py` — isolated Codex and Claude subscription CLI adapters
+- `provider_evidence.py` — OpenRouter and subscription-cli evidence projectors
+- `release_policy.py`, `publication.py` — sample policy and validated release facade
 
 Provider SDKs, credentials, and executable adapters belong here, never in `lofbench`.
 

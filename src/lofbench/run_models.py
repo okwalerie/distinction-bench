@@ -10,9 +10,9 @@ from typing import Any
 from inspect_ai import Task
 from inspect_ai.dataset import Sample
 
-from dbench.provider_evidence import ProviderEvidenceEnvelope
 from lofbench.authority import derive_run_authority
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
+from lofbench.provider_evidence import ProviderEvidenceEnvelope
 from lofbench.records import RunManifest, deterministic_id, execution_spec_identity
 from lofbench.suites import DEFAULT_SUITE_REGISTRY
 
@@ -97,9 +97,7 @@ def plan_run(
     suite_registry_path: Path | None = None,
     protocol_registry_path: Path | None = None,
 ) -> RunManifest:
-    form_ids = tuple(
-        str(sample.metadata["abstract_form_id"]) for sample in task.dataset.samples
-    )
+    form_ids = tuple(str(sample.metadata["abstract_form_id"]) for sample in task.dataset.samples)
     if list(form_ids) != task.metadata.get("form_ids"):
         raise RuntimeError("task dataset does not match its selected form metadata")
     execution_values = asdict(execution)

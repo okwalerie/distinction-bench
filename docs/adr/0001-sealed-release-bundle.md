@@ -28,12 +28,17 @@ the exact selected forms and cells, the selected protocol, endpoint-catalog evid
 and the provider-neutral execution spec. this projection is part of the sole run-id
 function and is reconstructed during planning, admission, and validation.
 
-each provider call has exactly one `AttemptEvidence` row. it retains an immutable,
+each provider call has one append-only `AttemptEvidence` revision chain. every row retains an immutable,
 deterministically labelled `ProviderEvidenceEnvelope`: the exact raw chat response,
-the exact raw generation-accounting response, and local request/response timestamps.
+every exact raw generation-accounting lookup response (including failed polls), http
+status and headers, raw bytes and parse outcome, and local request/response timestamps.
 one pure projector derives completion, request id, resolved model, provider, endpoint,
 usage, cost, latency, status, and error. orchestration consumes only that projection;
-admission reruns it and compares every call/trial field. the direct openrouter adapter
+admission reruns it and compares every call/trial field. incomplete accounting remains
+`accounting_unknown`: no zero-cost settlement is invented, the conservative reservation
+stays outstanding, and resume performs only bounded generation-accounting gets. a
+successful lookup appends a digest-linked evidence revision and call revision without
+resending inference. the direct openrouter adapter
 uses the provider's chat-completions endpoint rather than treating an opaque inspect
 sample dump as raw authority. missing generation evidence fails closed.
 
@@ -43,13 +48,15 @@ exact evidence/call/trial/ledger closure and recomputes all run aggregates. deri
 profiles and site files remain reproducible consumers. sealing lists and hashes every
 file and makes the directory immutable by convention and validation.
 
-the `release_bundle` module's mutation interface is `create_working`, `admit_run`,
+the provider-neutral `release_bundle` module's mutation interface is `create_working`, `admit_run`,
 `materialize_stimuli`, and `seal`; `open`, `validate`, and `validate_planned_run`
-enforce the same authority before operations. publication consumers use
+enforce the same authority before operations. dbench injects the openrouter projector
+and sample-release policy through `dbench.publication.open_release`; generic core does
+not interpret provider catalogs or sample protocol ids. publication consumers use
 `publication`, a validated read-only view containing the frozen suite/protocols,
-admitted records, and recomputed metrics. renderer registries, provider adapters,
-inspect logs, cli policy, and site code are inputs or consumers, never alternative
-authorities.
+admitted records, and recomputed metrics. `lofsite.build_site` accepts only that view.
+renderer registries, provider adapters, inspect logs, cli policy, and site code are
+inputs or consumers, never alternative authorities.
 
 ## consequences
 
@@ -57,7 +64,8 @@ authorities.
   hashes.
 - changing any checked-in registry, selected cell set, protocol, endpoint catalog, or
   execution specification creates a different run identity.
-- raw provider responses are retained byte-for-byte as json text; secrets belong to
+- raw provider response bytes are retained exactly (base64 encoded with a verified text
+  and json-parse projection); secrets belong to
   request headers and never enter the envelope.
 - a renderer or analysis edit cannot revise an existing sealed release.
 - working runs remain mutable until admitted; incomplete or provenance-deficient runs

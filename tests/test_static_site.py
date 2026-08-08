@@ -28,9 +28,7 @@ def authority_repository(tmp_path_factory):
     protocol_target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(DEFAULT_SUITE_REGISTRY, suite_target)
     shutil.copyfile(DEFAULT_PROTOCOL_REGISTRY, protocol_target)
-    subprocess.run(
-        ["git", "add", "anchor", "src"], cwd=repository, check=True
-    )
+    subprocess.run(["git", "add", "anchor", "src"], cwd=repository, check=True)
     subprocess.run(["git", "commit", "-qm", "test"], cwd=repository, check=True)
     return repository
 
@@ -52,12 +50,12 @@ def test_static_site_is_built_only_inside_a_working_bundle(working):
     bundle, _repository = working
     outside = bundle.root.parent / "outside"
     with pytest.raises(RuntimeError, match="working bundle"):
-        build_site(bundle.root, outside)
+        build_site(bundle.publication(), outside)
 
 
 def test_static_site_exposes_suite_protocol_atlas_and_local_human_pilot(working):
     bundle, _repository = working
-    build_site(bundle.root, bundle.root / "site")
+    build_site(bundle.publication(), bundle.root / "site")
 
     expected = {
         "index.html",
@@ -102,25 +100,25 @@ def test_sealed_bundle_can_build_an_external_copy(working):
     bundle, repository = working
     bundle.seal(repository_root=repository)
     output = bundle.root.parent / "external"
-    build_site(bundle.root, output)
+    build_site(bundle.publication(), output)
     assert (output / "index.html").is_file()
 
 
 def test_working_site_is_byte_identical_when_rebuilt_from_sealed_bundle(working):
     bundle, repository = working
-    build_site(bundle.root, bundle.root / "site")
+    build_site(bundle.publication(), bundle.root / "site")
     bundle.seal(repository_root=repository)
     output = bundle.root.parent / "rebuilt"
-    build_site(bundle.root, output)
+    build_site(bundle.publication(), output)
     verify_site_tree(bundle.root / "site", output)
 
 
 def test_site_verifier_rejects_a_rebuilt_byte_mismatch(working):
     bundle, repository = working
-    build_site(bundle.root, bundle.root / "site")
+    build_site(bundle.publication(), bundle.root / "site")
     bundle.seal(repository_root=repository)
     output = bundle.root.parent / "rebuilt"
-    build_site(bundle.root, output)
+    build_site(bundle.publication(), output)
     (output / "index.html").write_text("forged site")
     with pytest.raises(RuntimeError, match="does not match"):
         verify_site_tree(bundle.root / "site", output)
@@ -131,5 +129,5 @@ def test_nonempty_site_output_is_refused(working):
     output = bundle.root / "site"
     (output / "owned.txt").write_text("keep")
     with pytest.raises(FileExistsError, match="not empty"):
-        build_site(bundle.root, output)
+        build_site(bundle.publication(), output)
     assert (output / "owned.txt").read_text() == "keep"

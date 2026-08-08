@@ -6,7 +6,7 @@ import base64
 import json
 import math
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -17,10 +17,6 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from dbench.provider_evidence import (
-    project_provider_evidence,
-    validate_openrouter_run_policy,
-)
 from lofbench.authority import (
     AuthorityManifest,
     authority_from_git,
@@ -30,6 +26,7 @@ from lofbench.authority import (
 from lofbench.human_trials import HUMAN_TRIAL_EXPORT_SCHEMA, write_human_trial_schema
 from lofbench.metrics import EMPTY_METRIC_SCHEMA, derive_metric_tables
 from lofbench.protocols import ProtocolSpec, load_protocol_registry
+from lofbench.provider_evidence import EvidenceProjector
 from lofbench.publication import scan_publication
 from lofbench.records import (
     AttemptEvidence,
@@ -57,6 +54,8 @@ _ROOT_FILES = {
     "transcripts.jsonl",
     "ledger.jsonl",
 }
+
+
 @dataclass(frozen=True)
 class PublicationView:
     """Validated, read-only inputs available to publication consumers."""
@@ -75,6 +74,22 @@ class PublicationView:
     trials: tuple[Mapping[str, Any], ...]
     profiles: tuple[Mapping[str, Any], ...]
     effects: tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class ReleasePolicyContext:
+    """Provider-neutral inputs exposed to an application release policy."""
+
+    root: Path
+    manifest: Mapping[str, Any]
+    suite: LoadedSuite
+    runs: tuple[RunManifest, ...]
+    trials: tuple[Mapping[str, Any], ...]
+    calls: tuple[Mapping[str, Any], ...]
+    sealing: bool
+
+
+ReleasePolicyValidator = Callable[[ReleasePolicyContext], None]
 
 
 def _freeze(value: Any) -> Any:
@@ -171,10 +186,14 @@ class ReleaseBundle:
         manifest: dict[str, Any],
         *,
         repository_root: Path | None = None,
+        evidence_projector: EvidenceProjector | None = None,
+        release_policy_validator: ReleasePolicyValidator | None = None,
     ) -> None:
         self.root = root
         self.manifest = manifest
         self.repository_root = repository_root
+        self.evidence_projector = evidence_projector
+        self.release_policy_validator = release_policy_validator
 
     @classmethod
     def create_working(
@@ -190,6 +209,8 @@ class ReleaseBundle:
         materialize_stimuli: bool = False,
         sample_contract: dict[str, Any] | None = None,
         spend_caps_usd: dict[str, Any],
+        evidence_projector: EvidenceProjector | None = None,
+        release_policy_validator: ReleasePolicyValidator | None = None,
     ) -> ReleaseBundle:
         if root.exists() and any(root.iterdir()):
             raise FileExistsError(f"release directory is not empty: {root}")
@@ -197,9 +218,7 @@ class ReleaseBundle:
         commit, dirty = _git_state(repository_root)
         if dirty:
             raise RuntimeError("cannot create a release bundle from a dirty worktree")
-        authority, suite_bytes, protocol_bytes = authority_from_git(
-            repository_root, commit=commit
-        )
+        authority, suite_bytes, protocol_bytes = authority_from_git(repository_root, commit=commit)
         if suite_path is not None and suite_path.read_bytes() != suite_bytes:
             raise RuntimeError("requested suite does not match the recorded git authority")
         (root / "suite.json").write_bytes(suite_bytes)
@@ -242,23 +261,38 @@ class ReleaseBundle:
             "files": {},
         }
         (root / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        bundle = cls(root, manifest, repository_root=repository_root)
+        bundle = cls(
+            root,
+            manifest,
+            repository_root=repository_root,
+            evidence_projector=evidence_projector,
+            release_policy_validator=release_policy_validator,
+        )
         if materialize_stimuli:
             bundle.materialize_stimuli()
         return bundle
 
     @classmethod
     def open(
-        cls, root: Path, *, repository_root: Path | None = None
+        cls,
+        root: Path,
+        *,
+        repository_root: Path | None = None,
+        evidence_projector: EvidenceProjector | None = None,
+        release_policy_validator: ReleasePolicyValidator | None = None,
     ) -> ReleaseBundle:
         manifest = json.loads((root / "release.json").read_text())
         if manifest.get("bundle_schema_version") != BUNDLE_SCHEMA_VERSION:
             raise RuntimeError("unsupported release-bundle schema")
-        return cls(root, manifest, repository_root=repository_root)
+        return cls(
+            root,
+            manifest,
+            repository_root=repository_root,
+            evidence_projector=evidence_projector,
+            release_policy_validator=release_policy_validator,
+        )
 
-    def _verify_authorities(
-        self, repository_root: Path | None = None
-    ) -> AuthorityManifest:
+    def _verify_authorities(self, repository_root: Path | None = None) -> AuthorityManifest:
         try:
             authority = AuthorityManifest.from_dict(self.manifest["authority"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -385,9 +419,7 @@ class ReleaseBundle:
         call_values = list(calls)
         ledger_values = list(ledger_events)
         evidence_values = list(evidence)
-        self._validate_run_accounting(
-            run, rows, call_values, ledger_values, evidence_values
-        )
+        self._validate_run_accounting(run, rows, call_values, ledger_values, evidence_values)
 
         existing_runs = self.runs()
         if run.run_id in {item.run_id for item in existing_runs}:
@@ -436,9 +468,7 @@ class ReleaseBundle:
         if run.run_id != run.authoritative_run_id():
             raise RuntimeError("run_id does not match the authoritative execution identity")
         if set(run.pricing) != {"prompt", "completion", "image"} or any(
-            not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or value < 0
+            not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0
             for value in run.pricing.values()
         ):
             raise RuntimeError("run lacks normalized prompt/completion/image pricing")
@@ -465,9 +495,7 @@ class ReleaseBundle:
         if run.expected_trial_ids != authoritative_trial_ids:
             raise RuntimeError("run expected trial ids do not match its frozen form set")
         forms = {form["abstract_form_id"]: form for form in suite.forms}
-        cells = {
-            (cell["abstract_form_id"], cell["dialect_id"]): cell for cell in suite.cells
-        }
+        cells = {(cell["abstract_form_id"], cell["dialect_id"]): cell for cell in suite.cells}
         dialect = suite.specs[run.dialect_id]
         allowed_forms = set(form_ids)
         for trial in trials:
@@ -507,8 +535,8 @@ class ReleaseBundle:
                 if trial[field] != expected:
                     raise RuntimeError(f"trial provenance mismatch for {field}")
 
-    @staticmethod
     def _validate_run_accounting(
+        self,
         run: RunManifest,
         trials: list[dict[str, Any]],
         calls: list[CallRecord],
@@ -532,10 +560,21 @@ class ReleaseBundle:
         for call in calls:
             for field in ("input_tokens", "output_tokens", "reasoning_tokens"):
                 _require_nonnegative_integer(getattr(call, field), f"call {field}")
-            for field in ("reserved_cost_usd", "observed_cost_usd", "latency_ms"):
+            for field in (
+                "reserved_cost_usd",
+                "observed_cost_usd",
+                "latency_ms",
+                "provider_latency_ms",
+            ):
                 _require_nonnegative_number(getattr(call, field), f"call {field}")
             if call.provider != run.provider:
                 raise RuntimeError("call provider does not match its run")
+            if call.status not in {
+                "complete",
+                "provider_error",
+                "transport_error",
+            }:
+                raise RuntimeError("admitted run contains a nonfinal attempt status")
         provider_request_ids = [
             call.provider_request_id for call in calls if call.provider_request_id
         ]
@@ -563,6 +602,7 @@ class ReleaseBundle:
                 "provider",
                 "endpoint",
                 "latency_ms",
+                "provider_latency_ms",
                 "input_tokens",
                 "output_tokens",
                 "reasoning_tokens",
@@ -577,7 +617,7 @@ class ReleaseBundle:
         for trial in trials:
             for field in ("input_tokens", "output_tokens", "reasoning_tokens"):
                 _require_nonnegative_integer(trial[field], f"trial {field}")
-            for field in ("observed_cost_usd", "latency_ms"):
+            for field in ("observed_cost_usd", "latency_ms", "provider_latency_ms"):
                 _require_nonnegative_number(trial[field], f"trial {field}")
         if abs(sum(call.observed_cost_usd for call in calls) - run.cost_usd) > 1e-12:
             raise RuntimeError("run cost does not match call records")
@@ -587,29 +627,40 @@ class ReleaseBundle:
         if abs(sum(call.latency_ms for call in calls) - run.latency_ms) > 1e-12:
             raise RuntimeError("run latency does not match call records")
 
-        evidence_by_call = {record.call_id: record for record in evidence}
-        if len(evidence_by_call) != len(evidence) or set(evidence_by_call) != {
-            call.call_id for call in calls
-        }:
+        evidence_revisions: dict[str, list[AttemptEvidence]] = {}
+        for record in evidence:
+            evidence_revisions.setdefault(record.call_id, []).append(record)
+        if set(evidence_revisions) != {call.call_id for call in calls}:
             raise RuntimeError("attempt evidence does not equal the exact call set")
         calls_by_id = {call.call_id: call for call in calls}
         trial_by_id = {row["trial_id"]: row for row in trials}
-        for call_id, record in evidence_by_call.items():
+        for call_id, revisions in evidence_revisions.items():
             call = calls_by_id[call_id]
-            if record.evidence_sha256 != record.authoritative_digest():
-                raise RuntimeError("attempt evidence digest does not match its content")
             links = {
                 "call_id": call.call_id,
                 "trial_id": call.trial_id,
                 "run_id": call.run_id,
                 "attempt": call.attempt,
             }
-            for field, expected in links.items():
-                if getattr(record, field) != expected:
-                    raise RuntimeError(f"attempt evidence contradicts its call for {field}")
-            projection = project_provider_evidence(
-                record.provider_evidence, run.to_dict()
-            )
+            revisions.sort(key=lambda record: record.revision)
+            predecessor = ""
+            for index, record in enumerate(revisions):
+                if record.revision != index:
+                    raise RuntimeError("attempt evidence revisions are not contiguous")
+                if record.predecessor_evidence_sha256 != predecessor:
+                    raise RuntimeError("attempt evidence revision chain is broken")
+                if record.evidence_sha256 != record.authoritative_digest():
+                    raise RuntimeError("attempt evidence digest does not match its content")
+                for field, expected in links.items():
+                    if getattr(record, field) != expected:
+                        raise RuntimeError(f"attempt evidence contradicts its call for {field}")
+                predecessor = record.evidence_sha256
+            record = revisions[-1]
+            if record.evidence_sha256 != call.evidence_sha256:
+                raise RuntimeError("call does not link its final evidence revision")
+            if self.evidence_projector is None:
+                raise RuntimeError("attempt evidence requires an application projector")
+            projection = self.evidence_projector(record.provider_evidence, run.to_dict())
             authorities = {
                 "status": call.status,
                 "started_at": call.started_at,
@@ -623,6 +674,7 @@ class ReleaseBundle:
                 "reasoning_tokens": call.reasoning_tokens,
                 "observed_cost_usd": call.observed_cost_usd,
                 "latency_ms": call.latency_ms,
+                "provider_latency_ms": call.provider_latency_ms,
                 "error_type": call.error_type,
             }
             for field, expected in authorities.items():
@@ -738,16 +790,10 @@ class ReleaseBundle:
             raise RuntimeError("release observed spend exceeds its global cap")
         for cohort in {run.cohort for run in admitted.values()}:
             cap = cohort_caps.get(cohort) if isinstance(cohort_caps, dict) else None
-            if (
-                not isinstance(cap, (int, float))
-                or not math.isfinite(cap)
-                or cap < 0
-            ):
+            if not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap < 0:
                 raise RuntimeError(f"release lacks a valid cap for cohort {cohort!r}")
             cohort_observed = sum(
-                call.observed_cost_usd
-                for call in calls
-                if admitted[call.run_id].cohort == cohort
+                call.observed_cost_usd for call in calls if admitted[call.run_id].cohort == cohort
             )
             if cohort_observed > cap + 1e-12:
                 raise RuntimeError(f"release observed spend exceeds cohort {cohort!r} cap")
@@ -810,9 +856,7 @@ class ReleaseBundle:
     def publication(self) -> PublicationView:
         """Return the sole validated view consumed by site/export publication."""
         self.validate()
-        suite = load_suite(
-            version=self.manifest["suite_version"], path=self.root / "suite.json"
-        )
+        suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
         protocols = load_protocol_registry(self.root / "protocols.json")
         profiles, effects = self._verified_metric_rows(
             suite=suite,
@@ -903,13 +947,16 @@ class ReleaseBundle:
                     [event for event in ledger_rows if event.run_id == run.run_id],
                     [record for record in evidence_rows if record.run_id == run.run_id],
                 )
-        if len({record.call_id for record in evidence_rows}) != len(evidence_rows) or {
-            record.call_id for record in evidence_rows
-        } != {row["call_id"] for row in call_rows}:
+        if {record.call_id for record in evidence_rows} != {row["call_id"] for row in call_rows}:
             raise RuntimeError("release attempt evidence does not equal the exact call set")
         self._validate_release_accounting(runs, trial_rows, call_rows, ledger_rows)
         self._verified_metric_rows(suite=suite, runs=runs, trials=trial_rows)
-        self._validate_sample_contract(runs, trial_rows, call_rows)
+        self._validate_application_policy(
+            suite=suite,
+            runs=runs,
+            trials=trial_rows,
+            calls=call_rows,
+        )
         if self.manifest.get("stimuli_materialized"):
             suite = load_suite(
                 version=self.manifest["suite_version"], path=self.root / "suite.json"
@@ -953,152 +1000,30 @@ class ReleaseBundle:
                 if _file_digest(path) != self.manifest["files"][relative]:
                     raise RuntimeError(f"checksum drift for {relative}")
 
-    def _validate_sample_contract(
+    def _validate_application_policy(
         self,
+        *,
+        suite: LoadedSuite,
         runs: list[RunManifest],
         trials: list[dict[str, Any]],
         calls: list[dict[str, Any]],
-        *,
         sealing: bool = False,
     ) -> None:
-        contract = self.manifest.get("sample_contract")
-        if not contract:
+        if not self.manifest.get("sample_contract"):
             return
-        if self.manifest["release_id"] != "v1.0.0-sample.1":
-            raise RuntimeError("sample contract is attached to the wrong release id")
-        expected_protocols = set(contract["protocol_ids"])
-        if (
-            expected_protocols != set(self.manifest["protocol_ids"])
-            or contract["form_set"] != "probe"
-            or contract["dialect_id"] != "enclosure.plain-v1"
-            or contract["execution_surface"] != "direct_api"
-            or contract["max_transport_attempts"] != 1
-            or contract["trials_per_run"] != 5
-            or contract["total_attempts"] != 20
-        ):
-            raise RuntimeError("sample contract does not declare the frozen 4 x 5 invariant")
-        if len(runs) > len(expected_protocols):
-            raise RuntimeError("sample bundle contains too many protocol runs")
-        if runs:
-            if not {run.protocol_id for run in runs} <= expected_protocols or len(
-                {run.protocol_id for run in runs}
-            ) != len(runs):
-                raise RuntimeError("sample protocols do not match the contract")
-            if any(
-                run.form_set != contract["form_set"]
-                or len(run.expected_trial_ids) != contract["trials_per_run"]
-                or run.max_transport_attempts != contract["max_transport_attempts"]
-                or run.execution_surface != contract["execution_surface"]
-                or run.dialect_id != contract["dialect_id"]
-                for run in runs
-            ):
-                raise RuntimeError("sample run shape does not match the contract")
-            for field in (
-                "dialect_id",
-                "requested_model_id",
-                "resolved_model_id",
-                "endpoint",
-                "provider",
-            ):
-                if len({getattr(run, field) for run in runs}) != 1:
-                    raise RuntimeError(f"sample runs do not share one {field}")
-            for run in runs:
-                validate_openrouter_run_policy(run.to_dict())
-        admitted = [run for run in runs if run.status == "admitted"]
-        if admitted:
-            expected_forms = set(
-                load_suite(
-                    version=self.manifest["suite_version"], path=self.root / "suite.json"
-                ).form_sets["probe"]
+        if self.release_policy_validator is None:
+            raise RuntimeError("release requires an application policy validator")
+        self.release_policy_validator(
+            ReleasePolicyContext(
+                root=self.root,
+                manifest=_freeze(self.manifest),
+                suite=suite,
+                runs=tuple(runs),
+                trials=tuple(_freeze(row) for row in trials),
+                calls=tuple(_freeze(row) for row in calls),
+                sealing=sealing,
             )
-            forms_by_run = {
-                run.run_id: {
-                    row["abstract_form_id"] for row in trials if row["run_id"] == run.run_id
-                }
-                for run in admitted
-            }
-            if len({tuple(sorted(ids)) for ids in forms_by_run.values()}) != 1:
-                raise RuntimeError("sample runs do not use the same frozen probe forms")
-            if any(ids != expected_forms for ids in forms_by_run.values()):
-                raise RuntimeError("sample runs do not use the exact frozen probe form set")
-        if self.manifest["status"] == "sealed" or sealing:
-            if len(admitted) != len(expected_protocols):
-                raise RuntimeError("sealed sample requires four admitted runs")
-            if len(trials) != contract["total_attempts"]:
-                raise RuntimeError("sealed sample does not contain exactly twenty trials")
-            if len(calls) != contract["total_attempts"]:
-                raise RuntimeError("sealed sample does not contain exactly twenty attempts")
-            approval = self.manifest.get("paid_run_approval") or {}
-            spend_caps = self.manifest.get("spend_caps_usd") or {}
-            if (
-                approval.get("release_id") != self.manifest["release_id"]
-                or approval.get("max_spend_usd") != 30.0
-                or approval.get("paid_calls") != contract["total_attempts"]
-                or set(approval.get("run_ids", [])) != {run.run_id for run in admitted}
-                or approval.get("model_id") != admitted[0].requested_model_id
-                or approval.get("endpoint") != admitted[0].endpoint
-                or approval.get("provider")
-                != admitted[0].catalog_row["selected_endpoint"]["provider_name"]
-                or not approval.get("approved_by")
-                or not approval.get("scope")
-                or spend_caps.get("global") != 30.0
-                or spend_caps.get("cohorts", {}).get("sample") != 30.0
-            ):
-                raise RuntimeError("sealed sample lacks exact paid approval or spend caps")
-            profiles = _read_rows(self.root / "profiles.parquet")
-            if (
-                len(profiles) != len(expected_protocols)
-                or {row["protocol_id"] for row in profiles} != expected_protocols
-                or any(row["coverage"] != 1.0 for row in profiles)
-            ):
-                raise RuntimeError("sealed sample requires complete derived profiles")
-            site = self.root / "site"
-            required_site_files = {
-                "index.html",
-                "forms.html",
-                "atlas.html",
-                "runs.html",
-                "human.html",
-                "downloads.html",
-                "CNAME",
-                "downloads/human-trial.schema.json",
-            }
-            missing = [
-                relative for relative in required_site_files if not (site / relative).is_file()
-            ]
-            if missing:
-                raise RuntimeError(f"sealed sample site is missing required artifacts: {missing}")
-            required_markers = {
-                "runs.html": (
-                    "containment tree and frozen form",
-                    "actual rendered stimulus",
-                    "reading rule, protocol, and exact prompt",
-                    "target and recorded response",
-                    "parse and scorer identity",
-                    "profile contribution",
-                    "dialect matrix",
-                    "family matrix",
-                    "reasoning contrasts",
-                    "not run",
-                    "exact endpoint + routing provenance",
-                    "input/output/reasoning tokens",
-                ),
-                "human.html": (
-                    "HumanTrialRecord",
-                    "familiarity_band",
-                    "elapsed_ms",
-                    "human-trial.schema.json",
-                ),
-                "forms.html": ("system prompt", "possible confounds", "frozen form sets"),
-                "downloads.html": ("sha256", "caveats", "human-trial.schema.json"),
-            }
-            for relative, markers in required_markers.items():
-                page = (site / relative).read_text()
-                absent = [marker for marker in markers if marker not in page]
-                if absent:
-                    raise RuntimeError(
-                        f"sealed sample site {relative} lacks required evidence: {absent}"
-                    )
+        )
 
     def seal(
         self,
@@ -1112,10 +1037,11 @@ class ReleaseBundle:
         if expected and expected != set(self.manifest["admitted_run_ids"]):
             raise RuntimeError("not every expected run is admitted")
         self.validate()
-        self._validate_sample_contract(
-            self.runs(),
-            _read_rows(self.root / "trials.parquet"),
-            _read_rows(self.root / "calls.parquet"),
+        self._validate_application_policy(
+            suite=load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json"),
+            runs=self.runs(),
+            trials=_read_rows(self.root / "trials.parquet"),
+            calls=_read_rows(self.root / "calls.parquet"),
             sealing=True,
         )
         scan_publication(self.root, environment=publication_environment)

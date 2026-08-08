@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from hashlib import blake2b, sha256
 from typing import Any, Literal
 
-from dbench.provider_evidence import ProviderEvidenceEnvelope
+from lofbench.provider_evidence import ProviderEvidenceEnvelope
 
 RunStatus = Literal["planned", "probed", "complete", "admitted", "rejected"]
 
@@ -127,6 +127,7 @@ class TrialRecord:
     parse_status: str
     attempt_count: int
     latency_ms: float
+    provider_latency_ms: float
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
@@ -157,6 +158,7 @@ class CallRecord:
     provider: str
     endpoint: str
     latency_ms: float
+    provider_latency_ms: float
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
@@ -178,6 +180,8 @@ class AttemptEvidence:
     trial_id: str
     run_id: str
     attempt: int
+    revision: int
+    predecessor_evidence_sha256: str
     provider_evidence: ProviderEvidenceEnvelope
 
     def digest_material(self) -> dict[str, Any]:
@@ -186,6 +190,8 @@ class AttemptEvidence:
             "trial_id": self.trial_id,
             "run_id": self.run_id,
             "attempt": self.attempt,
+            "revision": self.revision,
+            "predecessor_evidence_sha256": self.predecessor_evidence_sha256,
             "provider_evidence": self.provider_evidence.to_dict(),
         }
 
@@ -210,13 +216,15 @@ class AttemptEvidence:
             trial_id=value["trial_id"],
             run_id=value["run_id"],
             attempt=value["attempt"],
-            provider_evidence=ProviderEvidenceEnvelope.from_dict(
-                value["provider_evidence"]
-            ),
+            revision=value["revision"],
+            predecessor_evidence_sha256=value["predecessor_evidence_sha256"],
+            provider_evidence=ProviderEvidenceEnvelope.from_dict(value["provider_evidence"]),
         )
 
     @classmethod
     def capture(cls, **kwargs: Any) -> AttemptEvidence:
+        kwargs.setdefault("revision", 0)
+        kwargs.setdefault("predecessor_evidence_sha256", "")
         if isinstance(kwargs.get("provider_evidence"), dict):
             kwargs = {
                 **kwargs,
@@ -226,6 +234,17 @@ class AttemptEvidence:
             }
         provisional = cls(evidence_sha256="", **kwargs)
         return cls(evidence_sha256=provisional.authoritative_digest(), **kwargs)
+
+    def revise(self, provider_evidence: ProviderEvidenceEnvelope) -> AttemptEvidence:
+        return self.capture(
+            call_id=self.call_id,
+            trial_id=self.trial_id,
+            run_id=self.run_id,
+            attempt=self.attempt,
+            revision=self.revision + 1,
+            predecessor_evidence_sha256=self.evidence_sha256,
+            provider_evidence=provider_evidence,
+        )
 
 
 @dataclass(frozen=True)

@@ -31,11 +31,18 @@ def test_built_wheel_contains_both_authority_registries_and_runs_default_task(
         text=True,
     )
     script = f"""
+import importlib.abc
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 sys.path.insert(0, {str(installed)!r})
+class RejectApplicationImport(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'dbench' or fullname.startswith('dbench.'):
+            raise AssertionError(f'provider-neutral package imported {{fullname}}')
+        return None
+sys.meta_path.insert(0, RejectApplicationImport())
 from lofbench.authority import (
     PROTOCOL_REGISTRY_GIT_PATH,
     SUITE_REGISTRY_GIT_PATH,

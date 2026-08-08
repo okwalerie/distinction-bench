@@ -10,11 +10,8 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dbench.provider_evidence import (
-    AGENT_CLI_SOURCE,
-    ProviderEvidenceEnvelope,
-    ProviderEvidenceSource,
-)
+from dbench.provider_evidence import AGENT_CLI_SOURCE
+from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
 from lofbench.run_models import ExecutionRequest, ExecutionResult, TrialExecutor
 
 _AGENT_ENV_ALLOWLIST = frozenset(
@@ -63,9 +60,7 @@ def agent_subprocess_env(
         )
 
     return {
-        name: value
-        for name, value in values.items()
-        if name in _AGENT_ENV_ALLOWLIST and safe(name)
+        name: value for name, value in values.items() if name in _AGENT_ENV_ALLOWLIST and safe(name)
     }
 
 
@@ -102,6 +97,8 @@ class AgentCliExecutor(TrialExecutor):
         output_text: str = "",
         stdout: str = "",
         stderr: str = "",
+        process_error: str = "",
+        process_error_message: str = "",
     ) -> ExecutionResult:
         payload = {
             "command": self.command,
@@ -114,22 +111,20 @@ class AgentCliExecutor(TrialExecutor):
                 f"subscription:{self.command}:{request.run.run_id}:"
                 f"{request.sample.id}:{request.attempt}"
             ),
+            "process_error": process_error,
+            "process_error_message": process_error_message,
         }
         return ExecutionResult(
             provider_evidence=ProviderEvidenceEnvelope(
-                schema_version=1,
-                adapter_id="agent-cli-v1",
-                request_started_at=started_at,
-                response_finished_at=_now(),
+                schema_version=2,
+                adapter_id="agent-cli-v2",
                 sources=(
-                    ProviderEvidenceSource(
+                    ProviderEvidenceSource.capture_event(
                         label=AGENT_CLI_SOURCE,
-                        payload_json=json.dumps(
-                            payload,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                            ensure_ascii=False,
-                        ),
+                        request_started_at=started_at,
+                        response_finished_at=_now(),
+                        operation=self.command,
+                        payload=payload,
                     ),
                 ),
             )
@@ -144,41 +139,58 @@ class AgentCliExecutor(TrialExecutor):
                 returncode=-2,
                 stderr="agent_cli_text_only",
             )
-        with tempfile.TemporaryDirectory(prefix="lofbench-agent-") as directory:
-            root = Path(directory)
-            schema_path = root / "schema.json"
-            output_path = root / "output.json"
-            protocol = request.task.config.response_schema
-            schema = protocol.json_schema if protocol else {}
-            if hasattr(schema, "model_dump"):
-                schema = schema.model_dump(mode="json", exclude_none=True)
-            schema_path.write_text(json.dumps(schema))
-            completed = subprocess.run(
-                self.argv(request, schema_path, output_path),
-                cwd=root,
-                env=self.environment,
-                text=True,
-                capture_output=True,
-                timeout=300,
-                check=False,
-            )
-            if self.command == "claude" and completed.returncode == 0:
-                output_path.write_text(completed.stdout)
-            if completed.returncode != 0 or not output_path.exists():
+        try:
+            with tempfile.TemporaryDirectory(prefix="lofbench-agent-") as directory:
+                root = Path(directory)
+                schema_path = root / "schema.json"
+                output_path = root / "output.json"
+                protocol = request.task.config.response_schema
+                schema = protocol.json_schema if protocol else {}
+                if hasattr(schema, "model_dump"):
+                    schema = schema.model_dump(mode="json", exclude_none=True)
+                schema_path.write_text(json.dumps(schema))
+                completed = subprocess.run(
+                    self.argv(request, schema_path, output_path),
+                    cwd=root,
+                    env=self.environment,
+                    text=True,
+                    capture_output=True,
+                    timeout=300,
+                    check=False,
+                )
+                if self.command == "claude" and completed.returncode == 0:
+                    output_path.write_text(completed.stdout)
+                if completed.returncode != 0 or not output_path.exists():
+                    return self._result(
+                        request=request,
+                        started_at=started_at,
+                        returncode=completed.returncode,
+                        stdout=completed.stdout,
+                        stderr=completed.stderr,
+                    )
                 return self._result(
                     request=request,
                     started_at=started_at,
-                    returncode=completed.returncode,
+                    returncode=0,
+                    output_text=output_path.read_text(),
                     stdout=completed.stdout,
                     stderr=completed.stderr,
                 )
+        except Exception as exc:
+            stdout = getattr(exc, "stdout", "") or ""
+            stderr = getattr(exc, "stderr", "") or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
             return self._result(
                 request=request,
                 started_at=started_at,
-                returncode=0,
-                output_text=output_path.read_text(),
-                stdout=completed.stdout,
-                stderr=completed.stderr,
+                returncode=-3,
+                stdout=stdout,
+                stderr=stderr,
+                process_error=type(exc).__name__,
+                process_error_message=str(exc),
             )
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import html
 import json
 import shutil
@@ -12,7 +11,7 @@ from typing import Any
 
 from lofbench.protocols import ProtocolSpec
 from lofbench.records import RunManifest
-from lofbench.release_bundle import PublicationView, ReleaseBundle
+from lofbench.release_bundle import PublicationView
 from lofbench.suites import LoadedSuite
 
 _DOWNLOADS = (
@@ -587,7 +586,7 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
         f"{len(protocol_ids)} frozen protocols. nothing is posted; export stays on your device.</p>"
         "<p class=notice>this informal pilot is not an admitted model run. use a pseudonymous "
         "participant code; no data leaves this page. every exported HumanTrialRecord conforms "
-        "to the <a href=\"downloads/human-trial.schema.json\">published schema</a>.</p>"
+        'to the <a href="downloads/human-trial.schema.json">published schema</a>.</p>'
         "<div class=card><label>participant code <input id=participant required minlength=3 "
         'maxlength=64 pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}"></label> '
         "<label>laws of form familiarity <select id=familiarity><option value=none>none</option>"
@@ -662,9 +661,7 @@ def _downloads(publication: PublicationView) -> str:
     )
 
 
-def build_site(release_dir: Path, out: Path) -> None:
-    bundle = ReleaseBundle.open(release_dir)
-    publication = bundle.publication()
+def build_site(publication: PublicationView, out: Path) -> None:
     try:
         out.resolve().relative_to((publication.root / "site").resolve())
         inside_bundle_site = True
@@ -707,19 +704,3 @@ def build_site(release_dir: Path, out: Path) -> None:
     if publication.stimuli_materialized:
         shutil.copytree(publication.root / "stimuli", out / "assets" / "stimuli")
     (out / "CNAME").write_text("distinction.valeriekim.ca\n")
-
-
-def _main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="build the bundle-only static benchmark site")
-    parser.add_argument("--release", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--verify-against", type=Path)
-    args = parser.parse_args(argv)
-    build_site(args.release, args.out)
-    if args.verify_against is not None:
-        verify_site_tree(args.verify_against, args.out)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_main())

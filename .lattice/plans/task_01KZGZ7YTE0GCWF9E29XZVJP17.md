@@ -490,6 +490,35 @@ matrix. run focused, full, clean-room, and wheel-install gates without model cal
 commit the result, and return db-14 to independent review tied to
 `ev_01KZHD2KCS0N6MHCW1JHJJ90HA`.
 
+## Review Cycle 6 Findings — total attempt persistence and accounting recovery
+
+the sixth review found that provider evidence is canonical only on the happy path:
+projection exceptions can escape before the attempt is persisted, and an unknown
+generation lookup currently settles a possibly billed chat at zero. deepen the
+provider-evidence seam so the provider-neutral envelope, response source, projection
+status contract, and recovery revision live in `lofbench`, while openrouter parsing
+and routing validation remain in `dbench`. inject the application projector into run
+orchestration and release admission; generic core must not import or interpret
+openrouter or the sample protocol catalog.
+
+make openrouter execution retain every chat and generation http exchange, including
+timestamps, status, headers, raw bytes/text, and json parse outcome for success,
+non-2xx, malformed, timeout, error, and cancellation paths. its pure projector must
+be total over retained envelopes and close provider/model/request identity,
+finish/error semantics, usage, cost, provider/measured latency, and cross-source
+equalities. only `complete` can score; `provider_error`, `transport_error`, and
+`accounting_unknown` always persist evidence and a call first.
+
+unknown accounting retains the conservative reservation instead of settling zero.
+resume may perform bounded generation-get recovery using the retained request id but
+must never resend inference; recovered raw exchanges revise the attempt evidence,
+settle exact cost, and continue only after closure. unrecoverable accounting blocks
+the run with the reservation outstanding. test this through the orchestration/release
+interfaces with reviewer-specified malformed, non-2xx, error, cancelled,
+finish-reason, token/cost/identity, latency, and recovery cases. then update public
+docs/vocabulary, run focused/full/wheel/clean gates without inference, commit, and
+return db-14 to review tied to `ev_01KZHGKGHRFYNJ97QT9NJ3ABME`.
+
 ## Review Cycle 4 Findings — sealed authority and evidence closure
 
 the fourth adversarial review proved that the bundle still had two parallel trust
@@ -524,5 +553,7 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-seal-boundary
+
+## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
