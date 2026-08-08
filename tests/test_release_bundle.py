@@ -787,7 +787,32 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
                 request_url="https://openrouter.ai/api/v1/chat/completions",
                 http_status=503,
                 response_headers=(),
-                raw_body=json.dumps({"error": {"type": "busy"}}).encode(),
+                raw_body=json.dumps({"id": "failed-request", "error": {"type": "busy"}}).encode(),
+            ),
+            ProviderEvidenceSource.capture_http(
+                label=OPENROUTER_GENERATION_SOURCE,
+                sequence=1,
+                request_started_at="2026-08-08T00:00:00.005000+00:00",
+                response_finished_at="2026-08-08T00:00:00.005000+00:00",
+                request_method="GET",
+                request_url=("https://openrouter.ai/api/v1/generation?id=failed-request"),
+                http_status=200,
+                response_headers=(),
+                raw_body=json.dumps(
+                    {
+                        "data": {
+                            "id": "failed-request",
+                            "model": run.resolved_model_id,
+                            "provider_name": run.catalog_row["selected_endpoint"]["provider_name"],
+                            "native_tokens_prompt": 0,
+                            "native_tokens_completion": 0,
+                            "native_tokens_reasoning": 0,
+                            "total_cost": 0.0,
+                            "latency": 5.0,
+                            "finish_reason": "error",
+                        }
+                    }
+                ).encode(),
             ),
         ),
     )
@@ -804,13 +829,13 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
         finished_at=failed_envelope.sources[0].response_finished_at,
         status="provider_error",
         observed_cost_usd=0.0,
-        resolved_model_id="",
+        resolved_model_id=run.resolved_model_id,
         latency_ms=5.0,
-        provider_latency_ms=0.0,
+        provider_latency_ms=5.0,
         input_tokens=0,
         output_tokens=0,
         reasoning_tokens=0,
-        provider_request_id="",
+        provider_request_id="failed-request",
         error_type="provider_busy",
         response_sha256=sha256(b"").hexdigest(),
         evidence_sha256=failed_evidence.evidence_sha256,
@@ -842,7 +867,7 @@ def test_admission_rejects_raw_error_contradicting_failed_call(tmp_path, authori
     forged_envelope = _replace_evidence_source(
         failed_envelope,
         OPENROUTER_CHAT_SOURCE,
-        {"error": {"type": "forged"}},
+        {"id": "failed-request", "error": {"type": "forged"}},
     )
     forged_material = failed_evidence.digest_material()
     forged_material["provider_evidence"] = forged_envelope.to_dict()
