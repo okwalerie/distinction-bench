@@ -76,7 +76,10 @@ class TestExtractCompositeAnswer:
 
     def test_extract_mixed_formats(self):
         """Test handling of result values like void, nothing, ()."""
-        response = '{"E1": {"canonical": "()", "result": "void"}, "E2": {"canonical": "", "result": "()"}}'
+        response = (
+            '{"E1": {"canonical": "()", "result": "void"}, '
+            '"E2": {"canonical": "", "result": "()"}}'
+        )
         result = extract_composite_answer(response, 2)
         assert result["results"] == ["unmarked", "marked"]
 

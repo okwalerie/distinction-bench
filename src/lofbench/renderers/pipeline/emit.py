@@ -5,9 +5,8 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
-
-import cairosvg
 
 from .archetype import BaseRender
 
@@ -15,7 +14,10 @@ from .archetype import BaseRender
 # spatial dialects rasterise to PNG. Version pinned in pyproject.toml
 # (`cairosvg==2.9.0`); stamped into provenance as `renderer_lib_version` by
 # ``ComposedRenderer.render`` (see ``pipeline.composed``).
-CAIROSVG_VERSION = cairosvg.__version__
+try:
+    CAIROSVG_VERSION: str | None = version("cairosvg")
+except PackageNotFoundError:
+    CAIROSVG_VERSION = None
 
 
 @dataclass
@@ -59,6 +61,13 @@ def emit(
             f"spatial BaseRender (kind={type(base.payload).__name__}) has no to_svg "
             "hook to build a symbolic SVG scene from"
         )
+
+    try:
+        import cairosvg
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "spatial rendering requires the 'visual' extra and native cairo libraries"
+        ) from exc
 
     svg = to_svg(base)
     png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"))

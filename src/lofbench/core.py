@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import random
 
 # =============================================================================
@@ -193,9 +192,6 @@ def generate_form_string(
 
     def build(remaining_min: int, remaining_max: int) -> str:
         if remaining_max <= 0 or marks_used[0] >= max_marks:
-            if marks_used[0] < max_marks and rng.random() > 0.5:
-                marks_used[0] += 1
-                return "()"
             return ""
 
         if remaining_min > 0:

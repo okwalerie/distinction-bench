@@ -182,7 +182,9 @@ class ComposedRenderer(FormRenderer):
             render_relation_hash=render_relation_hash,
             structure_verified=structure_verified,
             roundtrip_ok=roundtrip_ok,
-            renderer_lib_version=f"cairosvg=={CAIROSVG_VERSION}" if emission.is_image else None,
+            renderer_lib_version=(
+                f"cairosvg=={CAIROSVG_VERSION or 'unknown'}" if emission.is_image else None
+            ),
             payload_hash=payload_hash,
         )
         return RenderedForm(

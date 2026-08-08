@@ -229,8 +229,6 @@ class SVGCircleRenderer(FormRenderer):
             # Maximum radius that allows radial placement without overlap
             # ring_radius * (2π / n) >= 2 * child_r
             # ring_radius >= n * child_r / π
-            min_ring_radius = n_children * child_r / math.pi
-
             # We want ring_radius = (r - child_r) * margin
             # So: (r - child_r) * margin >= n * child_r / π
             # Solve for child_r: child_r <= r * margin / (margin + n/π)
@@ -281,7 +279,8 @@ class SVGCircleRenderer(FormRenderer):
         svg_parts = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
             f'viewBox="-1.1 -1.1 2.2 2.2">',
-            f'<rect x="-1.1" y="-1.1" width="2.2" height="2.2" fill="{self.config.background_color}"/>',
+            '<rect x="-1.1" y="-1.1" width="2.2" height="2.2" '
+            f'fill="{self.config.background_color}"/>',
         ]
 
         # Sort circles by depth (draw deeper circles first so they appear behind)

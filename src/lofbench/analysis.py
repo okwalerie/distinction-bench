@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import random
 from collections import Counter, defaultdict
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -282,7 +281,9 @@ def get_log_results(log: EvalLog) -> dict[str, float | None]:
 # =============================================================================
 
 
-def parse_score_column(df: pd.DataFrame, score_col: str = 'score_lof_composite_scorer') -> pd.DataFrame:
+def parse_score_column(
+    df: pd.DataFrame, score_col: str = "score_lof_composite_scorer"
+) -> pd.DataFrame:
     """Extract dict score values into separate columns.
 
     Args:
@@ -511,7 +512,7 @@ def analyze_composite(logs: list[EvalLog]) -> str:
     # === Random Baselines ===
     group_size = all_results[0]["group_size"] if all_results else 8
     lines.append("=== Random Baselines ===")
-    lines.append(f"  Per-item:       50.0% (coin flip)")
+    lines.append("  Per-item:       50.0% (coin flip)")
     lines.append(f"  All-correct:    {100 / (2**group_size):.2f}% ({group_size} coin flips)")
 
     # Calculate count-match baseline (sum of P(k)^2 for binomial)
@@ -564,7 +565,10 @@ def analyze_composite(logs: list[EvalLog]) -> str:
             per_item = 100 * sum(r["per_item_accuracy"] for r in diff_results) / n
             all_correct = sum(r["all_correct"] for r in diff_results)
             all_correct_pct = 100 * all_correct / n
-            lines.append(f"  {diff:12} {per_item:5.1f}% per-item   {all_correct_pct:5.1f}% all-correct  (n={n})")
+            lines.append(
+                f"  {diff:12} {per_item:5.1f}% per-item   "
+                f"{all_correct_pct:5.1f}% all-correct  (n={n})"
+            )
     lines.append("")
 
     # === Accuracy by Target ===
@@ -589,9 +593,15 @@ def analyze_composite(logs: list[EvalLog]) -> str:
             unmarked_correct += int(n_unmarked * r["per_item_accuracy"])
 
         if marked_total > 0:
-            lines.append(f"  marked      : {100*marked_correct/marked_total:.1f}% ({marked_correct}/{marked_total})")
+            lines.append(
+                f"  marked      : {100 * marked_correct / marked_total:.1f}% "
+                f"({marked_correct}/{marked_total})"
+            )
         if unmarked_total > 0:
-            lines.append(f"  unmarked    : {100*unmarked_correct/unmarked_total:.1f}% ({unmarked_correct}/{unmarked_total})")
+            lines.append(
+                f"  unmarked    : {100 * unmarked_correct / unmarked_total:.1f}% "
+                f"({unmarked_correct}/{unmarked_total})"
+            )
 
     return "\n".join(lines)
 

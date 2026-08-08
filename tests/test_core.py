@@ -134,6 +134,7 @@ class TestGenerator:
             if s:  # non-empty
                 d = string_depth(s)
                 assert d >= 2, f"Depth {d} < 2: {s}"
+                assert d <= 4, f"Depth {d} > 4: {s}"
 
     def test_deterministic(self):
         """Same seed should produce same output."""

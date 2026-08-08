@@ -1555,7 +1555,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "cairosvg" },
     { name = "google-genai" },
     { name = "inspect-ai" },
     { name = "matplotlib" },
@@ -1582,6 +1581,9 @@ eval = [
 site = [
     { name = "python-fasthtml" },
 ]
+visual = [
+    { name = "cairosvg" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1593,7 +1595,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.75.0" },
     { name = "anthropic", marker = "extra == 'eval'", specifier = ">=0.75.0" },
-    { name = "cairosvg", specifier = "==2.9.0" },
+    { name = "cairosvg", marker = "extra == 'visual'", specifier = "==2.9.0" },
     { name = "google-genai", specifier = ">=1.55.0" },
     { name = "google-genai", marker = "extra == 'eval'", specifier = ">=1.55.0" },
     { name = "inspect-ai", specifier = ">=0.3.154" },
@@ -1609,7 +1611,7 @@ requires-dist = [
     { name = "python-fasthtml", marker = "extra == 'site'", specifier = ">=0.14.4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
 ]
-provides-extras = ["eval", "dev", "analysis", "site"]
+provides-extras = ["eval", "dev", "analysis", "site", "visual"]
 
 [package.metadata.requires-dev]
 dev = [
