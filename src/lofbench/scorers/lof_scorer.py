@@ -8,9 +8,58 @@ from typing import Literal
 
 from inspect_ai.scorer import Score, Scorer, Target, accuracy, mean, scorer, stderr
 
+from lofbench.protocols import get_protocol
+
 # Opening and closing bracket characters for normalization
 OPEN_BRACKETS = set("([{<⟨〈〈《「『")
 CLOSE_BRACKETS = set(")]}>⟩〉〉》」』")
+
+
+def parse_protocol_answer(
+    response: str,
+    *,
+    protocol_id: str,
+    expected_normal_value: str,
+    expected_tree: list,
+) -> tuple[str, str, bool]:
+    """Strictly parse one public-protocol response."""
+    try:
+        value = json.loads(response)
+    except (json.JSONDecodeError, TypeError):
+        return "invalid", "", False
+    if not isinstance(value, dict):
+        return "invalid", "", False
+    protocol = get_protocol(protocol_id)
+    if protocol.answer_kind == "normal_value":
+        if set(value) != {"value"} or value["value"] not in {"marked", "unmarked"}:
+            return "invalid", "", False
+        prediction = value["value"]
+        return "valid", prediction, prediction == expected_normal_value
+    if set(value) != {"tree"} or not isinstance(value["tree"], list):
+        return "invalid", "", False
+    prediction = json.dumps(value["tree"], separators=(",", ":"))
+    return "valid", prediction, value["tree"] == expected_tree
+
+
+@scorer(metrics=[accuracy(), stderr()])
+def public_protocol_scorer() -> Scorer:
+    """Score strict JSON for every v1 protocol through one implementation."""
+
+    async def score(state, target: Target) -> Score:
+        parse_status, prediction, correct = parse_protocol_answer(
+            state.output.completion,
+            protocol_id=state.metadata["protocol_id"],
+            expected_normal_value=state.metadata["normal_value"],
+            expected_tree=state.metadata["abstract_form"],
+        )
+        return Score(
+            value="C" if correct else "I",
+            answer=prediction,
+            explanation=f"parse_status={parse_status}",
+            metadata={"parse_status": parse_status},
+        )
+
+    return score
 
 
 def normalize_to_parens(expr: str) -> str:

@@ -13,13 +13,83 @@ can never supply on its own) plus fallbacks for legacy (pre-M5) renderers.
 
 from __future__ import annotations
 
+import json
+
+import pytest
+from inspect_ai import eval as inspect_eval
+from inspect_ai.model import ModelOutput, get_model
+
+from lofbench.suites import SUITES_DIR
 from lofbench.tasks.composite import composite_lof_task
-from lofbench.tasks.single import single_lof_task
+from lofbench.tasks.single import adhoc_single_lof_task, single_lof_task
+
+
+class TestPublicSuiteTask:
+    def test_defaults_consume_only_frozen_ids_and_stamp_protocol(self):
+        task = single_lof_task(form_set="probe")
+        assert task.metadata["suite_version"] == "v1"
+        assert task.metadata["form_set"] == "probe"
+        assert task.metadata["dialect_id"] == "parens.reference-v1"
+        assert task.metadata["protocol_id"] == "reduce-infer-v1"
+        assert task.metadata["release_eligible"] is True
+        assert len(task.dataset.samples) == 5
+        assert {sample.metadata["abstract_form_id"] for sample in task.dataset.samples} == set(
+            task.metadata["form_ids"]
+        )
+        for sample in task.dataset.samples:
+            assert sample.metadata["prompt_hash"]
+            assert sample.metadata["model_payload_sha256"]
+
+    def test_taught_transcription_uses_same_frozen_cells(self):
+        task = single_lof_task(
+            form_set="probe",
+            dialect="prose.containment-plain-v1",
+            protocol="transcribe-taught-v1",
+        )
+        assert len(task.dataset.samples) == 5
+        assert all(
+            sample.metadata["protocol_id"] == "transcribe-taught-v1"
+            for sample in task.dataset.samples
+        )
+
+    def test_payload_tamper_fails_during_task_construction(self, tmp_path):
+        value = json.loads((SUITES_DIR / "v1.json").read_text())
+        cell = next(
+            item
+            for item in value["cells"]
+            if item["dialect_id"] == "parens.reference-v1"
+            and item["abstract_form_id"] in value["form_sets"]["probe"]
+        )
+        cell["model_payload_sha256"] = "0" * 64
+        path = tmp_path / "suite.json"
+        path.write_text(json.dumps(value))
+        with pytest.raises(RuntimeError, match="payload hash mismatch"):
+            single_lof_task(suite=str(path), form_set="probe")
+
+    def test_inspect_mock_consumes_frozen_samples_and_strict_json(self, tmp_path):
+        task = single_lof_task(form_set="probe")
+
+        def output(_input, _tools, _tool_choice, _config):
+            return ModelOutput.from_content(model="mockllm/model", content='{"value":"marked"}')
+
+        logs = inspect_eval(
+            task,
+            model=get_model("mockllm/model", custom_outputs=output),
+            display="none",
+            log_dir=str(tmp_path / "logs"),
+        )
+        assert logs[0].status == "success"
+        assert logs[0].samples is not None
+        assert len(logs[0].samples) == 5
+        assert {sample.metadata["abstract_form_id"] for sample in logs[0].samples} == set(
+            task.metadata["form_ids"]
+        )
+        assert all("public_protocol_scorer" in sample.scores for sample in logs[0].samples)
 
 
 class TestSingleTaskLegacyRenderer:
     def test_default_canonical_renderer_stamps_fallbacks(self):
-        t = single_lof_task(n=3, seed=1)
+        t = adhoc_single_lof_task(n=3, seed=1)
         assert t.metadata["suite_version"] == "adhoc"
         assert t.metadata["dialect_id"] == "canonical"
         assert t.metadata["family"] == "canonical"
@@ -37,7 +107,7 @@ class TestSingleTaskLegacyRenderer:
         """-T renderer=noisy_parens -T renderer_config='{"mismatched": true}'
         must keep working (no forced migration) and still gets a fallback
         stamp."""
-        t = single_lof_task(
+        t = adhoc_single_lof_task(
             n=2, seed=1, renderer="noisy_parens", renderer_config={"mismatched": True}
         )
         assert t.metadata["dialect_id"] == "noisy_parens"
@@ -48,7 +118,9 @@ class TestSingleTaskLegacyRenderer:
 
 class TestSingleTaskComposedRenderer:
     def test_composed_named_dialect_uses_real_provenance_not_fallback(self):
-        t = single_lof_task(n=2, seed=1, renderer="parens.noisy-mismatched-v1")
+        t = adhoc_single_lof_task(
+            n=2, seed=1, renderer="parens.noisy-mismatched-v1"
+        )
         assert t.metadata["suite_version"] == "adhoc"  # DialectSpec default
         assert t.metadata["dialect_id"] == "parens.noisy-mismatched-v1"
         assert t.metadata["family"] == "parens"

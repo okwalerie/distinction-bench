@@ -24,7 +24,7 @@ from lofbench.renderers import (
     get_renderer,
     list_renderers,
 )
-from lofbench.tasks import composite_lof_task, single_lof_task
+from lofbench.tasks import adhoc_single_lof_task, composite_lof_task, single_lof_task
 
 __all__ = [
     # Core
@@ -43,6 +43,7 @@ __all__ = [
     "generate_composite_test_cases",
     # inspect-ai tasks
     "single_lof_task",
+    "adhoc_single_lof_task",
     "composite_lof_task",
     # Renderers
     "FormRenderer",

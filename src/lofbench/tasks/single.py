@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import Dataset
-from inspect_ai.model import GenerateConfig
+from inspect_ai.model import GenerateConfig, ResponseSchema
 from inspect_ai.solver import chain_of_thought, generate, prompt_template, system_message
 
 from lofbench.core import DIFFICULTY_CONFIGS
-from lofbench.datasets import create_single_dataset
+from lofbench.datasets import create_single_dataset, create_suite_dataset
+from lofbench.protocols import get_protocol
 from lofbench.renderers import get_renderer
-from lofbench.scorers import lof_single_scorer
+from lofbench.scorers import lof_single_scorer, public_protocol_scorer
+from lofbench.suites import LoadedSuite, load_suite
 from lofbench.tasks.prompts import SINGLE_SYSTEM_PROMPT, SINGLE_USER_TEMPLATE
 
 
@@ -79,7 +83,7 @@ def _stamp_dialect_provenance(dataset: Dataset, fallback_dialect: str) -> dict[s
 
 
 @task
-def single_lof_task(
+def adhoc_single_lof_task(
     n: int = 100,
     seed: int = 2025,
     renderer: str = "canonical",
@@ -156,5 +160,63 @@ def single_lof_task(
                 }
                 for config in DIFFICULTY_CONFIGS
             },
+        },
+    )
+
+
+def _load_suite_argument(suite: str) -> LoadedSuite:
+    path = Path(suite)
+    if path.exists():
+        value = json.loads(path.read_text())
+        return load_suite(version=value["suite_version"], path=path)
+    return load_suite(version=suite)
+
+
+@task
+def single_lof_task(
+    suite: str = "v1",
+    form_set: str = "core",
+    dialect: str = "parens.reference-v1",
+    protocol: str = "reduce-infer-v1",
+) -> Task:
+    """Evaluate one frozen public form per sample under an exact v1 protocol."""
+    loaded = _load_suite_argument(suite)
+    protocol_spec = get_protocol(protocol)
+    dataset = create_suite_dataset(
+        loaded,
+        form_set=form_set,
+        dialect_id=dialect,
+        protocol=protocol_spec,
+    )
+    cell_hashes = {
+        sample.metadata["abstract_form_id"]: {
+            "symbolic_payload_hash": sample.metadata["symbolic_payload_hash"],
+            "model_payload_sha256": sample.metadata["model_payload_sha256"],
+        }
+        for sample in dataset.samples
+    }
+    return Task(
+        dataset=dataset,
+        solver=[system_message(protocol_spec.system_text), generate(tool_calls="none")],
+        scorer=public_protocol_scorer(),
+        config=GenerateConfig(
+            temperature=0,
+            max_tokens=protocol_spec.maximum_output_tokens,
+            max_retries=0,
+            response_schema=ResponseSchema(
+                name=protocol_spec.protocol_id,
+                json_schema=protocol_spec.response_json_schema,
+                strict=True,
+            ),
+        ),
+        metadata={
+            "suite_version": loaded.suite_version,
+            "form_set": form_set,
+            "form_ids": list(loaded.form_sets[form_set]),
+            "dialect_id": dialect,
+            "family": loaded.specs[dialect].family,
+            "protocol_id": protocol,
+            "cell_hashes": cell_hashes,
+            "release_eligible": True,
         },
     )

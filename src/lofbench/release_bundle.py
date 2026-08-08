@@ -92,6 +92,7 @@ class ReleaseBundle:
         repository_root: Path,
         suite_path: Path | None = None,
         expected_run_ids: Iterable[str] = (),
+        paid_run_approval: dict[str, Any] | None = None,
     ) -> ReleaseBundle:
         if root.exists() and any(root.iterdir()):
             raise FileExistsError(f"release directory is not empty: {root}")
@@ -130,6 +131,7 @@ class ReleaseBundle:
             "citations": ["George Spencer-Brown, Laws of Form (1969)"],
             "expected_run_ids": sorted(expected_run_ids),
             "admitted_run_ids": [],
+            "paid_run_approval": paid_run_approval,
             "files": {},
         }
         (root / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
