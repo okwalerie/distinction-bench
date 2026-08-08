@@ -41,9 +41,12 @@ Public runs go through `python -m dbench`; do not invoke Inspect directly for re
 - `core.py` — form representation, parsing, simplification, generation, `DIFFICULTY_CONFIGS`
 - `renderers/` — composed archetype/injector dialect renderers and structural verification
 - `suites.py` + `suites/v1.json` — frozen forms, form sets, dialect registry, cell payloads, and hashes
-- `protocols.py` — the four frozen prompt, answer, parsing, and scoring contracts
+- `protocols.py` + `registries/protocols-v1.json` — loader and checked-in authority for the four
+  frozen prompt, answer, parsing, and scoring contracts
 - `datasets/factory.py` — suite-driven Inspect `Sample` construction
-- `run_models.py`, `orchestration.py`, `accounting.py` — provider-neutral run identity, execution contracts, retry/resume, and the shared release ledger
+- `authority.py`, `run_models.py`, `orchestration.py`, `accounting.py` — checked-in
+  authority proofs, provider-neutral run identity, typed attempt evidence,
+  retry/resume, and the shared release ledger
 - `release_bundle.py`, `publication.py`, `metrics.py` — admission, sealing, scanning, and derived results
 - `tasks/` + `scorers/` — Inspect task/scorer integration over the frozen suite
 

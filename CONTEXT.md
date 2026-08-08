@@ -20,10 +20,18 @@ normal value when the same containment tree is rendered through different dialec
 
 ## boundaries
 
-the renderer registry is a development interface. `suites/v1.json` freezes the
-public form and dialect identities. a sealed release bundle then admits exact runs
-against that suite. analysis and the public site consume the bundle and must not
-reach around it to live registries or loose logs.
+the renderer registry is a development interface. the exact git blobs at the
+release's recorded source commit for `suites/v1.json` and the packaged protocol
+registry freeze
+the experiment definitions. copied registry files in a release are evidence copies,
+never a second authority. every run identity content-binds those registry bytes, its
+selected forms and cells, its selected protocol, and its endpoint/execution evidence.
+
+a sealed release bundle remains the sole publication interface. it admits one typed,
+digest-linked attempt-evidence record for every provider call; calls link to trials,
+and trials, calls, the release ledger, and derived aggregates must close exactly.
+analysis and the public site consume this validated projection and must not reach
+around it to mutable registries, self-asserted rows, or loose logs.
 
 pilot-v0 import code retains historical field names such as `canonical`; new public
 interfaces use the vocabulary above.

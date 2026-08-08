@@ -1,5 +1,5 @@
 {
-  "assigned_to": "agent:codex-v1-impl",
+  "assigned_to": "agent:codex-seal-boundary",
   "branch_links": [
     {
       "branch": "feat/public-v1-release",
@@ -8,7 +8,7 @@
       "repo": null
     }
   ],
-  "comment_count": 8,
+  "comment_count": 11,
   "complexity": null,
   "created_at": "2026-08-08T15:18:11Z",
   "created_by": "agent:codex-root",
@@ -30,20 +30,25 @@
       "id": "ev_01KZH8TWFVZ5Q0QQX41W8B15K4",
       "role": "review",
       "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHAG8MN3XV1KVVKFT62M6XE",
+      "role": "review",
+      "source_type": "comment"
     }
   ],
   "id": "task_01KZGZ7YTE0GCWF9E29XZVJP17",
-  "last_event_id": "ev_01KZHA2Y33FKY1A2896CBGV41H",
-  "last_status_changed_at": "2026-08-08T18:27:40Z",
+  "last_event_id": "ev_01KZHCAD59RXKNS8C8YMAHBDJA",
+  "last_status_changed_at": "2026-08-08T19:06:42Z",
   "priority": "medium",
   "relationships_out": [],
-  "reopened_count": 3,
+  "reopened_count": 5,
   "schema_version": 1,
   "short_id": "DB-14",
   "status": "review",
   "tags": null,
   "title": "ship the public v1 benchmark, gallery, and model sweep",
   "type": "task",
-  "updated_at": "2026-08-08T18:27:40Z",
+  "updated_at": "2026-08-08T19:06:42Z",
   "urgency": null
 }

@@ -11,12 +11,14 @@ from inspect_ai.dataset import MemoryDataset
 from dbench.config import load_env_file
 from lofbench.accounting import SpendLedger
 from lofbench.orchestration import RunOrchestrator
+from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.run_models import (
     ExecutionResult,
     ExecutionSpec,
     InMemoryExecutor,
     plan_run,
 )
+from lofbench.suites import SUITES_DIR
 from lofbench.tasks.single import single_lof_task
 
 
@@ -70,6 +72,7 @@ def _success(value: str = "marked", **overrides) -> ExecutionResult:
         "observed_cost_usd": 0.001,
         "latency_ms": 20.0,
         "provider_request_id": "request-test",
+        "transcript": {"adapter": "in-memory", "response": value},
     }
     values.update(overrides)
     return ExecutionResult(**values)
@@ -367,6 +370,8 @@ def test_env_file_permissions_and_secret_nondisclosure(tmp_path, capsys):
         ("sdk_version", "test-next"),
         ("billing_channel", "different-paid-channel"),
         ("pricing", {"prompt": 1.0, "completion": 2.0, "image": 3.0}),
+        ("catalog_retrieved_at", "2026-08-08T00:00:01+00:00"),
+        ("catalog_row", {"selected_endpoint": {"tag": "different-catalog-row"}}),
     ],
 )
 def test_run_identity_changes_with_execution_defining_configuration(field, value):
@@ -382,6 +387,77 @@ def test_run_identity_changes_with_execution_defining_configuration(field, value
         execution=execution,
     )
     assert changed.run_id != original.run_id
+
+
+def test_run_identity_changes_with_protocol_registry_bytes(tmp_path):
+    task, original = _task_and_run()
+    payload = json.loads(DEFAULT_PROTOCOL_REGISTRY.read_text())
+    payload["protocols"]["reduce-infer-v1"]["system_text"] = "different protocol"
+    changed_registry = tmp_path / "protocols.json"
+    changed_registry.write_text(json.dumps(payload))
+    changed = plan_run(
+        task,
+        suite_version="v1",
+        form_set="probe",
+        dialect_set="parens.reference-v1",
+        protocol_id="reduce-infer-v1",
+        execution=_execution(),
+        protocol_registry_path=changed_registry,
+    )
+    assert changed.run_id != original.run_id
+
+
+def test_run_identity_changes_with_suite_registry_bytes(tmp_path):
+    task, original = _task_and_run()
+    payload = json.loads((SUITES_DIR / "v1.json").read_text())
+    payload["header"]["authority_test_marker"] = "different suite"
+    changed_registry = tmp_path / "suite.json"
+    changed_registry.write_text(json.dumps(payload))
+    changed = plan_run(
+        task,
+        suite_version="v1",
+        form_set="probe",
+        dialect_set="parens.reference-v1",
+        protocol_id="reduce-infer-v1",
+        execution=_execution(),
+        suite_registry_path=changed_registry,
+    )
+    assert changed.run_id != original.run_id
+
+
+def test_run_identity_changes_with_the_exact_selected_form_cells():
+    task, original = _task_and_run()
+    core_task = single_lof_task(form_set="core")
+    selected = list(core_task.dataset.samples)[:5]
+    assert [sample.metadata["abstract_form_id"] for sample in selected] != [
+        sample.metadata["abstract_form_id"] for sample in task.dataset.samples
+    ]
+    altered_task = Task(
+        dataset=MemoryDataset(samples=selected, name="altered_probe"),
+        solver=task.solver,
+        scorer=task.scorer,
+        config=task.config,
+        metadata={
+            **task.metadata,
+            "form_ids": [sample.metadata["abstract_form_id"] for sample in selected],
+            "cell_hashes": {
+                sample.metadata["abstract_form_id"]: {
+                    "symbolic_payload_hash": sample.metadata["symbolic_payload_hash"],
+                    "model_payload_sha256": sample.metadata["model_payload_sha256"],
+                }
+                for sample in selected
+            },
+        },
+    )
+    altered = plan_run(
+        altered_task,
+        suite_version="v1",
+        form_set="probe",
+        dialect_set="parens.reference-v1",
+        protocol_id="reduce-infer-v1",
+        execution=_execution(),
+    )
+    assert altered.run_id != original.run_id
 
 
 def test_run_result_fields_do_not_create_a_second_identity_definition():

@@ -1,26 +1,42 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH
+from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.release_bundle import ReleaseBundle
+from lofbench.suites import SUITES_DIR
 from lofsite.build import build_site, verify_site_tree
 
 
-@pytest.fixture
-def working(tmp_path: Path):
-    repository = tmp_path / "repo"
-    repository.mkdir()
+@pytest.fixture(scope="session")
+def authority_repository(tmp_path_factory):
+    repository = tmp_path_factory.mktemp("static-authority-repo")
     subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
     subprocess.run(
         ["git", "config", "user.email", "test@example.invalid"], cwd=repository, check=True
     )
     subprocess.run(["git", "config", "user.name", "test"], cwd=repository, check=True)
     (repository / "anchor").write_text("test\n")
-    subprocess.run(["git", "add", "anchor"], cwd=repository, check=True)
+    (repository / "suites").mkdir()
+    protocol_target = repository / PROTOCOL_REGISTRY_GIT_PATH
+    protocol_target.parent.mkdir(parents=True)
+    shutil.copyfile(SUITES_DIR / "v1.json", repository / "suites/v1.json")
+    shutil.copyfile(DEFAULT_PROTOCOL_REGISTRY, protocol_target)
+    subprocess.run(
+        ["git", "add", "anchor", "suites", "src"], cwd=repository, check=True
+    )
     subprocess.run(["git", "commit", "-qm", "test"], cwd=repository, check=True)
+    return repository
+
+
+@pytest.fixture
+def working(tmp_path: Path, authority_repository):
+    repository = authority_repository
     bundle = ReleaseBundle.create_working(
         tmp_path / "release",
         release_id="v1.0.0-test",

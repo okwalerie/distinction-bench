@@ -30,6 +30,15 @@ def _run(model: str, expected: tuple[str, ...]) -> RunManifest:
         cohort="test",
         max_transport_attempts=1,
         pricing={"prompt": 0.0, "completion": 0.0, "image": 0.0},
+        authority={
+            "suite_registry_sha256": "0" * 64,
+            "protocol_registry_sha256": "0" * 64,
+            "selected_form_set_sha256": "0" * 64,
+            "selected_cells_sha256": "0" * 64,
+            "selected_protocol_sha256": "0" * 64,
+            "endpoint_catalog_sha256": "0" * 64,
+            "execution_spec_sha256": "0" * 64,
+        },
         expected_trial_ids=expected,
         status="admitted",
     )

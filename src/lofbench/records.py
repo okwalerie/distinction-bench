@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from hashlib import blake2b
+from hashlib import blake2b, sha256
 from typing import Any, Literal
 
 RunStatus = Literal["planned", "probed", "complete", "admitted", "rejected"]
@@ -16,11 +16,7 @@ def deterministic_id(prefix: str, payload: dict[str, Any]) -> str:
     return f"{prefix}_{blake2b(canonical.encode(), digest_size=12).hexdigest()}"
 
 
-RUN_IDENTITY_FIELDS = (
-    "suite_version",
-    "form_set",
-    "dialect_set",
-    "protocol_id",
+EXECUTION_SPEC_FIELDS = (
     "requested_model_id",
     "resolved_model_id",
     "execution_surface",
@@ -37,10 +33,24 @@ RUN_IDENTITY_FIELDS = (
     "pricing",
 )
 
+RUN_IDENTITY_FIELDS = (
+    "suite_version",
+    "form_set",
+    "dialect_set",
+    "protocol_id",
+    *EXECUTION_SPEC_FIELDS,
+    "authority",
+)
+
 
 def run_execution_identity(value: Mapping[str, Any]) -> dict[str, Any]:
     """Return the sole authoritative identity material for a benchmark run."""
     return {field: value[field] for field in RUN_IDENTITY_FIELDS}
+
+
+def execution_spec_identity(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the provider-neutral execution projection used by run authority."""
+    return {field: value[field] for field in EXECUTION_SPEC_FIELDS}
 
 
 def run_id_for(value: Mapping[str, Any]) -> str:
@@ -68,6 +78,7 @@ class RunManifest:
     cohort: str
     max_transport_attempts: int
     pricing: dict[str, float]
+    authority: dict[str, str]
     expected_trial_ids: tuple[str, ...]
     status: RunStatus = "planned"
     attempts: int = 0
@@ -123,6 +134,7 @@ class TrialRecord:
     correct: bool
     response_text: str = ""
     error_type: str = ""
+    completion_evidence_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -140,15 +152,72 @@ class CallRecord:
     reserved_cost_usd: float
     observed_cost_usd: float
     resolved_model_id: str
+    provider: str
     endpoint: str
+    latency_ms: float
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
     provider_request_id: str = ""
     error_type: str = ""
+    response_sha256: str = ""
+    evidence_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class AttemptEvidence:
+    """The deterministic public evidence projection for one provider attempt."""
+
+    evidence_sha256: str
+    call_id: str
+    trial_id: str
+    run_id: str
+    attempt: int
+    status: str
+    started_at: str
+    finished_at: str
+    response_text: str
+    provider_request_id: str
+    resolved_model_id: str
+    provider: str
+    endpoint: str
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    observed_cost_usd: float
+    latency_ms: float
+    error_type: str
+    raw_transcript: dict[str, Any]
+
+    def digest_material(self) -> dict[str, Any]:
+        value = asdict(self)
+        value.pop("evidence_sha256")
+        return value
+
+    def authoritative_digest(self) -> str:
+        canonical = json.dumps(
+            self.digest_material(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        return sha256(canonical.encode()).hexdigest()
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> AttemptEvidence:
+        return cls(**value)
+
+    @classmethod
+    def capture(cls, **kwargs: Any) -> AttemptEvidence:
+        provisional = cls(evidence_sha256="", **kwargs)
+        return cls(evidence_sha256=provisional.authoritative_digest(), **kwargs)
 
 
 @dataclass(frozen=True)

@@ -1,8 +1,4 @@
-"""Versioned public task protocols.
-
-Protocol specifications are data. Inspect tasks and the static site render the same
-stored text and JSON schema rather than maintaining parallel prompt definitions.
-"""
+"""Versioned public task protocols loaded from the checked-in registry."""
 
 from __future__ import annotations
 
@@ -13,38 +9,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 AnswerKind = Literal["normal_value", "structural_transcription"]
-
-_SYSTEM = """You are evaluating a ground expression in George Spencer-Brown's Laws of Form.
-Only containment and adjacency matter. Use these two laws repeatedly:
-- calling: adjacent identical marks have the value of one mark;
-- crossing: a mark whose sole content is one empty mark has the unmarked value.
-Every ground expression reduces to marked or unmarked. Return only JSON matching the
-supplied schema. Do not include an explanation or chain of thought."""
-
-_NORMAL_VALUE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"value": {"type": "string", "enum": ["marked", "unmarked"]}},
-    "required": ["value"],
-    "additionalProperties": False,
-}
-
-_TREE_SCHEMA: dict[str, Any] = {
-    "$defs": {
-        "mark": {
-            "type": "array",
-            "items": {"$ref": "#/$defs/mark"},
-        }
-    },
-    "type": "object",
-    "properties": {
-        "tree": {
-            "type": "array",
-            "items": {"$ref": "#/$defs/mark"},
-        }
-    },
-    "required": ["tree"],
-    "additionalProperties": False,
-}
+PROTOCOLS_DIR = Path(__file__).with_name("registries")
+DEFAULT_PROTOCOL_REGISTRY = PROTOCOLS_DIR / "protocols-v1.json"
 
 
 @dataclass(frozen=True)
@@ -102,74 +68,25 @@ class ProtocolSpec:
         return "valid", prediction, value["tree"] == expected_tree
 
     def prompt_hash(self, *, reading_rule: str, model_payload_sha256: str) -> str:
-        """Hash the exact system text, rendered user text, and frozen payload identity."""
+        """Hash exact system text, rendered user text, and frozen payload identity."""
         user_text = self.render_user_text(reading_rule=reading_rule)
         material = self.system_text + "\x00" + user_text + "\x00" + model_payload_sha256
         return sha256(material.encode()).hexdigest()
 
 
-PROTOCOLS: dict[str, ProtocolSpec] = {
-    "reduce-infer-v1": ProtocolSpec(
-        protocol_id="reduce-infer-v1",
-        system_text=_SYSTEM,
-        user_template=(
-            "The attached stimulus encodes one Laws of Form containment structure. "
-            "Reduce it and return its normal value."
-        ),
-        response_json_schema=_NORMAL_VALUE_SCHEMA,
-        scorer_id="normal-value-exact",
-        scorer_version="1",
-        maximum_output_tokens=512,
-        includes_dialect_legend=False,
-        answer_kind="normal_value",
-    ),
-    "reduce-taught-v1": ProtocolSpec(
-        protocol_id="reduce-taught-v1",
-        system_text=_SYSTEM,
-        user_template=(
-            "Reading convention: {reading_rule}\n\n"
-            "The attached stimulus encodes one Laws of Form containment structure. "
-            "Reduce it and return its normal value."
-        ),
-        response_json_schema=_NORMAL_VALUE_SCHEMA,
-        scorer_id="normal-value-exact",
-        scorer_version="1",
-        maximum_output_tokens=512,
-        includes_dialect_legend=True,
-        answer_kind="normal_value",
-    ),
-    "transcribe-infer-v1": ProtocolSpec(
-        protocol_id="transcribe-infer-v1",
-        system_text=_SYSTEM,
-        user_template=(
-            "The attached stimulus encodes one containment tree. Transcribe it as nested "
-            "JSON arrays: each array item is a mark, and that mark is itself an array of "
-            "the marks directly contained by it. Return the top-level list in `tree`."
-        ),
-        response_json_schema=_TREE_SCHEMA,
-        scorer_id="containment-tree-exact",
-        scorer_version="1",
-        maximum_output_tokens=512,
-        includes_dialect_legend=False,
-        answer_kind="structural_transcription",
-    ),
-    "transcribe-taught-v1": ProtocolSpec(
-        protocol_id="transcribe-taught-v1",
-        system_text=_SYSTEM,
-        user_template=(
-            "Reading convention: {reading_rule}\n\n"
-            "Transcribe the attached containment structure as nested JSON arrays: each "
-            "array item is a mark, and that mark is itself an array of the marks directly "
-            "contained by it. Return the top-level list in `tree`."
-        ),
-        response_json_schema=_TREE_SCHEMA,
-        scorer_id="containment-tree-exact",
-        scorer_version="1",
-        maximum_output_tokens=512,
-        includes_dialect_legend=True,
-        answer_kind="structural_transcription",
-    ),
-}
+def load_protocol_registry(path: Path = DEFAULT_PROTOCOL_REGISTRY) -> dict[str, ProtocolSpec]:
+    payload = json.loads(path.read_text())
+    if payload.get("schema_version") != 1:
+        raise RuntimeError("unsupported protocol registry schema")
+    protocols = {
+        key: ProtocolSpec.from_dict(value) for key, value in payload["protocols"].items()
+    }
+    if any(key != value.protocol_id for key, value in protocols.items()):
+        raise RuntimeError("protocol registry key does not match protocol_id")
+    return protocols
+
+
+PROTOCOLS = load_protocol_registry()
 
 
 def get_protocol(protocol_id: str) -> ProtocolSpec:
@@ -180,15 +97,5 @@ def get_protocol(protocol_id: str) -> ProtocolSpec:
 
 
 def write_protocol_registry(path: Path) -> None:
-    payload = {
-        "schema_version": 1,
-        "protocols": {key: value.to_dict() for key, value in sorted(PROTOCOLS.items())},
-    }
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-
-
-def load_protocol_registry(path: Path) -> dict[str, ProtocolSpec]:
-    payload = json.loads(path.read_text())
-    if payload.get("schema_version") != 1:
-        raise RuntimeError("unsupported protocol registry schema")
-    return {key: ProtocolSpec.from_dict(value) for key, value in payload["protocols"].items()}
+    """Copy the checked-in registry byte-for-byte as non-authoritative evidence."""
+    path.write_bytes(DEFAULT_PROTOCOL_REGISTRY.read_bytes())

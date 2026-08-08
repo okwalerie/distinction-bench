@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from inspect_ai import Task
 from inspect_ai.dataset import Sample
 
-from lofbench.records import RunManifest, deterministic_id
+from lofbench.authority import derive_run_authority
+from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
+from lofbench.records import RunManifest, deterministic_id, execution_spec_identity
+from lofbench.suites import SUITES_DIR
 
 
 def trial_id_for(run_id: str, abstract_form_id: str, dialect_id: str) -> str:
@@ -101,7 +104,25 @@ def plan_run(
     dialect_set: str,
     protocol_id: str,
     execution: ExecutionSpec,
+    suite_registry_path: Path | None = None,
+    protocol_registry_path: Path | None = None,
 ) -> RunManifest:
+    form_ids = tuple(
+        str(sample.metadata["abstract_form_id"]) for sample in task.dataset.samples
+    )
+    if list(form_ids) != task.metadata.get("form_ids"):
+        raise RuntimeError("task dataset does not match its selected form metadata")
+    execution_values = asdict(execution)
+    authority = derive_run_authority(
+        suite_bytes=(suite_registry_path or SUITES_DIR / f"{suite_version}.json").read_bytes(),
+        protocol_bytes=(protocol_registry_path or DEFAULT_PROTOCOL_REGISTRY).read_bytes(),
+        form_ids=form_ids,
+        dialect_id=dialect_set,
+        protocol_id=protocol_id,
+        execution_spec=execution_spec_identity(execution_values),
+        catalog_retrieved_at=execution.catalog_retrieved_at,
+        catalog_row=execution.catalog_row or {},
+    )
     base = RunManifest.plan(
         suite_version=suite_version,
         form_set=form_set,
@@ -122,6 +143,7 @@ def plan_run(
         max_transport_attempts=execution.max_transport_attempts,
         expected_trial_ids=(),
         pricing=execution.pricing,
+        authority=authority.to_dict(),
         catalog_retrieved_at=execution.catalog_retrieved_at,
         catalog_row=execution.catalog_row or {},
     )

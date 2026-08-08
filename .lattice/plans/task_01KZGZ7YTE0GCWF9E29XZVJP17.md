@@ -469,6 +469,37 @@ than beginning the broad sweep.
 
 ## Reset 2026-08-08 by agent:codex-root
 
+## Review Cycle 4 Findings — sealed authority and evidence closure
+
+the fourth adversarial review proved that the bundle still had two parallel trust
+paths: mutable copied registries were treated as authorities, and optional transcript
+rows were not members of the call/trial accounting graph. repair the boundary as one
+deterministic projection:
+
+1. add a checked-in protocol registry beside the checked-in suite registry and an
+   `AuthorityManifest` which records their source commit, git blob ids, byte sha256
+   digests, and canonical paths. create bundles from the recorded git tree, treat the
+   bundle copies only as evidence, and verify both copies against that manifest (and
+   against `git show <commit>:<path>` whenever the source repository is supplied).
+2. derive a `RunAuthority` with canonical sha256 digests for the registry bytes, exact
+   selected form records, exact selected cells, selected protocol, endpoint catalog
+   evidence, and provider-neutral execution spec. include it in the sole run identity
+   projection; reconstruct it during planning, admission, and sealed validation.
+3. replace optional transcript dictionaries with one typed `AttemptEvidence` per
+   `CallRecord`. its canonical digest covers response/completion, request id, model,
+   provider, endpoint, usage, cost, latency, status, and a deterministic redacted raw
+   projection. each call references this digest and each trial references its final
+   completion evidence. require exact set equality and reject contradictions.
+4. validate every numeric resource as finite and nonnegative, then recompute attempts,
+   usage, cost, and latency from calls. retain release-wide ledger, metric, site,
+   secret-scan, sample-contract, endpoint, scorer, and human-schema gates.
+5. keep adversarial regressions for identity collision, registry mutation, missing or
+   contradictory evidence, numeric forgeries, and the complete prior review matrix.
+
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
+
+## Reset 2026-08-08 by agent:codex-root
+
+## Reset 2026-08-08 by agent:codex-seal-boundary

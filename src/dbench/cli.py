@@ -18,14 +18,15 @@ from dbench.agent_cli import (
 from dbench.config import load_env_file
 from dbench.openrouter import OpenRouterInspectExecutor, fetch_openrouter_endpoint
 from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
+from lofbench.authority import authority_from_git
 from lofbench.metrics import write_release_metrics
 from lofbench.orchestration import RunOrchestrator
+from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.publication import (
     archive_release,
     export_inspect_bundle,
-    sanitize_public_mapping,
 )
-from lofbench.records import CallRecord, RunManifest, TrialRecord
+from lofbench.records import AttemptEvidence, CallRecord, RunManifest, TrialRecord
 from lofbench.release_bundle import ReleaseBundle
 from lofbench.run_models import ExecutionSpec, TrialExecutor, plan_run
 from lofbench.state_io import read_jsonl, write_json_atomic
@@ -182,6 +183,11 @@ def _plan(args: argparse.Namespace) -> int:
     if args.release.exists():
         raise FileExistsError("plan requires a new release directory")
     sample_contract = _validate_sample_plan(args)
+    _source, source_suite, source_protocols = authority_from_git(Path.cwd())
+    if args.suite.read_bytes() != source_suite:
+        raise RuntimeError("release planning requires the suite at the recorded git commit")
+    if DEFAULT_PROTOCOL_REGISTRY.read_bytes() != source_protocols:
+        raise RuntimeError("release planning requires protocols at the recorded git commit")
     suite = load_suite(path=args.suite)
     if args.dialect not in suite.specs:
         raise ValueError(f"unknown frozen dialect {args.dialect!r}")
@@ -222,6 +228,7 @@ def _plan(args: argparse.Namespace) -> int:
             dialect_set=args.dialect,
             protocol_id=protocol_id,
             execution=execution,
+            suite_registry_path=args.suite,
         )
         tasks_and_runs.append((task, run))
     run_ids = [run.run_id for _task, run in tasks_and_runs]
@@ -335,26 +342,27 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "admit":
         state_dir = _state_dir(args)
         run = RunManifest.from_dict(json.loads((state_dir / "run.json").read_text()))
-        ReleaseBundle.open(args.release).admit_run(
+        ReleaseBundle.open(args.release, repository_root=Path.cwd()).admit_run(
             run,
             [TrialRecord(**row) for row in read_jsonl(state_dir / "trials.jsonl")],
             calls=[CallRecord(**row) for row in read_jsonl(state_dir / "calls.jsonl")],
             ledger_events=_ledger(args.state_root).events_for_run(run.run_id),
-            transcripts=[
-                sanitize_public_mapping(row) for row in read_jsonl(state_dir / "transcripts.jsonl")
+            evidence=[
+                AttemptEvidence.from_dict(row)
+                for row in read_jsonl(state_dir / "transcripts.jsonl")
             ],
         )
         return 0
     if args.command == "seal":
         values = _load_secret_env(args.env_file)
-        ReleaseBundle.open(args.release).seal(
+        ReleaseBundle.open(args.release, repository_root=Path.cwd()).seal(
             repository_root=Path.cwd(), publication_environment=values
         )
         return 0
     if args.command == "prepare":
         from lofsite.build import build_site
 
-        bundle = ReleaseBundle.open(args.release)
+        bundle = ReleaseBundle.open(args.release, repository_root=Path.cwd())
         if bundle.manifest["status"] != "working":
             raise RuntimeError("prepare requires a working release bundle")
         suite = load_suite(
@@ -382,11 +390,12 @@ def main(argv: list[str] | None = None) -> int:
     values = _load_secret_env(args.env_file)
     state_dir = _state_dir(args)
     run = RunManifest.from_dict(json.loads((state_dir / "run.json").read_text()))
-    bundle = ReleaseBundle.open(args.release)
+    bundle = ReleaseBundle.open(args.release, repository_root=Path.cwd())
     bundle.require_repository_state(Path.cwd())
     bundle.validate()
     if run.run_id not in bundle.manifest["expected_run_ids"]:
         raise RuntimeError("run is not declared by this release bundle")
+    bundle.validate_planned_run(run)
     if args.command == "probe":
         _validate_probe_run(run, bundle.manifest.get("sample_contract"))
     if run.execution_surface == "direct_api" and "OPENROUTER_API_KEY" not in values:

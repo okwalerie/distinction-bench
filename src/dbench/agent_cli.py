@@ -86,7 +86,15 @@ class AgentCliExecutor(TrialExecutor):
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         if not isinstance(request.sample.input, str):
-            return ExecutionResult(error_type="agent_cli_text_only", transport_error=True)
+            return ExecutionResult(
+                error_type="agent_cli_text_only",
+                transport_error=True,
+                input_tokens=0,
+                output_tokens=0,
+                reasoning_tokens=0,
+                observed_cost_usd=0.0,
+                transcript={"surface": self.command, "error_type": "agent_cli_text_only"},
+            )
         with tempfile.TemporaryDirectory(prefix="lofbench-agent-") as directory:
             root = Path(directory)
             schema_path = root / "schema.json"
@@ -109,6 +117,7 @@ class AgentCliExecutor(TrialExecutor):
             if self.command == "claude" and completed.returncode == 0:
                 output_path.write_text(completed.stdout)
             if completed.returncode != 0 or not output_path.exists():
+                latency_ms = (time.monotonic() - started) * 1000
                 return ExecutionResult(
                     transport_error=True,
                     error_type=f"{self.command}_exit_{completed.returncode}",
@@ -116,6 +125,12 @@ class AgentCliExecutor(TrialExecutor):
                     input_tokens=0,
                     output_tokens=0,
                     reasoning_tokens=0,
+                    latency_ms=latency_ms,
+                    transcript={
+                        "surface": self.command,
+                        "returncode": completed.returncode,
+                        "stderr": completed.stderr,
+                    },
                 )
             return ExecutionResult(
                 response_text=output_path.read_text(),

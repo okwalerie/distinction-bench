@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import math
-import shutil
 import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
@@ -17,16 +16,29 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from lofbench.authority import (
+    AuthorityManifest,
+    authority_from_git,
+    derive_run_authority,
+    verify_authority_copies,
+)
 from lofbench.human_trials import HUMAN_TRIAL_EXPORT_SCHEMA, write_human_trial_schema
 from lofbench.metrics import EMPTY_METRIC_SCHEMA, derive_metric_tables
-from lofbench.protocols import ProtocolSpec, load_protocol_registry, write_protocol_registry
+from lofbench.protocols import ProtocolSpec, load_protocol_registry
 from lofbench.publication import scan_publication
-from lofbench.records import CallRecord, LedgerEvent, RunManifest, TrialRecord
+from lofbench.records import (
+    AttemptEvidence,
+    CallRecord,
+    LedgerEvent,
+    RunManifest,
+    TrialRecord,
+    execution_spec_identity,
+)
 from lofbench.renderers.pipeline.composed import ComposedRenderer
 from lofbench.run_models import call_id_for, trial_id_for
-from lofbench.suites import DEFAULT_SUITE_VERSION, SUITES_DIR, LoadedSuite, load_suite
+from lofbench.suites import LoadedSuite, load_suite
 
-BUNDLE_SCHEMA_VERSION = 4
+BUNDLE_SCHEMA_VERSION = 5
 _ROOT_FILES = {
     "human-trial.schema.json",
     "release.json",
@@ -99,12 +111,45 @@ def _write_bytes_verified(path: Path, payload: bytes, expected_sha256: str) -> N
     path.write_bytes(payload)
 
 
+def _require_nonnegative_number(value: Any, label: str) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise RuntimeError(f"{label} must be finite and nonnegative")
+
+
+def _require_nonnegative_integer(value: Any, label: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError(f"{label} must be a nonnegative integer")
+
+
+def _validate_reasoning_numbers(value: Any, label: str = "reasoning") -> None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            _validate_reasoning_numbers(child, f"{label}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _validate_reasoning_numbers(child, f"{label}[{index}]")
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        _require_nonnegative_number(value, label)
+
+
 class ReleaseBundle:
     """A small mutation surface around a working or sealed release directory."""
 
-    def __init__(self, root: Path, manifest: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        root: Path,
+        manifest: dict[str, Any],
+        *,
+        repository_root: Path | None = None,
+    ) -> None:
         self.root = root
         self.manifest = manifest
+        self.repository_root = repository_root
 
     @classmethod
     def create_working(
@@ -127,10 +172,14 @@ class ReleaseBundle:
         commit, dirty = _git_state(repository_root)
         if dirty:
             raise RuntimeError("cannot create a release bundle from a dirty worktree")
-        source_suite = suite_path or (SUITES_DIR / f"{DEFAULT_SUITE_VERSION}.json")
-        suite = load_suite(path=source_suite)
-        shutil.copyfile(source_suite, root / "suite.json")
-        write_protocol_registry(root / "protocols.json")
+        authority, suite_bytes, protocol_bytes = authority_from_git(
+            repository_root, commit=commit
+        )
+        if suite_path is not None and suite_path.read_bytes() != suite_bytes:
+            raise RuntimeError("requested suite does not match the recorded git authority")
+        (root / "suite.json").write_bytes(suite_bytes)
+        (root / "protocols.json").write_bytes(protocol_bytes)
+        suite = load_suite(path=root / "suite.json")
         write_human_trial_schema(root / "human-trial.schema.json")
         (root / "runs.jsonl").write_text("")
         (root / "transcripts.jsonl").write_text("")
@@ -149,6 +198,7 @@ class ReleaseBundle:
             "status": "working",
             "repository_url": repository_url,
             "repository_commit": commit,
+            "authority": authority.to_dict(),
             "suite_version": suite.suite_version,
             "protocol_ids": sorted(load_protocol_registry(root / "protocols.json")),
             "created_at": _utc_now(),
@@ -167,17 +217,36 @@ class ReleaseBundle:
             "files": {},
         }
         (root / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        bundle = cls(root, manifest)
+        bundle = cls(root, manifest, repository_root=repository_root)
         if materialize_stimuli:
             bundle.materialize_stimuli()
         return bundle
 
     @classmethod
-    def open(cls, root: Path) -> ReleaseBundle:
+    def open(
+        cls, root: Path, *, repository_root: Path | None = None
+    ) -> ReleaseBundle:
         manifest = json.loads((root / "release.json").read_text())
         if manifest.get("bundle_schema_version") != BUNDLE_SCHEMA_VERSION:
             raise RuntimeError("unsupported release-bundle schema")
-        return cls(root, manifest)
+        return cls(root, manifest, repository_root=repository_root)
+
+    def _verify_authorities(
+        self, repository_root: Path | None = None
+    ) -> AuthorityManifest:
+        try:
+            authority = AuthorityManifest.from_dict(self.manifest["authority"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("release lacks a valid authority manifest") from exc
+        if authority.source_commit != self.manifest.get("repository_commit"):
+            raise RuntimeError("authority source commit does not match release provenance")
+        verify_authority_copies(
+            authority,
+            suite_bytes=(self.root / "suite.json").read_bytes(),
+            protocol_bytes=(self.root / "protocols.json").read_bytes(),
+            repository_root=repository_root or self.repository_root,
+        )
+        return authority
 
     def _require_working(self) -> None:
         if self.manifest["status"] != "working":
@@ -260,9 +329,12 @@ class ReleaseBundle:
         *,
         calls: Iterable[CallRecord] = (),
         ledger_events: Iterable[LedgerEvent] = (),
-        transcripts: Iterable[dict[str, Any]] = (),
+        evidence: Iterable[AttemptEvidence] = (),
     ) -> None:
         self._require_working()
+        self._verify_authorities()
+        suite_bytes = (self.root / "suite.json").read_bytes()
+        protocol_bytes = (self.root / "protocols.json").read_bytes()
         suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
         protocols = load_protocol_registry(self.root / "protocols.json")
         if run.suite_version != suite.suite_version or run.suite_version == "pilot-v0":
@@ -272,7 +344,14 @@ class ReleaseBundle:
         if run.status != "complete":
             raise RuntimeError("only complete runs can be admitted")
         rows = [trial.to_dict() for trial in trials]
-        self._validate_trial_provenance(run, suite, protocols[run.protocol_id], rows)
+        self._validate_trial_provenance(
+            run,
+            suite,
+            protocols[run.protocol_id],
+            rows,
+            suite_bytes=suite_bytes,
+            protocol_bytes=protocol_bytes,
+        )
         trial_ids = [row["trial_id"] for row in rows]
         if len(trial_ids) != len(set(trial_ids)):
             raise RuntimeError("run contains duplicate trial ids")
@@ -280,7 +359,10 @@ class ReleaseBundle:
             raise RuntimeError("run is incomplete for its declared trial ids")
         call_values = list(calls)
         ledger_values = list(ledger_events)
-        self._validate_run_accounting(run, rows, call_values, ledger_values)
+        evidence_values = list(evidence)
+        self._validate_run_accounting(
+            run, rows, call_values, ledger_values, evidence_values
+        )
 
         existing_runs = self.runs()
         if run.run_id in {item.run_id for item in existing_runs}:
@@ -311,8 +393,8 @@ class ReleaseBundle:
             for event in ledger_values:
                 handle.write(_json_line(event.to_dict()))
         with (self.root / "transcripts.jsonl").open("a") as handle:
-            for transcript in transcripts:
-                handle.write(_json_line(transcript))
+            for record in evidence_values:
+                handle.write(_json_line(record.to_dict()))
         self.manifest["admitted_run_ids"] = sorted([*self.manifest["admitted_run_ids"], run.run_id])
         self._write_manifest()
 
@@ -322,6 +404,9 @@ class ReleaseBundle:
         suite: LoadedSuite,
         protocol: ProtocolSpec,
         trials: list[dict[str, Any]],
+        *,
+        suite_bytes: bytes,
+        protocol_bytes: bytes,
     ) -> None:
         if run.run_id != run.authoritative_run_id():
             raise RuntimeError("run_id does not match the authoritative execution identity")
@@ -337,6 +422,18 @@ class ReleaseBundle:
         if run.dialect_set not in suite.specs:
             raise RuntimeError(f"run uses unknown frozen dialect {run.dialect_set!r}")
         form_ids = tuple(suite.form_sets[run.form_set])
+        expected_authority = derive_run_authority(
+            suite_bytes=suite_bytes,
+            protocol_bytes=protocol_bytes,
+            form_ids=form_ids,
+            dialect_id=run.dialect_set,
+            protocol_id=run.protocol_id,
+            execution_spec=execution_spec_identity(run.to_dict()),
+            catalog_retrieved_at=run.catalog_retrieved_at,
+            catalog_row=run.catalog_row,
+        )
+        if run.authority != expected_authority.to_dict():
+            raise RuntimeError("run authority digests do not match the recorded registries")
         authoritative_trial_ids = tuple(
             trial_id_for(run.run_id, form_id, run.dialect_set) for form_id in form_ids
         )
@@ -391,13 +488,29 @@ class ReleaseBundle:
         trials: list[dict[str, Any]],
         calls: list[CallRecord],
         ledger_events: list[LedgerEvent],
+        evidence: list[AttemptEvidence],
     ) -> None:
+        _validate_reasoning_numbers(run.reasoning)
+        _require_nonnegative_number(run.cost_usd, "run cost")
+        _require_nonnegative_number(run.latency_ms, "run latency")
+        _require_nonnegative_integer(run.attempts, "run attempts")
+        if set(run.token_usage) != {"input_tokens", "output_tokens", "reasoning_tokens"}:
+            raise RuntimeError("run usage must contain exact input/output/reasoning totals")
+        for field, value in run.token_usage.items():
+            _require_nonnegative_integer(value, f"run {field}")
         if len(calls) != run.attempts or not calls:
             raise RuntimeError("run attempt count does not match its call records")
         if len({call.call_id for call in calls}) != len(calls):
             raise RuntimeError("run contains duplicate call ids")
         if any(call.run_id != run.run_id for call in calls):
             raise RuntimeError("call run_id mismatch")
+        for call in calls:
+            for field in ("input_tokens", "output_tokens", "reasoning_tokens"):
+                _require_nonnegative_integer(getattr(call, field), f"call {field}")
+            for field in ("reserved_cost_usd", "observed_cost_usd", "latency_ms"):
+                _require_nonnegative_number(getattr(call, field), f"call {field}")
+            if call.provider != run.provider:
+                raise RuntimeError("call provider does not match its run")
         provider_request_ids = [
             call.provider_request_id for call in calls if call.provider_request_id
         ]
@@ -422,7 +535,9 @@ class ReleaseBundle:
                 raise RuntimeError("trial attempt count does not match its complete call")
             for field in (
                 "resolved_model_id",
+                "provider",
                 "endpoint",
+                "latency_ms",
                 "input_tokens",
                 "output_tokens",
                 "reasoning_tokens",
@@ -432,17 +547,68 @@ class ReleaseBundle:
                     raise RuntimeError(f"trial/call accounting mismatch for {field}")
             if run.execution_surface == "direct_api" and not call.provider_request_id:
                 raise RuntimeError("direct-api call is missing its provider request id")
+            if trial["completion_evidence_sha256"] != call.evidence_sha256:
+                raise RuntimeError("trial is not linked to its final completion evidence")
+        for trial in trials:
+            for field in ("input_tokens", "output_tokens", "reasoning_tokens"):
+                _require_nonnegative_integer(trial[field], f"trial {field}")
+            for field in ("observed_cost_usd", "latency_ms"):
+                _require_nonnegative_number(trial[field], f"trial {field}")
         if abs(sum(call.observed_cost_usd for call in calls) - run.cost_usd) > 1e-12:
             raise RuntimeError("run cost does not match call records")
         for field in ("input_tokens", "output_tokens", "reasoning_tokens"):
             if sum(getattr(call, field) for call in calls) != run.token_usage.get(field, 0):
                 raise RuntimeError(f"run usage does not match calls for {field}")
+        if abs(sum(call.latency_ms for call in calls) - run.latency_ms) > 1e-12:
+            raise RuntimeError("run latency does not match call records")
+
+        evidence_by_call = {record.call_id: record for record in evidence}
+        if len(evidence_by_call) != len(evidence) or set(evidence_by_call) != {
+            call.call_id for call in calls
+        }:
+            raise RuntimeError("attempt evidence does not equal the exact call set")
+        calls_by_id = {call.call_id: call for call in calls}
+        trial_by_id = {row["trial_id"]: row for row in trials}
+        for call_id, record in evidence_by_call.items():
+            call = calls_by_id[call_id]
+            if record.evidence_sha256 != record.authoritative_digest():
+                raise RuntimeError("attempt evidence digest does not match its content")
+            authorities = {
+                "call_id": call.call_id,
+                "trial_id": call.trial_id,
+                "run_id": call.run_id,
+                "attempt": call.attempt,
+                "status": call.status,
+                "started_at": call.started_at,
+                "finished_at": call.finished_at,
+                "provider_request_id": call.provider_request_id,
+                "resolved_model_id": call.resolved_model_id,
+                "provider": call.provider,
+                "endpoint": call.endpoint,
+                "input_tokens": call.input_tokens,
+                "output_tokens": call.output_tokens,
+                "reasoning_tokens": call.reasoning_tokens,
+                "observed_cost_usd": call.observed_cost_usd,
+                "latency_ms": call.latency_ms,
+                "error_type": call.error_type,
+            }
+            for field, expected in authorities.items():
+                if getattr(record, field) != expected:
+                    raise RuntimeError(f"attempt evidence contradicts its call for {field}")
+            if sha256(record.response_text.encode()).hexdigest() != call.response_sha256:
+                raise RuntimeError("attempt evidence response does not match its call hash")
+            if call.status == "complete":
+                trial = trial_by_id[call.trial_id]
+                if (
+                    trial["response_text"] != record.response_text
+                    or trial["completion_evidence_sha256"] != record.evidence_sha256
+                ):
+                    raise RuntimeError("completion evidence contradicts its trial")
         events_by_call: dict[str, list[LedgerEvent]] = {}
         for event in ledger_events:
             events_by_call.setdefault(event.call_id, []).append(event)
         if set(events_by_call) != {call.call_id for call in calls}:
             raise RuntimeError("ledger call ids do not match run calls")
-        calls_by_id = {call.call_id: call for call in calls}
         for call_id, events in events_by_call.items():
             if len(events) != 2 or [event.event_type for event in events] != [
                 "reserved",
@@ -560,6 +726,24 @@ class ReleaseBundle:
             if line.strip()
         ]
 
+    def validate_planned_run(self, run: RunManifest) -> None:
+        """Verify a local planned run against this bundle's recorded authority."""
+        self._verify_authorities()
+        suite_bytes = (self.root / "suite.json").read_bytes()
+        protocol_bytes = (self.root / "protocols.json").read_bytes()
+        suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
+        protocols = load_protocol_registry(self.root / "protocols.json")
+        if run.suite_version != suite.suite_version or run.protocol_id not in protocols:
+            raise RuntimeError("planned run does not belong to this release authority")
+        self._validate_trial_provenance(
+            run,
+            suite,
+            protocols[run.protocol_id],
+            [],
+            suite_bytes=suite_bytes,
+            protocol_bytes=protocol_bytes,
+        )
+
     def _verified_metric_rows(
         self,
         *,
@@ -597,12 +781,15 @@ class ReleaseBundle:
     def validate(self) -> None:
         if set(path.name for path in self.root.iterdir() if path.is_file()) != _ROOT_FILES:
             raise RuntimeError("release root files do not match the bundle schema")
+        self._verify_authorities()
         if json.loads((self.root / "human-trial.schema.json").read_text()) != (
             HUMAN_TRIAL_EXPORT_SCHEMA
         ):
             raise RuntimeError("human trial schema does not match the authoritative schema")
         suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
         protocols = load_protocol_registry(self.root / "protocols.json")
+        suite_bytes = (self.root / "suite.json").read_bytes()
+        protocol_bytes = (self.root / "protocols.json").read_bytes()
         runs = self.runs()
         if len({run.run_id for run in runs}) != len(runs):
             raise RuntimeError("duplicate run ids")
@@ -613,6 +800,14 @@ class ReleaseBundle:
             for line in (self.root / "ledger.jsonl").read_text().splitlines()
             if line.strip()
         ]
+        try:
+            evidence_rows = [
+                AttemptEvidence.from_dict(json.loads(line))
+                for line in (self.root / "transcripts.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+        except (TypeError, KeyError) as exc:
+            raise RuntimeError("attempt evidence schema is invalid") from exc
         if len({row["trial_id"] for row in trial_rows}) != len(trial_rows):
             raise RuntimeError("duplicate trial ids")
         if len({row["call_id"] for row in call_rows}) != len(call_rows):
@@ -635,13 +830,20 @@ class ReleaseBundle:
                     suite,
                     protocols[run.protocol_id],
                     run_trials,
+                    suite_bytes=suite_bytes,
+                    protocol_bytes=protocol_bytes,
                 )
                 self._validate_run_accounting(
                     run,
                     run_trials,
                     [CallRecord(**row) for row in call_rows if row["run_id"] == run.run_id],
                     [event for event in ledger_rows if event.run_id == run.run_id],
+                    [record for record in evidence_rows if record.run_id == run.run_id],
                 )
+        if len({record.call_id for record in evidence_rows}) != len(evidence_rows) or {
+            record.call_id for record in evidence_rows
+        } != {row["call_id"] for row in call_rows}:
+            raise RuntimeError("release attempt evidence does not equal the exact call set")
         self._validate_release_accounting(runs, trial_rows, call_rows, ledger_rows)
         self._verified_metric_rows(suite=suite, runs=runs, trials=trial_rows)
         self._validate_sample_contract(runs, trial_rows, call_rows)

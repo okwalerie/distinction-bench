@@ -1,36 +1,51 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH, derive_run_authority
 from lofbench.metrics import write_release_metrics
-from lofbench.protocols import get_protocol
-from lofbench.records import CallRecord, LedgerEvent, RunManifest, TrialRecord
+from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY, get_protocol
+from lofbench.records import (
+    AttemptEvidence,
+    CallRecord,
+    LedgerEvent,
+    RunManifest,
+    TrialRecord,
+    execution_spec_identity,
+)
 from lofbench.release_bundle import ReleaseBundle
 from lofbench.run_models import call_id_for, trial_id_for
-from lofbench.suites import load_suite
+from lofbench.suites import SUITES_DIR, load_suite
 from lofsite.build import build_site
 
 
 def _clean_repository(path: Path) -> Path:
-    path.mkdir()
+    path.mkdir(exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.name", "test"], cwd=path, check=True)
     (path / "anchor").write_text("test\n")
-    subprocess.run(["git", "add", "anchor"], cwd=path, check=True)
+    (path / "suites").mkdir()
+    protocol_target = path / PROTOCOL_REGISTRY_GIT_PATH
+    protocol_target.parent.mkdir(parents=True)
+    shutil.copyfile(SUITES_DIR / "v1.json", path / "suites/v1.json")
+    shutil.copyfile(DEFAULT_PROTOCOL_REGISTRY, protocol_target)
+    subprocess.run(["git", "add", "anchor", "suites", "src"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-qm", "test"], cwd=path, check=True)
     return path
 
 
 def _run(*, status: str = "complete", suite_version: str = "v1") -> RunManifest:
-    run = RunManifest.plan(
+    values = dict(
         suite_version=suite_version,
         form_set="probe",
         dialect_set="parens.reference-v1",
@@ -50,6 +65,7 @@ def _run(*, status: str = "complete", suite_version: str = "v1") -> RunManifest:
         max_transport_attempts=1,
         expected_trial_ids=(),
         pricing={"prompt": 0.000001, "completion": 0.000002, "image": 0.000001},
+        authority={},
         status=status,
         attempts=5,
         token_usage={"input_tokens": 100, "output_tokens": 20, "reasoning_tokens": 0},
@@ -57,6 +73,17 @@ def _run(*, status: str = "complete", suite_version: str = "v1") -> RunManifest:
         cost_usd=0.005,
     )
     form_ids = load_suite().form_sets["probe"]
+    values["authority"] = derive_run_authority(
+        suite_bytes=(SUITES_DIR / "v1.json").read_bytes(),
+        protocol_bytes=DEFAULT_PROTOCOL_REGISTRY.read_bytes(),
+        form_ids=form_ids,
+        dialect_id=values["dialect_set"],
+        protocol_id=values["protocol_id"],
+        execution_spec=execution_spec_identity(values),
+        catalog_retrieved_at="",
+        catalog_row={},
+    ).to_dict()
+    run = RunManifest.plan(**values)
     return replace(
         run,
         expected_trial_ids=tuple(
@@ -126,28 +153,66 @@ def _trials(run: RunManifest, **first_overrides) -> list[TrialRecord]:
     ]
 
 
-def _accounting(run: RunManifest) -> tuple[list[CallRecord], list[LedgerEvent]]:
+def _accounting(
+    run: RunManifest, trials: list[TrialRecord]
+) -> tuple[list[TrialRecord], list[CallRecord], list[LedgerEvent], list[AttemptEvidence]]:
     calls = []
     events = []
+    evidence = []
+    linked_trials = []
+    trials_by_id = {trial.trial_id: trial for trial in trials}
     for index, trial_id in enumerate(run.expected_trial_ids, start=1):
-        call = CallRecord(
-            call_id=call_id_for(trial_id, 1),
+        trial = trials_by_id[trial_id]
+        call_id = call_id_for(trial_id, 1)
+        started_at = f"2026-08-08T00:00:0{index}+00:00"
+        finished_at = f"2026-08-08T00:00:1{index}+00:00"
+        record = AttemptEvidence.capture(
+            call_id=call_id,
             trial_id=trial_id,
             run_id=run.run_id,
             attempt=1,
-            started_at=f"2026-08-08T00:00:0{index}+00:00",
-            finished_at=f"2026-08-08T00:00:1{index}+00:00",
             status="complete",
-            reserved_cost_usd=0.01,
-            observed_cost_usd=0.001,
+            started_at=started_at,
+            finished_at=finished_at,
+            response_text=trial.response_text,
+            provider_request_id=f"request_{index}",
             resolved_model_id=run.resolved_model_id,
+            provider=run.provider,
             endpoint=run.endpoint,
             input_tokens=20,
             output_tokens=4,
             reasoning_tokens=0,
+            observed_cost_usd=0.001,
+            latency_ms=10.0,
+            error_type="",
+            raw_transcript={"response_text": trial.response_text},
+        )
+        call = CallRecord(
+            call_id=call_id,
+            trial_id=trial_id,
+            run_id=run.run_id,
+            attempt=1,
+            started_at=started_at,
+            finished_at=finished_at,
+            status="complete",
+            reserved_cost_usd=0.01,
+            observed_cost_usd=0.001,
+            resolved_model_id=run.resolved_model_id,
+            provider=run.provider,
+            endpoint=run.endpoint,
+            latency_ms=10.0,
+            input_tokens=20,
+            output_tokens=4,
+            reasoning_tokens=0,
             provider_request_id=f"request_{index}",
+            response_sha256=sha256(trial.response_text.encode()).hexdigest(),
+            evidence_sha256=record.evidence_sha256,
         )
         calls.append(call)
+        evidence.append(record)
+        linked_trials.append(
+            replace(trial, completion_evidence_sha256=record.evidence_sha256)
+        )
         events.extend(
             [
                 LedgerEvent(
@@ -170,21 +235,35 @@ def _accounting(run: RunManifest) -> tuple[list[CallRecord], list[LedgerEvent]]:
                 ),
             ]
         )
-    return calls, events
+    return linked_trials, calls, events, evidence
 
 
 def _admit(bundle: ReleaseBundle, run: RunManifest, trials: list[TrialRecord]) -> None:
-    calls, events = _accounting(run)
-    bundle.admit_run(run, trials, calls=calls, ledger_events=events)
+    if {trial.trial_id for trial in trials} != set(run.expected_trial_ids):
+        bundle.admit_run(run, trials)
+        return
+    linked_trials, calls, events, evidence = _accounting(run, trials)
+    bundle.admit_run(
+        run,
+        linked_trials,
+        calls=calls,
+        ledger_events=events,
+        evidence=evidence,
+    )
 
 
 def _derive(bundle: ReleaseBundle) -> None:
     write_release_metrics(bundle.root, suite=load_suite(), runs=bundle.runs())
 
 
+@pytest.fixture(scope="session")
+def authority_repository(tmp_path_factory):
+    return _clean_repository(tmp_path_factory.mktemp("authority-repo"))
+
+
 @pytest.fixture
-def working(tmp_path):
-    repository = _clean_repository(tmp_path / "repo")
+def working(tmp_path, authority_repository):
+    repository = authority_repository
     run = _run()
     bundle = ReleaseBundle.create_working(
         tmp_path / "release",
@@ -236,6 +315,20 @@ def test_admission_recomputes_run_id_from_execution_identity(working):
     forged = replace(run, run_id="run_forged")
     with pytest.raises(RuntimeError, match="run_id"):
         _admit(bundle, forged, _trials(forged))
+
+
+def test_planned_run_authority_is_recomputed_before_execution(working):
+    bundle, _repository, run = working
+    bundle.validate_planned_run(run)
+    values = run.to_dict()
+    values.pop("run_id")
+    values["authority"] = {
+        **run.authority,
+        "selected_form_set_sha256": "0" * 64,
+    }
+    forged = RunManifest.plan(**values)
+    with pytest.raises(RuntimeError, match="authority"):
+        bundle.validate_planned_run(forged)
 
 
 def test_admission_recomputes_parse_and_score_from_response_text(working):
@@ -343,9 +436,13 @@ def test_validation_rejects_forged_profile_and_effect_rows(working):
 def test_dirty_repository_blocks_seal(working):
     bundle, repository, run = working
     _admit(bundle, run, _trials(run))
-    (repository / "dirty").write_text("dirty")
-    with pytest.raises(RuntimeError, match="clean worktree"):
-        bundle.seal(repository_root=repository)
+    dirty = repository / "dirty"
+    dirty.write_text("dirty")
+    try:
+        with pytest.raises(RuntimeError, match="clean worktree"):
+            bundle.seal(repository_root=repository)
+    finally:
+        dirty.unlink()
 
 
 def test_unlisted_root_file_is_rejected(working):
@@ -365,6 +462,139 @@ def test_changed_human_trial_schema_is_rejected(working):
         bundle.validate()
 
 
+def test_bundle_suite_copy_is_evidence_not_mutable_authority(working):
+    bundle, _repository, _run_manifest = working
+    suite_path = bundle.root / "suite.json"
+    suite = json.loads(suite_path.read_text())
+    suite["form_sets"]["probe"] = list(reversed(suite["form_sets"]["probe"]))
+    suite_path.write_text(json.dumps(suite))
+    with pytest.raises(RuntimeError, match="authority|registry"):
+        bundle.validate()
+
+
+def test_bundle_protocol_copy_is_evidence_not_mutable_authority(working):
+    bundle, _repository, _run_manifest = working
+    protocols_path = bundle.root / "protocols.json"
+    protocols = json.loads(protocols_path.read_text())
+    protocols["protocols"]["reduce-infer-v1"]["system_text"] = "forged"
+    protocols_path.write_text(json.dumps(protocols))
+    with pytest.raises(RuntimeError, match="authority|registry"):
+        bundle.validate()
+
+
+def test_authority_validation_reads_recorded_git_tree_not_worktree(working):
+    bundle, repository, _run_manifest = working
+    source_suite = repository / "suites/v1.json"
+    original = source_suite.read_bytes()
+    source_suite.write_text("forged current worktree")
+    try:
+        bundle.validate()
+    finally:
+        source_suite.write_bytes(original)
+
+
+def test_admission_rejects_incomplete_contradictory_attempt_evidence(working):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    contradictory = replace(
+        evidence[0], response_text='{"value":"contradictory"}'
+    )
+    with pytest.raises(RuntimeError, match="evidence|transcript"):
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=[contradictory],
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("response_text", '{"value":"unlinked"}'),
+        ("provider_request_id", "request_forged"),
+        ("resolved_model_id", "forged/model"),
+        ("provider", "forged-provider"),
+        ("endpoint", "forged-endpoint"),
+        ("input_tokens", 999),
+        ("output_tokens", 999),
+        ("reasoning_tokens", 999),
+        ("observed_cost_usd", 0.123),
+        ("latency_ms", 999.0),
+    ],
+)
+def test_admission_rejects_attempt_evidence_contradictions(working, field, bad_value):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    material = evidence[0].digest_material()
+    material[field] = bad_value
+    evidence[0] = AttemptEvidence.capture(**material)
+    with pytest.raises(RuntimeError, match="evidence"):
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=evidence,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate"])
+def test_admission_requires_exactly_one_evidence_record_per_call(working, mutation):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(run, _trials(run))
+    if mutation == "missing":
+        evidence.pop()
+    elif mutation == "extra":
+        material = evidence[0].digest_material()
+        material["call_id"] = "call_extra"
+        evidence.append(AttemptEvidence.capture(**material))
+    else:
+        evidence.append(evidence[0])
+    with pytest.raises(RuntimeError, match="evidence"):
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=evidence,
+        )
+
+
+@pytest.mark.parametrize(
+    ("trial_overrides", "run_overrides"),
+    [
+        ({"latency_ms": float("nan")}, {}),
+        ({"reasoning_tokens": -1}, {"token_usage": {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "reasoning_tokens": -1,
+        }}),
+        ({}, {"latency_ms": -1.0}),
+        ({}, {"latency_ms": 49.0}),
+    ],
+)
+def test_admission_rejects_nonfinite_or_negative_resources(
+    working, trial_overrides, run_overrides
+):
+    bundle, _repository, run = working
+    trials, calls, events, evidence = _accounting(
+        run, _trials(run, **trial_overrides)
+    )
+    if "reasoning_tokens" in trial_overrides:
+        calls[0] = replace(calls[0], reasoning_tokens=-1)
+    forged_run = replace(run, **run_overrides)
+    with pytest.raises(RuntimeError, match="finite|nonnegative|latency|usage|reasoning"):
+        bundle.admit_run(
+            forged_run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=evidence,
+        )
+
+
 def test_checksum_drift_is_rejected(working):
     bundle, repository, run = working
     _admit(bundle, run, _trials(run))
@@ -372,7 +602,7 @@ def test_checksum_drift_is_rejected(working):
     bundle.seal(repository_root=repository)
     with (bundle.root / "transcripts.jsonl").open("a") as handle:
         handle.write("{}\n")
-    with pytest.raises(RuntimeError, match="checksum drift"):
+    with pytest.raises(RuntimeError, match="attempt evidence|checksum drift"):
         bundle.validate()
 
 
@@ -396,7 +626,7 @@ def test_schema_mismatch_is_rejected(working):
 
 
 def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
-    run = RunManifest.plan(
+    values = dict(
         suite_version="v1",
         form_set="probe",
         dialect_set="enclosure.plain-v1",
@@ -425,6 +655,7 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
         max_transport_attempts=1,
         expected_trial_ids=(),
         pricing={"prompt": 0.000001, "completion": 0.000002, "image": 0.000001},
+        authority={},
         status="complete",
         attempts=5,
         token_usage={"input_tokens": 100, "output_tokens": 20, "reasoning_tokens": 0},
@@ -445,6 +676,17 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
             },
         },
     )
+    values["authority"] = derive_run_authority(
+        suite_bytes=(SUITES_DIR / "v1.json").read_bytes(),
+        protocol_bytes=DEFAULT_PROTOCOL_REGISTRY.read_bytes(),
+        form_ids=form_ids,
+        dialect_id=values["dialect_set"],
+        protocol_id=protocol_id,
+        execution_spec=execution_spec_identity(values),
+        catalog_retrieved_at="",
+        catalog_row=values["catalog_row"],
+    ).to_dict()
+    run = RunManifest.plan(**values)
     return replace(
         run,
         expected_trial_ids=tuple(
@@ -465,6 +707,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
     trials = []
     calls = []
     events = []
+    evidence = []
     for index, (trial_id, form_id) in enumerate(
         zip(run.expected_trial_ids, form_ids, strict=True), start=1
     ):
@@ -479,6 +722,31 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
             response_text,
             expected_normal_value=form["normal_value"],
             expected_tree=form["abstract_form"],
+        )
+        call_id = call_id_for(trial_id, 1)
+        started_at = f"2026-08-08T00:00:0{index}+00:00"
+        finished_at = f"2026-08-08T00:00:1{index}+00:00"
+        provider_request_id = f"request:{run.protocol_id}:{index}"
+        record = AttemptEvidence.capture(
+            call_id=call_id,
+            trial_id=trial_id,
+            run_id=run.run_id,
+            attempt=1,
+            status="complete",
+            started_at=started_at,
+            finished_at=finished_at,
+            response_text=response_text,
+            provider_request_id=provider_request_id,
+            resolved_model_id=run.resolved_model_id,
+            provider=run.provider,
+            endpoint=run.endpoint,
+            input_tokens=20,
+            output_tokens=4,
+            reasoning_tokens=0,
+            observed_cost_usd=0.001,
+            latency_ms=10.0,
+            error_type="",
+            raw_transcript={"response_text": response_text},
         )
         trials.append(
             TrialRecord(
@@ -510,26 +778,32 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                 normal_value=form["normal_value"],
                 correct=correct,
                 response_text=response_text,
+                completion_evidence_sha256=record.evidence_sha256,
             )
         )
         call = CallRecord(
-            call_id=call_id_for(trial_id, 1),
+            call_id=call_id,
             trial_id=trial_id,
             run_id=run.run_id,
             attempt=1,
-            started_at=f"2026-08-08T00:00:0{index}+00:00",
-            finished_at=f"2026-08-08T00:00:1{index}+00:00",
+            started_at=started_at,
+            finished_at=finished_at,
             status="complete",
             reserved_cost_usd=0.01,
             observed_cost_usd=0.001,
             resolved_model_id=run.resolved_model_id,
+            provider=run.provider,
             endpoint=run.endpoint,
+            latency_ms=10.0,
             input_tokens=20,
             output_tokens=4,
             reasoning_tokens=0,
-            provider_request_id=f"request:{run.protocol_id}:{index}",
+            provider_request_id=provider_request_id,
+            response_sha256=sha256(response_text.encode()).hexdigest(),
+            evidence_sha256=record.evidence_sha256,
         )
         calls.append(call)
+        evidence.append(record)
         for event_type, amount, at in (
             ("reserved", 0.01, call.started_at),
             ("settled", 0.001, call.finished_at),
@@ -545,7 +819,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                     at=at,
                 )
             )
-    return trials, calls, events
+    return trials, calls, events, evidence
 
 
 def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls(tmp_path):
@@ -588,8 +862,14 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
         spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
     )
     for run in runs:
-        trials, calls, events = _sample_records(run, form_ids)
-        bundle.admit_run(run, trials, calls=calls, ledger_events=events)
+        trials, calls, events, evidence = _sample_records(run, form_ids)
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            ledger_events=events,
+            evidence=evidence,
+        )
     write_release_metrics(bundle.root, suite=load_suite(), runs=bundle.runs())
     build_site(bundle.root, bundle.root / "site")
     runs_page = (bundle.root / "site" / "runs.html").read_text()
@@ -617,6 +897,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
     bundle.seal(repository_root=repository)
     assert len(bundle.runs()) == 4
     assert pq.read_table(bundle.root / "calls.parquet").num_rows == 20
+    assert len((bundle.root / "transcripts.jsonl").read_text().splitlines()) == 20
     assert len((bundle.root / "ledger.jsonl").read_text().splitlines()) == 40
 
 
@@ -645,6 +926,6 @@ def test_sample_contract_rejects_empty_call_evidence(tmp_path):
         },
         spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
     )
-    trials, _calls, _events = _sample_records(run, form_ids)
+    trials, _calls, _events, _evidence = _sample_records(run, form_ids)
     with pytest.raises(RuntimeError, match="attempt count"):
         bundle.admit_run(run, trials)
