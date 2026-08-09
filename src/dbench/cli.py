@@ -408,7 +408,13 @@ def _execute_run_command(args: argparse.Namespace, values: dict[str, str]) -> in
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "plan":
-        return _plan(args)
+        try:
+            with state_lifecycle_lock(args.state_root, blocking=False):
+                return _plan(args)
+        except FileLockUnavailableError as exc:
+            raise RunAlreadyRunningError(
+                f"state root {args.state_root} is undergoing another lifecycle operation"
+            ) from exc
     if args.command == "status":
         run = json.loads((_state_dir(args) / "run.json").read_text())
         observed, reserved = _ledger(args.state_root).totals(run["cohort"])

@@ -469,6 +469,29 @@ than beginning the broad sweep.
 
 ## Reset 2026-08-08 by agent:codex-root
 
+## canonical migration residual rereview — ev_01KZJ28A489CWBTWVRMXYXSS4M
+
+the second canonical-migration review approved the identity axis but found three
+residual durability/serialization gaps. route every migration rename through one
+durable helper that fsyncs every distinct source and destination parent directory;
+this includes predecessor state moving into its nested recovery directory, candidate
+state replacing the root, and rollback restoring the predecessor. tests spy the exact
+parents and exercise recovery after the rename boundary.
+
+make `plan` a peer lifecycle writer. it must acquire the same stable root lock before
+checking whether release/state paths exist and retain it through catalog selection,
+release construction, every planned run manifest, and the cost sheet. while migration
+is paused under this lock, both a stale runner and a concurrent plan must receive the
+same already-running result without touching their output paths.
+
+committed recovery cannot trust only journal state/release digests. before deleting a
+committed journal or returning success, reverify the separately persisted migration
+audit: its schema and digest, exact live-event authority, predecessor/candidate
+authorities and hashes, all four run mappings, all twenty trial mappings, retained
+request/evidence/call hashes, scored first trial, exact settlement, one retained
+attempt, and nineteen remaining. corruption fails closed while retaining journal and
+backup. keep the live release untouched through independent rereview.
+
 ## canonical migration review repair — ev_01KZHZR7TDT9ZE1NHVPWZMRXC2
 
 the first canonical-migration review correctly blocked live mutation on three
@@ -699,5 +722,7 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
+
+## Reset 2026-08-09 by agent:codex-root
 
 ## Reset 2026-08-09 by agent:codex-root

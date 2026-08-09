@@ -49,6 +49,7 @@ from lofbench.run_models import (
 from lofbench.state_io import (
     append_jsonl_fsynced,
     read_jsonl,
+    replace_path_durable,
     state_lifecycle_lock,
     write_json_atomic,
 )
@@ -225,8 +226,7 @@ def _write_bytes_atomic(path: Path, payload: bytes) -> None:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
+        replace_path_durable(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -276,6 +276,195 @@ def _existing_state_digest(path: Path) -> str | None:
     return _state_digest(path) if path.is_dir() else None
 
 
+def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label} is not a json object")
+    return value
+
+
+def _validate_committed_migration_audit(
+    *,
+    journal: dict[str, Any],
+    release_root: Path,
+    state_root: Path,
+    backup: Path,
+) -> None:
+    audit_path = backup / "migration-audit.json"
+    predecessor_release_path = backup / "predecessor-release.json"
+    audit = _read_json_object(audit_path, label="persisted migration audit")
+    state_audit = _read_json_object(
+        state_root / "model-identity-migration.json",
+        label="candidate state migration audit",
+    )
+    predecessor_release = _read_json_object(
+        predecessor_release_path,
+        label="predecessor release",
+    )
+    candidate_release = _read_json_object(
+        release_root / "release.json",
+        label="candidate release",
+    )
+    expected_event_authority = {
+        "actor": IDENTITY_EVENT_ACTOR,
+        "body_sha256": IDENTITY_EVENT_BODY_SHA256,
+        "type": IDENTITY_EVENT_TYPE,
+    }
+    if (
+        _file_sha256(audit_path) != journal.get("migration_audit_sha256")
+        or audit != state_audit
+        or audit.get("schema_version") != 1
+        or audit.get("kind") != "openrouter-canonical-model-identity-v1"
+        or audit.get("identity_event_id") != IDENTITY_EVENT_ID
+        or audit.get("identity_event_authority") != expected_event_authority
+        or audit.get("predecessor_release_manifest_sha256")
+        != journal.get("predecessor_release_sha256")
+        or audit.get("predecessor_state_sha256") != journal.get("predecessor_state_sha256")
+        or audit.get("predecessor_repository_commit")
+        != predecessor_release.get("repository_commit")
+        or audit.get("repository_commit") != candidate_release.get("repository_commit")
+        or audit.get("predecessor_authority") != predecessor_release.get("authority")
+        or audit.get("authority") != candidate_release.get("authority")
+        or audit.get("attempts_retained") != 1
+        or audit.get("remaining_attempts") != 19
+    ):
+        raise RuntimeError("persisted migration audit authority is inconsistent")
+
+    old_ids = predecessor_release.get("expected_run_ids")
+    new_ids = candidate_release.get("expected_run_ids")
+    run_id_map = audit.get("run_id_map")
+    trial_id_map = audit.get("trial_id_map")
+    migrations = candidate_release.get("working_state_migrations")
+    if (
+        not isinstance(old_ids, list)
+        or len(old_ids) != 4
+        or not isinstance(new_ids, list)
+        or len(new_ids) != 4
+        or not isinstance(run_id_map, dict)
+        or set(run_id_map) != set(old_ids)
+        or set(run_id_map.values()) != set(new_ids)
+        or not isinstance(trial_id_map, dict)
+        or not isinstance(migrations, list)
+        or not migrations
+        or migrations[-1] != audit
+    ):
+        raise RuntimeError("persisted migration audit run mapping is inconsistent")
+
+    predecessor_state = backup / "state"
+    old_runs = {
+        run_id: RunManifest.from_dict(
+            _read_json_object(
+                predecessor_state / run_id / "run.json",
+                label="predecessor run",
+            )
+        )
+        for run_id in old_ids
+    }
+    new_runs = {
+        run_id: RunManifest.from_dict(
+            _read_json_object(state_root / run_id / "run.json", label="candidate run")
+        )
+        for run_id in new_ids
+    }
+    predecessor_run_sha256 = audit.get("predecessor_run_manifest_sha256")
+    if (
+        {path.name for path in state_root.glob("run_*")} != set(new_ids)
+        or not isinstance(predecessor_run_sha256, dict)
+        or predecessor_run_sha256
+        != {run_id: canonical_sha256(run.to_dict()) for run_id, run in old_runs.items()}
+        or set(trial_id_map)
+        != {trial_id for run in old_runs.values() for trial_id in run.expected_trial_ids}
+        or set(trial_id_map.values())
+        != {trial_id for run in new_runs.values() for trial_id in run.expected_trial_ids}
+        or any(
+            old_runs[old_id].protocol_id != new_runs[run_id_map[old_id]].protocol_id
+            for old_id in old_ids
+        )
+        or any(
+            canonical_sha256(run.catalog_row) != audit.get("authenticated_catalog_sha256")
+            for run in new_runs.values()
+        )
+    ):
+        raise RuntimeError("persisted migration audit identity hashes are inconsistent")
+
+    active_runs = [run for run in new_runs.values() if run.attempts]
+    if (
+        len(active_runs) != 1
+        or active_runs[0].attempts != 1
+        or active_runs[0].status != "probed"
+        or sum(run.attempts for run in new_runs.values()) != 1
+        or sum(len(run.expected_trial_ids) - run.attempts for run in new_runs.values()) != 19
+        or any(
+            run.status != "planned" or run.attempts != 0
+            for run in new_runs.values()
+            if run.run_id != active_runs[0].run_id
+        )
+    ):
+        raise RuntimeError("committed migration state does not retain exactly one attempt")
+    active = active_runs[0]
+    active_dir = state_root / active.run_id
+    old_active_id = next(
+        (old_id for old_id, new_id in run_id_map.items() if new_id == active.run_id),
+        None,
+    )
+    if old_active_id is None:
+        raise RuntimeError("persisted migration audit lacks the active run mapping")
+    old_active_dir = predecessor_state / old_active_id
+    requests = read_jsonl(active_dir / "request-started.jsonl")
+    evidence = read_jsonl(active_dir / "transcripts.jsonl")
+    calls = read_jsonl(active_dir / "calls.jsonl")
+    trials = read_jsonl(active_dir / "trials.jsonl")
+    old_requests = read_jsonl(old_active_dir / "request-started.jsonl")
+    old_evidence = read_jsonl(old_active_dir / "transcripts.jsonl")
+    old_calls = read_jsonl(old_active_dir / "calls.jsonl")
+    active_audit = audit.get("active_attempt")
+    ledger = read_jsonl(state_root / "spend-ledger.jsonl")
+    if (
+        not isinstance(active_audit, dict)
+        or old_runs[old_active_id].attempts != 1
+        or sum(run.attempts for run in old_runs.values()) != 1
+        or len(requests) != 1
+        or len(evidence) != 2
+        or len(calls) != 1
+        or len(trials) != 1
+        or len(old_requests) != 1
+        or len(old_evidence) != 2
+        or len(old_calls) != 2
+        or active_audit.get("old_run_id") != old_active_id
+        or active_audit.get("new_run_id") != active.run_id
+        or trial_id_map.get(active_audit.get("old_trial_id")) != active_audit.get("new_trial_id")
+        or active_audit.get("old_call_id") != old_calls[-1].get("call_id")
+        or active_audit.get("new_call_id") != calls[0].get("call_id")
+        or active_audit.get("old_request_sha256") != old_requests[0].get("request_sha256")
+        or active_audit.get("new_request_sha256") != requests[0].get("request_sha256")
+        or active_audit.get("old_evidence_sha256")
+        != [row.get("evidence_sha256") for row in old_evidence]
+        or active_audit.get("new_evidence_sha256")
+        != [row.get("evidence_sha256") for row in evidence]
+        or active_audit.get("provider_evidence_sha256")
+        != [canonical_sha256(row["provider_evidence"]) for row in old_evidence]
+        or active_audit.get("new_call_record_sha256") != canonical_sha256(calls[0])
+        or audit.get("predecessor_call_record_sha256")
+        != [canonical_sha256(row) for row in old_calls]
+        or active.cost_usd != active_audit.get("observed_cost_usd")
+        or calls[0].get("status") != "complete"
+        or calls[0].get("observed_cost_usd") != active.cost_usd
+        or trials[0].get("parse_status") != "valid"
+        or trials[0].get("trial_id") != active_audit.get("new_trial_id")
+        or any(
+            row.get("run_id") != active.run_id for row in [*requests, *evidence, *calls, *trials]
+        )
+        or any(row.get("call_id") != active_audit.get("new_call_id") for row in requests + evidence)
+        or [row.get("revision") for row in evidence] != [0, 1]
+        or evidence[1].get("predecessor_evidence_sha256") != evidence[0].get("evidence_sha256")
+        or [row.get("event_type") for row in ledger] != ["reserved", "settled"]
+        or ledger[-1].get("amount_usd") != active.cost_usd
+        or any(row.get("run_id") != active.run_id for row in ledger)
+        or any(row.get("call_id") != active_audit.get("new_call_id") for row in ledger)
+    ):
+        raise RuntimeError("persisted migration audit attempt closure is inconsistent")
+
+
 def _recover_interrupted_migration(
     *,
     journal_path: Path,
@@ -313,17 +502,26 @@ def _recover_interrupted_migration(
         raise RuntimeError(f"migration recovery journal has foreign authority: {journal_path}")
 
     if phase == "committed":
-        if (
-            _existing_state_digest(state_root) != journal.get("candidate_state_sha256")
-            or _file_sha256(release_root / "release.json")
-            != journal.get("candidate_release_sha256")
-            or _existing_state_digest(predecessor_state) != predecessor_state_sha256
-            or not predecessor_release.is_file()
-            or _file_sha256(predecessor_release) != predecessor_release_sha256
-        ):
+        try:
+            if (
+                _existing_state_digest(state_root) != journal.get("candidate_state_sha256")
+                or _file_sha256(release_root / "release.json")
+                != journal.get("candidate_release_sha256")
+                or _existing_state_digest(predecessor_state) != predecessor_state_sha256
+                or not predecessor_release.is_file()
+                or _file_sha256(predecessor_release) != predecessor_release_sha256
+            ):
+                raise RuntimeError("committed migration content digests are inconsistent")
+            _validate_committed_migration_audit(
+                journal=journal,
+                release_root=release_root,
+                state_root=state_root,
+                backup=backup,
+            )
+        except Exception as exc:
             raise RuntimeError(
                 f"committed migration journal is inconsistent and retained at {journal_path}"
-            )
+            ) from exc
         journal_path.unlink()
         _fsync_directory(journal_path.parent)
         return phase
@@ -343,8 +541,7 @@ def _recover_interrupted_migration(
                     f"journal retained at {journal_path}"
                 )
             shutil.rmtree(state_root)
-        os.replace(predecessor_state, state_root)
-        _fsync_directory(state_root.parent)
+        replace_path_durable(predecessor_state, state_root)
 
     release_path = release_root / "release.json"
     if _file_sha256(release_path) != predecessor_release_sha256:
@@ -1011,6 +1208,11 @@ def salvage_working_model_identity(
             "schema_version": 1,
             "kind": "openrouter-canonical-model-identity-v1",
             "identity_event_id": identity_event_id,
+            "identity_event_authority": {
+                "actor": IDENTITY_EVENT_ACTOR,
+                "body_sha256": IDENTITY_EVENT_BODY_SHA256,
+                "type": IDENTITY_EVENT_TYPE,
+            },
             "migrated_at": migrated_at,
             "predecessor_repository_commit": expected_source_commit,
             "repository_commit": current_commit,
@@ -1069,6 +1271,7 @@ def salvage_working_model_identity(
             "predecessor_state_sha256": old_state_sha256,
             "candidate_release_sha256": "",
             "candidate_state_sha256": "",
+            "migration_audit_sha256": "",
         }
         _write_journal(journal_path, journal, "initializing", transition_observer)
         try:
@@ -1132,15 +1335,14 @@ def salvage_working_model_identity(
             _write_bytes_atomic(backup / "predecessor-release.json", old_release_bytes)
             _observe(transition_observer, "backup:release")
             write_json_atomic(backup / "migration-audit.json", audit)
+            journal["migration_audit_sha256"] = _file_sha256(backup / "migration-audit.json")
             _observe(transition_observer, "backup:audit")
             _write_journal(journal_path, journal, "prepared", transition_observer)
 
-            os.replace(state_root, backup / "state")
-            _fsync_directory(state_root.parent)
+            replace_path_durable(state_root, backup / "state")
             _observe(transition_observer, "rename:predecessor")
             _write_journal(journal_path, journal, "predecessor_moved", transition_observer)
-            os.replace(stage, state_root)
-            _fsync_directory(state_root.parent)
+            replace_path_durable(stage, state_root)
             _observe(transition_observer, "rename:candidate")
             _write_journal(journal_path, journal, "candidate_installed", transition_observer)
             write_json_atomic(release_root / "release.json", new_manifest)
@@ -1156,6 +1358,12 @@ def salvage_working_model_identity(
             for run in runs.values():
                 actual.validate_planned_run(run)
             _write_journal(journal_path, journal, "committed", transition_observer)
+            _validate_committed_migration_audit(
+                journal=journal,
+                release_root=release_root,
+                state_root=state_root,
+                backup=backup,
+            )
             journal_path.unlink()
             _fsync_directory(journal_path.parent)
         except Exception as migration_error:

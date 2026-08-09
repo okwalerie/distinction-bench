@@ -86,10 +86,17 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
+        replace_path_durable(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def replace_path_durable(source: Path, destination: Path) -> None:
+    """Replace a path and fsync every distinct directory changed by the rename."""
+    os.replace(source, destination)
+    _fsync_directory(source.parent)
+    if destination.parent != source.parent:
+        _fsync_directory(destination.parent)
 
 
 @contextmanager

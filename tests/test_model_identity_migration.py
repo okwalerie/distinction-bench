@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import threading
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -684,6 +685,41 @@ def test_process_death_after_commit_is_finalized_without_rollback(tmp_path):
     assert not list(state.parent.glob(".state.canonical-model-migration.json"))
 
 
+@pytest.mark.parametrize("match_corrupt_digest", [False, True])
+def test_committed_recovery_rejects_corrupt_persisted_audit(
+    tmp_path,
+    match_corrupt_digest,
+):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+
+    def die(candidate):
+        if candidate == "journal:committed":
+            raise _ProcessDeath(candidate)
+
+    with pytest.raises(_ProcessDeath):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            transition_observer=die,
+        )
+    journal_path = state.parent / ".state.canonical-model-migration.json"
+    journal = json.loads(journal_path.read_text())
+    audit_path = Path(journal["backup"]) / "migration-audit.json"
+    audit = json.loads(audit_path.read_text())
+    audit["remaining_attempts"] = 18
+    write_json_atomic(audit_path, audit)
+    if match_corrupt_digest:
+        journal["migration_audit_sha256"] = sha256(audit_path.read_bytes()).hexdigest()
+        write_json_atomic(journal_path, journal)
+
+    with pytest.raises(RuntimeError, match="committed migration journal is inconsistent"):
+        _salvage(repository, predecessor, release, state)
+    assert journal_path.is_file()
+    assert audit_path.is_file()
+
+
 def test_cli_recovers_process_death_before_key_or_catalog_access(tmp_path, monkeypatch):
     repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
     before_release = (release / "release.json").read_bytes()
@@ -741,6 +777,38 @@ def test_cli_recovers_process_death_before_key_or_catalog_access(tmp_path, monke
     assert _tree_snapshot(state) == before_state
 
 
+def test_transaction_renames_sync_exact_parents_and_crash_recovery(tmp_path, monkeypatch):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    renames = []
+    durable_replace = migration.replace_path_durable
+
+    def observe_replace(source, destination):
+        durable_replace(source, destination)
+        renames.append((Path(source).parent, Path(destination).parent))
+
+    def die(candidate):
+        if candidate == "rename:candidate":
+            raise _ProcessDeath(candidate)
+
+    monkeypatch.setattr(migration, "replace_path_durable", observe_replace)
+    with pytest.raises(_ProcessDeath):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            transition_observer=die,
+        )
+    journal = json.loads((state.parent / ".state.canonical-model-migration.json").read_text())
+    backup = Path(journal["backup"])
+    assert (state.parent, backup) in renames
+    assert (state.parent, state.parent) in renames
+
+    with pytest.raises(RuntimeError, match="rolled back interrupted migration"):
+        _salvage(repository, predecessor, release, state)
+    assert (backup, state.parent) in renames
+
+
 def test_lifecycle_lock_blocks_runner_until_migration_publishes_new_ids(
     tmp_path, monkeypatch, capsys
 ):
@@ -781,6 +849,26 @@ def test_lifecycle_lock_blocks_runner_until_migration_publishes_new_ids(
                 str(state),
                 "--run-id",
                 old_run_id,
+            ]
+        )
+    with pytest.raises(RunAlreadyRunningError, match="lifecycle operation"):
+        cli_main(
+            [
+                "plan",
+                "--release",
+                str(release),
+                "--state-root",
+                str(state),
+                "--release-id",
+                "concurrent-plan",
+                "--repository-url",
+                "https://example.invalid/repository",
+                "--model",
+                REQUESTED,
+                "--dialect",
+                "enclosure.plain-v1",
+                "--protocol",
+                SAMPLE_PROTOCOLS[0],
             ]
         )
     proceed.set()

@@ -15,6 +15,7 @@ from lofbench.state_io import (
     append_jsonl_fsynced,
     exclusive_file_lock,
     read_jsonl,
+    replace_path_durable,
     state_lifecycle_lock,
     state_lifecycle_lock_path,
     write_json_atomic,
@@ -77,6 +78,28 @@ def test_atomic_json_fsyncs_payload_then_parent_after_replace(tmp_path, monkeypa
 
     assert synced[-2:] == ["file", "directory"]
     assert json.loads(path.read_text()) == {"status": "complete"}
+
+
+def test_cross_directory_replace_fsyncs_both_changed_parents(tmp_path, monkeypatch):
+    source_parent = tmp_path / "source"
+    destination_parent = tmp_path / "destination"
+    source_parent.mkdir()
+    destination_parent.mkdir()
+    source = source_parent / "state"
+    destination = destination_parent / "state"
+    source.write_text("durable")
+    real_fsync_directory = state_io._fsync_directory
+    synced = []
+
+    def observe(path):
+        synced.append(path)
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(state_io, "_fsync_directory", observe)
+    replace_path_durable(source, destination)
+
+    assert destination.read_text() == "durable"
+    assert synced == [source_parent, destination_parent]
 
 
 def test_first_lock_creation_fsyncs_lock_file_and_parent(tmp_path, monkeypatch):

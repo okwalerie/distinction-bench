@@ -122,7 +122,9 @@ twenty—remaining. partially swapped or forged state fails closed under ordinar
 repository, release, run, and ledger identities.
 
 every state-root writer takes one stable lifecycle flock outside the replaceable
-state directory. `run`, `resume`, and `probe` hold it from state/release preflight
+state directory. `plan` takes it before checking or creating release/state paths and
+holds it through every release, run, and cost-sheet write. `run`, `resume`, and
+`probe` hold it from state/release preflight
 through provider execution and the final run manifest; salvage holds the same lock
 through authenticated catalog selection, predecessor validation, reconciliation, and
 publication. narrower locks are always acquired root → run → ledger. before its first
@@ -133,6 +135,11 @@ verified committed phase before reading credentials or querying the catalog. the
 migration additionally requires the exact tracked live
 identity event—id, actor, type, body, and body digest—from the current source commit;
 an arbitrary or missing event id has no authority.
+each migration rename fsyncs every distinct source and destination parent directory,
+including rollback renames across the recovery directory boundary. committed recovery
+also re-closes the persisted audit against its digest, exact identity event, both
+release authorities, all old/new run and trial mappings, retained request/evidence/call
+hashes, and the one-attempt/nineteen-remaining ledger state before removing the journal.
 
 ## consequences
 
