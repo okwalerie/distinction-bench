@@ -120,6 +120,10 @@ migration audit, and keeps the predecessor state as a recoverable directory back
 the migrated sample therefore has one of twenty attempts complete and nineteen—not
 twenty—remaining. partially swapped or forged state fails closed under ordinary
 repository, release, run, and ledger identities.
+the one-time source-lineage proof admits only the seven reviewed repair seams: the
+dbench cli, migration, openrouter selection, provider projector, orchestration,
+protocol parser, and state io modules. the verified registry blobs themselves remain
+immutable, and any merge or other source-path change still rejects the migration.
 
 every state-root writer takes one stable lifecycle flock outside the replaceable
 state directory. `plan` takes it before checking or creating release/state paths and

@@ -121,6 +121,10 @@ and run aggregates to match exactly. parse `ProtocolSpec` values only from the e
 verified bundled protocol bytes and inject them through frozen-task construction,
 staging, reconciliation, and committed recovery. never consult the running source
 tree's module-global protocol registry on this path.
+the bounded repair lineage includes the reviewed protocol parser module as well as
+the cli, migration, endpoint selection, provider projection, orchestration, and state
+io seams. it still rejects merges, any eighth source path, and any frozen registry
+change.
 
 ## probe, run, and resume
 

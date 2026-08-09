@@ -77,6 +77,7 @@ _REPAIR_SOURCE_PATHS = frozenset(
         "src/dbench/openrouter.py",
         "src/dbench/provider_evidence.py",
         "src/lofbench/orchestration.py",
+        "src/lofbench/protocols.py",
         "src/lofbench/state_io.py",
     }
 )

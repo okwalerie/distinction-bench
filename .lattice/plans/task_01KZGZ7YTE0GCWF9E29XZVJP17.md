@@ -760,6 +760,20 @@ deterministic projection:
 
 ## Reset 2026-08-09 by agent:codex-root
 
+## canonical migration lineage-preflight repair — ev_01KZJ8JWKNTRXVW9A925XRB4YW
+
+the first approved live invocation refused before migration state or release mutation
+because the narrow source-lineage allowlist did not include the protocol parser seam
+introduced by the fifth review. add only `src/lofbench/protocols.py` to the six already
+reviewed source paths; do not widen the scope by directory, compatibility mode, merge,
+or registry exception.
+
+the regression clones the actual committed branch head, proves its exact source diff
+from `23710eaca081dda65dcb139ce93817f0cfba0d7d` is the seven known files, proves the
+lineage contains no source merge and changes neither frozen registry, then exercises
+the real `_require_predecessor_commit` preflight. keep release/state, credentials,
+catalog, provider, and inference paths untouched until this repair is reviewed.
+
 ## canonical migration protocol-authority rereview — ev_01KZJ7FF2HAYDXY6AB2DT9MDN4
 
 the fifth review found that proving bundled `protocols.json` was insufficient while

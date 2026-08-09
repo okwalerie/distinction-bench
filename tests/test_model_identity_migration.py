@@ -62,6 +62,7 @@ ENDPOINT = "provider/example/flex"
 PROVIDER = "Example Provider"
 COST = 0.002320875
 EVENT = IDENTITY_EVENT_ID
+REAL_REPAIR_PREDECESSOR = "23710eaca081dda65dcb139ce93817f0cfba0d7d"
 
 
 def _repository(path: Path) -> tuple[Path, str]:
@@ -622,6 +623,73 @@ def test_salvage_rejects_tampered_tracked_identity_event(tmp_path):
     subprocess.run(["git", "commit", "--amend", "--no-edit", "-q"], cwd=repository, check=True)
     with pytest.raises(RuntimeError, match="tracked identity event"):
         _salvage(repository, predecessor, release, state)
+
+
+def test_current_head_is_the_exact_bounded_repair_lineage(tmp_path):
+    source_repository = Path(__file__).resolve().parents[1]
+    repository = tmp_path / "current-head"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-local", str(source_repository), str(repository)],
+        check=True,
+    )
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    expected_paths = frozenset(
+        {
+            "src/dbench/cli.py",
+            "src/dbench/migration.py",
+            "src/dbench/openrouter.py",
+            "src/dbench/provider_evidence.py",
+            "src/lofbench/orchestration.py",
+            "src/lofbench/protocols.py",
+            "src/lofbench/state_io.py",
+        }
+    )
+    head = git("rev-parse", "HEAD")
+    changed_paths = frozenset(
+        git(
+            "diff",
+            "--name-only",
+            f"{REAL_REPAIR_PREDECESSOR}..{head}",
+            "--",
+            *migration._SOURCE_PATHS,
+        ).splitlines()
+    )
+    source_merges = git(
+        "rev-list",
+        "--merges",
+        f"{REAL_REPAIR_PREDECESSOR}..{head}",
+        "--",
+        *migration._SOURCE_PATHS,
+    )
+    changed_registries = git(
+        "diff",
+        "--name-only",
+        f"{REAL_REPAIR_PREDECESSOR}..{head}",
+        "--",
+        SUITE_REGISTRY_GIT_PATH,
+        PROTOCOL_REGISTRY_GIT_PATH,
+    )
+
+    assert migration._REPAIR_SOURCE_PATHS == expected_paths
+    assert changed_paths == expected_paths
+    assert source_merges == ""
+    assert changed_registries == ""
+    assert (
+        migration._require_predecessor_commit(
+            repository,
+            predecessor=REAL_REPAIR_PREDECESSOR,
+        )
+        == head
+    )
 
 
 def test_salvage_rejects_unrelated_source_changes_in_repair_lineage(tmp_path):
