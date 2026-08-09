@@ -28,7 +28,8 @@ from lofbench.orchestration import (
     RunOrchestrator,
     call_record_from_projection,
     project_attempt,
-    trial_record_from_projection,
+    reconciled_attempt_records,
+    reconciled_run_manifest,
 )
 from lofbench.protocols import get_protocol
 from lofbench.records import (
@@ -366,20 +367,70 @@ def _validate_committed_migration_audit(
         )
         for run_id in new_ids
     }
+    old_by_protocol = {run.protocol_id: run for run in old_runs.values()}
+    new_by_protocol = {run.protocol_id: run for run in new_runs.values()}
+    tasks = {
+        protocol_id: _frozen_identity_task(
+            suite_path=release_root / "suite.json",
+            form_set="probe",
+            dialect_id="enclosure.plain-v1",
+            protocol_id=protocol_id,
+        )
+        for protocol_id in SAMPLE_PROTOCOLS
+    }
+    authoritative_trials = {
+        run.run_id: tuple(
+            trial_id_for(
+                run.run_id,
+                sample.metadata["abstract_form_id"],
+                sample.metadata["dialect_id"],
+            )
+            for sample in tasks[run.protocol_id].dataset.samples
+        )
+        for run in [*old_runs.values(), *new_runs.values()]
+        if run.protocol_id in tasks
+    }
+    expected_run_id_map = {
+        old_by_protocol[protocol_id].run_id: new_by_protocol[protocol_id].run_id
+        for protocol_id in SAMPLE_PROTOCOLS
+        if protocol_id in old_by_protocol and protocol_id in new_by_protocol
+    }
+    expected_trial_id_map = {
+        old_trial_id: new_trial_id
+        for protocol_id in SAMPLE_PROTOCOLS
+        if protocol_id in old_by_protocol and protocol_id in new_by_protocol
+        for old_trial_id, new_trial_id in zip(
+            authoritative_trials.get(old_by_protocol[protocol_id].run_id, ()),
+            authoritative_trials.get(new_by_protocol[protocol_id].run_id, ()),
+            strict=True,
+        )
+    }
     predecessor_run_sha256 = audit.get("predecessor_run_manifest_sha256")
     if (
-        {path.name for path in state_root.glob("run_*")} != set(new_ids)
+        {path.name for path in state_root.iterdir()}
+        != {
+            *new_ids,
+            "cost-sheet.json",
+            "model-identity-migration.json",
+            "spend-ledger.jsonl",
+            "spend-ledger.jsonl.lock",
+        }
+        or {path.name for path in state_root.glob("run_*")} != set(new_ids)
+        or set(old_by_protocol) != set(SAMPLE_PROTOCOLS)
+        or len(old_by_protocol) != len(old_runs)
+        or set(new_by_protocol) != set(SAMPLE_PROTOCOLS)
+        or len(new_by_protocol) != len(new_runs)
         or not isinstance(predecessor_run_sha256, dict)
         or predecessor_run_sha256
         != {run_id: canonical_sha256(run.to_dict()) for run_id, run in old_runs.items()}
-        or set(trial_id_map)
-        != {trial_id for run in old_runs.values() for trial_id in run.expected_trial_ids}
-        or set(trial_id_map.values())
-        != {trial_id for run in new_runs.values() for trial_id in run.expected_trial_ids}
+        or any(run.run_id != run.authoritative_run_id() for run in old_runs.values())
+        or any(run.run_id != run.authoritative_run_id() for run in new_runs.values())
         or any(
-            old_runs[old_id].protocol_id != new_runs[run_id_map[old_id]].protocol_id
-            for old_id in old_ids
+            run.expected_trial_ids != authoritative_trials.get(run.run_id)
+            for run in [*old_runs.values(), *new_runs.values()]
         )
+        or run_id_map != expected_run_id_map
+        or trial_id_map != expected_trial_id_map
         or any(
             canonical_sha256(run.catalog_row) != audit.get("authenticated_catalog_sha256")
             for run in new_runs.values()
@@ -387,9 +438,11 @@ def _validate_committed_migration_audit(
     ):
         raise RuntimeError("persisted migration audit identity hashes are inconsistent")
 
+    old_active_runs = [run for run in old_runs.values() if run.attempts]
     active_runs = [run for run in new_runs.values() if run.attempts]
     if (
-        len(active_runs) != 1
+        len(old_active_runs) != 1
+        or len(active_runs) != 1
         or active_runs[0].attempts != 1
         or active_runs[0].status != "probed"
         or sum(run.attempts for run in new_runs.values()) != 1
@@ -399,29 +452,56 @@ def _validate_committed_migration_audit(
             for run in new_runs.values()
             if run.run_id != active_runs[0].run_id
         )
+        or any(
+            run
+            != reconciled_run_manifest(
+                replace(
+                    run,
+                    status="planned",
+                    attempts=0,
+                    token_usage={},
+                    latency_ms=0.0,
+                    cost_usd=0.0,
+                ),
+                calls=[],
+                trials=[],
+            )
+            for run in new_runs.values()
+            if run.run_id != active_runs[0].run_id
+        )
     ):
         raise RuntimeError("committed migration state does not retain exactly one attempt")
+    old_active = old_active_runs[0]
     active = active_runs[0]
     active_dir = state_root / active.run_id
-    old_active_id = next(
-        (old_id for old_id, new_id in run_id_map.items() if new_id == active.run_id),
-        None,
-    )
-    if old_active_id is None:
+    old_active_id = old_active.run_id
+    if run_id_map.get(old_active_id) != active.run_id:
         raise RuntimeError("persisted migration audit lacks the active run mapping")
     old_active_dir = predecessor_state / old_active_id
-    requests = read_jsonl(active_dir / "request-started.jsonl")
-    evidence = read_jsonl(active_dir / "transcripts.jsonl")
+    requests = [
+        RequestStartedRecord.from_dict(row)
+        for row in read_jsonl(active_dir / "request-started.jsonl")
+    ]
+    evidence = [
+        AttemptEvidence.from_dict(row) for row in read_jsonl(active_dir / "transcripts.jsonl")
+    ]
     calls = read_jsonl(active_dir / "calls.jsonl")
     trials = read_jsonl(active_dir / "trials.jsonl")
-    old_requests = read_jsonl(old_active_dir / "request-started.jsonl")
-    old_evidence = read_jsonl(old_active_dir / "transcripts.jsonl")
+    old_requests = [
+        RequestStartedRecord.from_dict(row)
+        for row in read_jsonl(old_active_dir / "request-started.jsonl")
+    ]
+    old_evidence = [
+        AttemptEvidence.from_dict(row) for row in read_jsonl(old_active_dir / "transcripts.jsonl")
+    ]
     old_calls = read_jsonl(old_active_dir / "calls.jsonl")
+    old_ledger = [
+        LedgerEvent.from_dict(row) for row in read_jsonl(predecessor_state / "spend-ledger.jsonl")
+    ]
     active_audit = audit.get("active_attempt")
-    ledger = read_jsonl(state_root / "spend-ledger.jsonl")
+    ledger = [LedgerEvent.from_dict(row) for row in read_jsonl(state_root / "spend-ledger.jsonl")]
     if (
         not isinstance(active_audit, dict)
-        or old_runs[old_active_id].attempts != 1
         or sum(run.attempts for run in old_runs.values()) != 1
         or len(requests) != 1
         or len(evidence) != 2
@@ -430,39 +510,162 @@ def _validate_committed_migration_audit(
         or len(old_requests) != 1
         or len(old_evidence) != 2
         or len(old_calls) != 2
-        or active_audit.get("old_run_id") != old_active_id
-        or active_audit.get("new_run_id") != active.run_id
-        or trial_id_map.get(active_audit.get("old_trial_id")) != active_audit.get("new_trial_id")
-        or active_audit.get("old_call_id") != old_calls[-1].get("call_id")
-        or active_audit.get("new_call_id") != calls[0].get("call_id")
-        or active_audit.get("old_request_sha256") != old_requests[0].get("request_sha256")
-        or active_audit.get("new_request_sha256") != requests[0].get("request_sha256")
-        or active_audit.get("old_evidence_sha256")
-        != [row.get("evidence_sha256") for row in old_evidence]
-        or active_audit.get("new_evidence_sha256")
-        != [row.get("evidence_sha256") for row in evidence]
-        or active_audit.get("provider_evidence_sha256")
-        != [canonical_sha256(row["provider_evidence"]) for row in old_evidence]
-        or active_audit.get("new_call_record_sha256") != canonical_sha256(calls[0])
-        or audit.get("predecessor_call_record_sha256")
-        != [canonical_sha256(row) for row in old_calls]
-        or active.cost_usd != active_audit.get("observed_cost_usd")
-        or calls[0].get("status") != "complete"
-        or calls[0].get("observed_cost_usd") != active.cost_usd
-        or trials[0].get("parse_status") != "valid"
-        or trials[0].get("trial_id") != active_audit.get("new_trial_id")
-        or any(
-            row.get("run_id") != active.run_id for row in [*requests, *evidence, *calls, *trials]
-        )
-        or any(row.get("call_id") != active_audit.get("new_call_id") for row in requests + evidence)
-        or [row.get("revision") for row in evidence] != [0, 1]
-        or evidence[1].get("predecessor_evidence_sha256") != evidence[0].get("evidence_sha256")
-        or [row.get("event_type") for row in ledger] != ["reserved", "settled"]
-        or ledger[-1].get("amount_usd") != active.cost_usd
-        or any(row.get("run_id") != active.run_id for row in ledger)
-        or any(row.get("call_id") != active_audit.get("new_call_id") for row in ledger)
+        or len(old_ledger) != 1
+        or old_ledger[0].event_type != "reserved"
     ):
         raise RuntimeError("persisted migration audit attempt closure is inconsistent")
+
+    old_trial_id = old_active.expected_trial_ids[0]
+    new_trial_id = active.expected_trial_ids[0]
+    old_call_id = call_id_for(old_trial_id, 1)
+    new_call_id = call_id_for(new_trial_id, 1)
+    old_reservation = old_ledger[0]
+    if any(
+        (
+            record.call_id,
+            record.trial_id,
+            record.run_id,
+            record.attempt,
+            record.revision,
+            record.predecessor_evidence_sha256,
+        )
+        != (
+            old_call_id,
+            old_trial_id,
+            old_active.run_id,
+            1,
+            revision,
+            "" if revision == 0 else old_evidence[0].evidence_sha256,
+        )
+        or record.authoritative_digest() != record.evidence_sha256
+        for revision, record in enumerate(old_evidence)
+    ) or (
+        old_reservation.call_id,
+        old_reservation.trial_id,
+        old_reservation.run_id,
+        old_reservation.cohort,
+    ) != (old_call_id, old_trial_id, old_active.run_id, old_active.cohort):
+        raise RuntimeError("persisted predecessor attempt authority is inconsistent")
+
+    expected_evidence = [
+        AttemptEvidence.capture(
+            call_id=new_call_id,
+            trial_id=new_trial_id,
+            run_id=active.run_id,
+            attempt=1,
+            provider_evidence=old_evidence[0].provider_evidence,
+        )
+    ]
+    expected_evidence.append(expected_evidence[0].revise(old_evidence[1].provider_evidence))
+    sample = list(tasks[active.protocol_id].dataset.samples)[0]
+    old_sample = list(tasks[old_active.protocol_id].dataset.samples)[0]
+    expected_old_request_sha256 = request_sha256_for(
+        call_id=old_call_id,
+        trial_id=old_trial_id,
+        run_id=old_active.run_id,
+        attempt=1,
+        prompt_hash=old_sample.metadata["prompt_hash"],
+        model_payload_sha256=old_sample.metadata["model_payload_sha256"],
+    )
+    expected_request = RequestStartedRecord(
+        call_id=new_call_id,
+        trial_id=new_trial_id,
+        run_id=active.run_id,
+        attempt=1,
+        request_sha256=request_sha256_for(
+            call_id=new_call_id,
+            trial_id=new_trial_id,
+            run_id=active.run_id,
+            attempt=1,
+            prompt_hash=sample.metadata["prompt_hash"],
+            model_payload_sha256=sample.metadata["model_payload_sha256"],
+        ),
+        started_at=old_requests[0].started_at,
+    )
+    reconciled = reconciled_attempt_records(
+        run=active,
+        sample=sample,
+        protocol=get_protocol(active.protocol_id),
+        evidence=expected_evidence[-1],
+        evidence_projector=project_provider_evidence,
+        reservation_amount=old_reservation.amount_usd,
+        reserved_at=old_reservation.at,
+        settled_at=audit.get("migrated_at"),
+    )
+    initial_projection = project_attempt(
+        expected_evidence[0].provider_evidence,
+        active,
+        project_provider_evidence,
+    )
+    expected_trial = reconciled.trial
+    expected_run = reconciled_run_manifest(
+        replace(
+            active,
+            status="planned",
+            attempts=0,
+            token_usage={},
+            latency_ms=0.0,
+            cost_usd=0.0,
+        ),
+        calls=[reconciled.call],
+        trials=[expected_trial] if expected_trial is not None else [],
+    )
+    expected_active_audit = {
+        "old_run_id": old_active.run_id,
+        "new_run_id": active.run_id,
+        "old_trial_id": old_trial_id,
+        "new_trial_id": new_trial_id,
+        "old_call_id": old_call_id,
+        "new_call_id": new_call_id,
+        "old_request_sha256": old_requests[0].request_sha256,
+        "new_request_sha256": expected_request.request_sha256,
+        "old_evidence_sha256": [record.evidence_sha256 for record in old_evidence],
+        "new_evidence_sha256": [record.evidence_sha256 for record in expected_evidence],
+        "new_call_record_sha256": canonical_sha256(reconciled.call.to_dict()),
+        "provider_evidence_sha256": [
+            canonical_sha256(record.provider_evidence.to_dict()) for record in old_evidence
+        ],
+        "observed_cost_usd": reconciled.projection.observed_cost_usd,
+    }
+    if (
+        old_requests[0].call_id != old_call_id
+        or old_requests[0].trial_id != old_trial_id
+        or old_requests[0].run_id != old_active.run_id
+        or old_requests[0].attempt != 1
+        or old_requests[0].request_sha256 != expected_old_request_sha256
+        or requests != [expected_request]
+        or evidence != expected_evidence
+        or calls != [reconciled.call.to_dict()]
+        or expected_trial is None
+        or expected_trial.parse_status != "valid"
+        or trials != [expected_trial.to_dict()]
+        or ledger != list(reconciled.ledger_events)
+        or active != expected_run
+        or reconciled.projection.status != "complete"
+        or reconciled.projection.error_type
+        or initial_projection.status != "accounting_unknown"
+        or initial_projection.error_type != "missing_generation_accounting"
+        or SpendLedger._totals(ledger, active.cohort)
+        != (reconciled.projection.observed_cost_usd, 0.0)
+        or active_audit != expected_active_audit
+        or audit.get("predecessor_call_record_sha256")
+        != [canonical_sha256(row) for row in old_calls]
+    ):
+        raise RuntimeError("persisted migration audit attempt closure is inconsistent")
+    active_names = {path.name for path in active_dir.iterdir()}
+    if active_names != {
+        ".run.lock",
+        "calls.jsonl",
+        "request-started.jsonl",
+        "run.json",
+        "transcripts.jsonl",
+        "trials.jsonl",
+    } or any(
+        {path.name for path in (state_root / run.run_id).iterdir()} != {".run.lock", "run.json"}
+        for run in new_runs.values()
+        if run.run_id != active.run_id
+    ):
+        raise RuntimeError("persisted migration state contains noncanonical run files")
 
 
 def _recover_interrupted_migration(
@@ -971,54 +1174,43 @@ def _write_staged_state(
         active_run,
         project_openrouter_evidence,
     )
-    projection = project_attempt(
-        revised_evidence.provider_evidence,
-        active_run,
-        project_openrouter_evidence,
-    )
     if (
         first_projection.status != "accounting_unknown"
         or first_projection.error_type != "missing_generation_accounting"
-        or projection.status != "complete"
-        or projection.error_type
-        or projection.observed_cost_usd != expected_cost_usd
     ):
-        raise RuntimeError("retained provider evidence does not reproject to the exact completion")
+        raise RuntimeError("retained initial evidence does not reproject to unknown accounting")
     if any(
         before.provider_evidence != after.provider_evidence
         for before, after in zip(old_evidence, (new_evidence, revised_evidence), strict=True)
     ):
         raise RuntimeError("migration changed retained raw provider evidence")
-    call = call_record_from_projection(
-        call_id=new_call_id,
-        trial_id=new_trial_id,
-        run=active_run,
-        attempt=1,
-        reservation=old_reservation.amount_usd,
-        projection=projection,
-        evidence=revised_evidence,
-    )
-    trial = trial_record_from_projection(
+    migrated_at = audit["migrated_at"]
+    reconciled = reconciled_attempt_records(
         run=active_run,
         sample=sample,
         protocol=get_protocol(active_protocol),
-        projection=projection,
         evidence=revised_evidence,
-        attempt=1,
+        evidence_projector=project_openrouter_evidence,
+        reservation_amount=old_reservation.amount_usd,
+        reserved_at=old_reservation.at,
+        settled_at=migrated_at,
     )
+    projection = reconciled.projection
+    if (
+        projection.status != "complete"
+        or projection.error_type
+        or projection.observed_cost_usd != expected_cost_usd
+    ):
+        raise RuntimeError("retained provider evidence does not reproject to the exact completion")
+    call = reconciled.call
+    trial = reconciled.trial
+    assert trial is not None
     if trial.parse_status != "valid":
         raise RuntimeError("retained first response is not a valid scored trial")
-    migrated_active = replace(
+    migrated_active = reconciled_run_manifest(
         active_run,
-        status="probed",
-        attempts=1,
-        token_usage={
-            "input_tokens": projection.input_tokens,
-            "output_tokens": projection.output_tokens,
-            "reasoning_tokens": projection.reasoning_tokens,
-        },
-        latency_ms=projection.latency_ms,
-        cost_usd=projection.observed_cost_usd,
+        calls=[call],
+        trials=[trial],
     )
     runs = {**runs, active_protocol: migrated_active}
     for protocol_id, run in runs.items():
@@ -1030,31 +1222,8 @@ def _write_staged_state(
         append_jsonl_fsynced(stage / run.run_id / "transcripts.jsonl", revised_evidence.to_dict())
         append_jsonl_fsynced(stage / run.run_id / "calls.jsonl", call.to_dict())
         append_jsonl_fsynced(stage / run.run_id / "trials.jsonl", trial.to_dict())
-    migrated_at = audit["migrated_at"]
-    append_jsonl_fsynced(
-        stage / "spend-ledger.jsonl",
-        LedgerEvent(
-            event_type="reserved",
-            call_id=new_call_id,
-            trial_id=new_trial_id,
-            run_id=migrated_active.run_id,
-            cohort=migrated_active.cohort,
-            amount_usd=old_reservation.amount_usd,
-            at=old_reservation.at,
-        ).to_dict(),
-    )
-    append_jsonl_fsynced(
-        stage / "spend-ledger.jsonl",
-        LedgerEvent(
-            event_type="settled",
-            call_id=new_call_id,
-            trial_id=new_trial_id,
-            run_id=migrated_active.run_id,
-            cohort=migrated_active.cohort,
-            amount_usd=projection.observed_cost_usd,
-            at=migrated_at,
-        ).to_dict(),
-    )
+    for event in reconciled.ledger_events:
+        append_jsonl_fsynced(stage / "spend-ledger.jsonl", event.to_dict())
     audit["active_attempt"] = {
         "old_run_id": old_run.run_id,
         "new_run_id": migrated_active.run_id,

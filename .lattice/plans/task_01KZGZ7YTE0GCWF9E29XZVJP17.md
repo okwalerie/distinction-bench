@@ -492,6 +492,23 @@ request/evidence/call hashes, scored first trial, exact settlement, one retained
 attempt, and nineteen remaining. corruption fails closed while retaining journal and
 backup. keep the live release untouched through independent rereview.
 
+## canonical migration semantic rereview — ev_01KZJ3N1AZD10JW6435DKG5KFT
+
+the third review found that committed recovery still treated the twenty trial ids as
+unordered sets and checked only selected retained-attempt fields. reconstruct each
+old/new run pair by protocol, independently derive its ordered expected trial ids from
+the frozen sample task, zip those authoritative sequences, and require the persisted
+run and trial maps to equal the resulting dictionaries exactly.
+
+move provider-evidence closure into ordinary orchestration as one pure derivation of
+the canonical call, scored trial, reserve/settle events, and operational run aggregate.
+normal reconciliation, staged migration construction, and committed recovery must all
+reuse it. recovery rekeys the unchanged predecessor evidence chain, projects both
+revisions with the current projector, and compares the complete request, response,
+score/correctness, hashes, token counts, latency, cost, error, ids, ledger pair, and
+aggregate. tests recompute every outer digest around both an inactive positional-map
+swap and a coordinated forged attempt graph; both must still fail closed.
+
 ## canonical migration review repair — ev_01KZHZR7TDT9ZE1NHVPWZMRXC2
 
 the first canonical-migration review correctly blocked live mutation on three
@@ -722,6 +739,8 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
+
+## Reset 2026-08-09 by agent:codex-root
 
 ## Reset 2026-08-09 by agent:codex-root
 

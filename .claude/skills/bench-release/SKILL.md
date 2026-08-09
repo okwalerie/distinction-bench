@@ -111,7 +111,10 @@ explicitly. only the tracked live mismatch event
 `ev_01KZHVJWTQAXJEACS9BTVN34Z9` authorizes this one migration.
 cross-directory migration renames must durably sync both changed parent directories.
 committed recovery must validate the persisted audit and complete one-of-twenty state,
-not merely the journal's top-level state and release digests.
+not merely the journal's top-level state and release digests. reconstruct the exact
+trial map by protocol and frozen sample order; then reproject the retained evidence
+through normal reconciliation and require the complete call, scored trial,
+reserve/settle events, and run aggregates to match exactly.
 
 ## probe, run, and resume
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -24,6 +24,7 @@ from lofbench.provider_evidence import (
 from lofbench.records import (
     AttemptEvidence,
     CallRecord,
+    LedgerEvent,
     RequestStartedRecord,
     RunManifest,
     RunStatus,
@@ -205,6 +206,129 @@ def trial_record_from_projection(
     )
 
 
+@dataclass(frozen=True)
+class ReconciledAttemptRecords:
+    """Canonical durable projections for one provider-evidenced attempt."""
+
+    projection: AttemptProjection
+    call: CallRecord
+    trial: TrialRecord | None
+    ledger_events: tuple[LedgerEvent, ...]
+
+
+def reconciled_attempt_records(
+    *,
+    run: RunManifest,
+    sample: Sample,
+    protocol: ProtocolSpec,
+    evidence: AttemptEvidence,
+    evidence_projector: EvidenceProjector,
+    reservation_amount: float,
+    reserved_at: str,
+    settled_at: str | None,
+) -> ReconciledAttemptRecords:
+    """Reconstruct the sole valid call, trial, and ledger closure for evidence."""
+    trial_id = trial_id_for(
+        run.run_id,
+        sample.metadata["abstract_form_id"],
+        sample.metadata["dialect_id"],
+    )
+    call_id = call_id_for(trial_id, evidence.attempt)
+    if (
+        (evidence.call_id, evidence.trial_id, evidence.run_id) != (call_id, trial_id, run.run_id)
+        or evidence.authoritative_digest() != evidence.evidence_sha256
+        or not math.isfinite(reservation_amount)
+        or reservation_amount < 0
+        or not reserved_at
+        or settled_at == ""
+    ):
+        raise RuntimeError("attempt evidence cannot produce an authoritative reconciliation")
+    projection = project_attempt(evidence.provider_evidence, run, evidence_projector)
+    call = call_record_from_projection(
+        call_id=call_id,
+        trial_id=trial_id,
+        run=run,
+        attempt=evidence.attempt,
+        reservation=reservation_amount,
+        projection=projection,
+        evidence=evidence,
+    )
+    trial = (
+        trial_record_from_projection(
+            run=run,
+            sample=sample,
+            protocol=protocol,
+            projection=projection,
+            evidence=evidence,
+            attempt=evidence.attempt,
+        )
+        if projection.status == "complete"
+        else None
+    )
+    ledger_events = [
+        LedgerEvent(
+            event_type="reserved",
+            call_id=call_id,
+            trial_id=trial_id,
+            run_id=run.run_id,
+            cohort=run.cohort,
+            amount_usd=reservation_amount,
+            at=reserved_at,
+        )
+    ]
+    if settled_at is not None:
+        ledger_events.append(
+            LedgerEvent(
+                event_type="settled",
+                call_id=call_id,
+                trial_id=trial_id,
+                run_id=run.run_id,
+                cohort=run.cohort,
+                amount_usd=projection.observed_cost_usd,
+                at=settled_at,
+            )
+        )
+    return ReconciledAttemptRecords(
+        projection=projection,
+        call=call,
+        trial=trial,
+        ledger_events=tuple(ledger_events),
+    )
+
+
+def reconciled_run_manifest(
+    run: RunManifest,
+    *,
+    calls: list[CallRecord],
+    trials: list[TrialRecord],
+    status_override: RunStatus | None = None,
+) -> RunManifest:
+    """Derive operational run state from its effective calls and scored trials."""
+    call_ids = [record.call_id for record in calls]
+    trial_ids = [record.trial_id for record in trials]
+    if (
+        len(set(call_ids)) != len(call_ids)
+        or len(set(trial_ids)) != len(trial_ids)
+        or any(record.run_id != run.run_id for record in calls)
+        or any(record.run_id != run.run_id for record in trials)
+        or not set(trial_ids) <= set(run.expected_trial_ids)
+    ):
+        raise RuntimeError("run records cannot produce an authoritative aggregate")
+    complete = set(trial_ids) == set(run.expected_trial_ids)
+    observed = bool(calls or trials)
+    return replace(
+        run,
+        status=status_override or ("complete" if complete else "probed" if observed else "planned"),
+        attempts=len(calls),
+        token_usage={
+            key: sum(getattr(record, key) for record in calls)
+            for key in ("input_tokens", "output_tokens", "reasoning_tokens")
+        },
+        latency_ms=sum(record.latency_ms for record in calls),
+        cost_usd=sum(record.observed_cost_usd for record in calls),
+    )
+
+
 class RunOrchestrator:
     def __init__(
         self,
@@ -250,34 +374,22 @@ class RunOrchestrator:
         )
         return max(0.01, estimate * 1.25)
 
-    def _project(
-        self,
-        evidence: ProviderEvidenceEnvelope,
-        run: RunManifest,
-    ) -> AttemptProjection:
-        return project_attempt(evidence, run, self.evidence_projector)
-
     def _write_run_state(
         self,
         run: RunManifest,
         *,
         status_override: RunStatus | None = None,
     ) -> RunManifest:
-        trials = read_jsonl(self.state_dir / "trials.jsonl")
-        calls = _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
-        complete = {row["trial_id"] for row in trials} == set(run.expected_trial_ids)
-        observed = bool(calls or trials)
-        updated = replace(
+        trials = [TrialRecord(**row) for row in read_jsonl(self.state_dir / "trials.jsonl")]
+        calls = [
+            CallRecord(**row)
+            for row in _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
+        ]
+        updated = reconciled_run_manifest(
             run,
-            status=status_override
-            or ("complete" if complete else "probed" if observed else "planned"),
-            attempts=len(calls),
-            token_usage={
-                key: sum(row[key] for row in calls)
-                for key in ("input_tokens", "output_tokens", "reasoning_tokens")
-            },
-            latency_ms=sum(row["latency_ms"] for row in calls),
-            cost_usd=sum(row["observed_cost_usd"] for row in calls),
+            calls=calls,
+            trials=trials,
+            status_override=status_override,
         )
         write_json_atomic(self.state_dir / "run.json", updated.to_dict())
         self._observe("run_manifest")
@@ -431,16 +543,18 @@ class RunOrchestrator:
                 ):
                     raise RuntimeError("run evidence identity is invalid")
 
-                projection = self._project(evidence.provider_evidence, run)
-                derived_call = call_record_from_projection(
-                    call_id=call_id,
-                    trial_id=trial_id,
+                reconciled = reconciled_attempt_records(
                     run=run,
-                    attempt=attempt,
-                    reservation=reservation,
-                    projection=projection,
+                    sample=samples_by_trial[trial_id],
+                    protocol=protocol,
                     evidence=evidence,
+                    evidence_projector=self.evidence_projector,
+                    reservation_amount=reservation,
+                    reserved_at=events[0].at,
+                    settled_at=events[1].at if len(events) == 2 else None,
                 )
+                projection = reconciled.projection
+                derived_call = reconciled.call
                 if persisted_call is None or (
                     persisted_call.get("evidence_sha256") != evidence.evidence_sha256
                 ):
@@ -488,18 +602,12 @@ class RunOrchestrator:
                     self._observe("settled", call_id)
                     changed = True
                     break
-                if events[1].amount_usd != projection.observed_cost_usd:
+                if tuple(events) != reconciled.ledger_events:
                     raise RuntimeError("run settlement contradicts its provider evidence")
 
                 if projection.status == "complete":
-                    trial = trial_record_from_projection(
-                        run=run,
-                        sample=samples_by_trial[trial_id],
-                        protocol=protocol,
-                        projection=projection,
-                        evidence=evidence,
-                        attempt=attempt,
-                    )
+                    trial = reconciled.trial
+                    assert trial is not None
                     persisted_trial = trials_by_id.get(trial_id)
                     if persisted_trial is None:
                         append_jsonl_fsynced(self.state_dir / "trials.jsonl", trial.to_dict())

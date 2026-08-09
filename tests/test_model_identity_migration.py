@@ -28,7 +28,11 @@ from dbench.provider_evidence import (
     project_openrouter_evidence,
 )
 from dbench.publication import open_release
-from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH, SUITE_REGISTRY_GIT_PATH
+from lofbench.authority import (
+    PROTOCOL_REGISTRY_GIT_PATH,
+    SUITE_REGISTRY_GIT_PATH,
+    canonical_sha256,
+)
 from lofbench.orchestration import RunAlreadyRunningError, call_record_from_projection
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
@@ -619,6 +623,47 @@ class _ProcessDeath(BaseException):
     pass
 
 
+def _committed_recovery_state(repository, predecessor, release, state):
+    def die(candidate):
+        if candidate == "journal:committed":
+            raise _ProcessDeath(candidate)
+
+    with pytest.raises(_ProcessDeath, match="journal:committed"):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            transition_observer=die,
+        )
+    journal_path = state.parent / ".state.canonical-model-migration.json"
+    journal = json.loads(journal_path.read_text())
+    audit_path = Path(journal["backup"]) / "migration-audit.json"
+    return journal_path, journal, audit_path, json.loads(audit_path.read_text())
+
+
+def _republish_forged_committed_authority(
+    *,
+    release,
+    state,
+    journal_path,
+    journal,
+    audit_path,
+    audit,
+):
+    write_json_atomic(audit_path, audit)
+    write_json_atomic(state / "model-identity-migration.json", audit)
+    manifest = json.loads((release / "release.json").read_text())
+    manifest["working_state_migrations"][-1] = audit
+    write_json_atomic(release / "release.json", manifest)
+    journal["migration_audit_sha256"] = sha256(audit_path.read_bytes()).hexdigest()
+    journal["candidate_state_sha256"] = migration._state_digest(state)
+    journal["candidate_release_sha256"] = sha256(
+        (release / "release.json").read_bytes()
+    ).hexdigest()
+    write_json_atomic(journal_path, journal)
+
+
 @pytest.mark.parametrize(
     "transition",
     [
@@ -714,6 +759,94 @@ def test_committed_recovery_rejects_corrupt_persisted_audit(
         journal["migration_audit_sha256"] = sha256(audit_path.read_bytes()).hexdigest()
         write_json_atomic(journal_path, journal)
 
+    with pytest.raises(RuntimeError, match="committed migration journal is inconsistent"):
+        _salvage(repository, predecessor, release, state)
+    assert journal_path.is_file()
+    assert audit_path.is_file()
+
+
+@pytest.mark.parametrize("forgery", ["inactive_trial_map_swap", "attempt_closure"])
+def test_committed_recovery_rejects_coordinated_semantic_forgery(tmp_path, forgery):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    journal_path, journal, audit_path, audit = _committed_recovery_state(
+        repository,
+        predecessor,
+        release,
+        state,
+    )
+
+    if forgery == "inactive_trial_map_swap":
+        old_active_id = audit["active_attempt"]["old_run_id"]
+        inactive_old_ids = [run_id for run_id in audit["run_id_map"] if run_id != old_active_id]
+        first, second = (
+            next(
+                trial_id
+                for trial_id in audit["trial_id_map"]
+                if trial_id.startswith("trial_")
+                and trial_id
+                in json.loads(
+                    (Path(journal["backup"]) / "state" / run_id / "run.json").read_text()
+                )["expected_trial_ids"]
+            )
+            for run_id in inactive_old_ids[:2]
+        )
+        audit["trial_id_map"][first], audit["trial_id_map"][second] = (
+            audit["trial_id_map"][second],
+            audit["trial_id_map"][first],
+        )
+    else:
+        active = audit["active_attempt"]
+        run_dir = state / active["new_run_id"]
+        call_path = run_dir / "calls.jsonl"
+        trial_path = run_dir / "trials.jsonl"
+        ledger_path = state / "spend-ledger.jsonl"
+        run_path = run_dir / "run.json"
+        call = read_jsonl(call_path)[0]
+        call.update(
+            {
+                "reserved_cost_usd": 0.02,
+                "observed_cost_usd": COST + 0.001,
+                "input_tokens": call["input_tokens"] + 7,
+                "latency_ms": call["latency_ms"] + 123.0,
+                "response_sha256": "f" * 64,
+                "error_type": "forged_completion",
+            }
+        )
+        call_path.write_text(json.dumps(call) + "\n")
+        trial = read_jsonl(trial_path)[0]
+        trial.update(
+            {
+                "response_text": '{"value":"marked"}',
+                "prediction": "marked",
+                "correct": False,
+                "prompt_hash": "e" * 64,
+                "observed_cost_usd": call["observed_cost_usd"],
+                "input_tokens": call["input_tokens"],
+                "latency_ms": call["latency_ms"],
+                "error_type": call["error_type"],
+            }
+        )
+        trial_path.write_text(json.dumps(trial) + "\n")
+        ledger = read_jsonl(ledger_path)
+        ledger[0]["amount_usd"] = call["reserved_cost_usd"]
+        ledger[1]["amount_usd"] = call["observed_cost_usd"]
+        ledger_path.write_text("".join(json.dumps(row) + "\n" for row in ledger))
+        run = json.loads(run_path.read_text())
+        run["token_usage"]["input_tokens"] = call["input_tokens"]
+        run["latency_ms"] = call["latency_ms"]
+        run["cost_usd"] = call["observed_cost_usd"]
+        write_json_atomic(run_path, run)
+        active["new_call_record_sha256"] = canonical_sha256(call)
+        active["observed_cost_usd"] = call["observed_cost_usd"]
+
+    _republish_forged_committed_authority(
+        release=release,
+        state=state,
+        journal_path=journal_path,
+        journal=journal,
+        audit_path=audit_path,
+        audit=audit,
+    )
     with pytest.raises(RuntimeError, match="committed migration journal is inconsistent"):
         _salvage(repository, predecessor, release, state)
     assert journal_path.is_file()

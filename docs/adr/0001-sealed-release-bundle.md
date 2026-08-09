@@ -138,8 +138,12 @@ an arbitrary or missing event id has no authority.
 each migration rename fsyncs every distinct source and destination parent directory,
 including rollback renames across the recovery directory boundary. committed recovery
 also re-closes the persisted audit against its digest, exact identity event, both
-release authorities, all old/new run and trial mappings, retained request/evidence/call
-hashes, and the one-attempt/nineteen-remaining ledger state before removing the journal.
+release authorities, the exact protocol-matched positional old/new run and trial maps,
+and the one-attempt/nineteen-remaining state before removing the journal. retained raw
+evidence is reprojected with the current projector through the same reconciliation
+derivation used by ordinary execution; recovery requires exact request, call, scored
+trial, reserve/settle pair, and run aggregates rather than trusting recorded hashes or
+set membership.
 
 ## consequences
 

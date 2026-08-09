@@ -8,7 +8,7 @@
       "repo": null
     }
   ],
-  "comment_count": 29,
+  "comment_count": 31,
   "complexity": null,
   "created_at": "2026-08-08T15:18:11Z",
   "created_by": "agent:codex-root",
@@ -80,20 +80,25 @@
       "id": "ev_01KZJ28A489CWBTWVRMXYXSS4M",
       "role": "review",
       "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJ3N1AZD10JW6435DKG5KFT",
+      "role": "review",
+      "source_type": "comment"
     }
   ],
   "id": "task_01KZGZ7YTE0GCWF9E29XZVJP17",
-  "last_event_id": "ev_01KZJ39PWX9C5XAVY7ZT34E4VN",
-  "last_status_changed_at": "2026-08-09T01:48:17Z",
+  "last_event_id": "ev_01KZJ51WEH63HTP9MP97MWBEDK",
+  "last_status_changed_at": "2026-08-09T02:18:57Z",
   "priority": "medium",
   "relationships_out": [],
-  "reopened_count": 13,
+  "reopened_count": 14,
   "schema_version": 1,
   "short_id": "DB-14",
   "status": "review",
   "tags": null,
   "title": "ship the public v1 benchmark, gallery, and model sweep",
   "type": "task",
-  "updated_at": "2026-08-09T01:48:17Z",
+  "updated_at": "2026-08-09T02:18:57Z",
   "urgency": null
 }
