@@ -23,7 +23,13 @@ from dbench.openrouter import EndpointSelection
 from dbench.provider_evidence import project_openrouter_evidence, project_provider_evidence
 from dbench.release_policy import validate_sample_release
 from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
-from lofbench.authority import authority_from_git, canonical_sha256
+from lofbench.authority import (
+    AuthorityManifest,
+    authority_from_git,
+    canonical_sha256,
+    derive_run_authority,
+    verify_authority_copies,
+)
 from lofbench.orchestration import (
     RunOrchestrator,
     call_record_from_projection,
@@ -290,6 +296,7 @@ def _validate_committed_migration_audit(
     release_root: Path,
     state_root: Path,
     backup: Path,
+    repository_root: Path | None,
 ) -> None:
     audit_path = backup / "migration-audit.json"
     predecessor_release_path = backup / "predecessor-release.json"
@@ -306,6 +313,39 @@ def _validate_committed_migration_audit(
         release_root / "release.json",
         label="candidate release",
     )
+    try:
+        predecessor_authority = AuthorityManifest.from_dict(predecessor_release["authority"])
+        candidate_authority = AuthorityManifest.from_dict(candidate_release["authority"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("migration release authority manifest is invalid") from exc
+    suite_bytes = (release_root / "suite.json").read_bytes()
+    protocol_bytes = (release_root / "protocols.json").read_bytes()
+    predecessor_authority_sha256 = canonical_sha256(predecessor_authority.to_dict())
+    candidate_authority_sha256 = canonical_sha256(candidate_authority.to_dict())
+    if (
+        predecessor_authority.to_dict() != predecessor_release.get("authority")
+        or candidate_authority.to_dict() != candidate_release.get("authority")
+        or predecessor_authority.source_commit != predecessor_release.get("repository_commit")
+        or candidate_authority.source_commit != candidate_release.get("repository_commit")
+        or audit.get("predecessor_authority_sha256") != predecessor_authority_sha256
+        or audit.get("authority_sha256") != candidate_authority_sha256
+        or journal.get("predecessor_authority_sha256") != predecessor_authority_sha256
+        or journal.get("candidate_authority_sha256") != candidate_authority_sha256
+    ):
+        raise RuntimeError("migration authority-manifest digests are inconsistent")
+    verify_authority_copies(
+        predecessor_authority,
+        suite_bytes=suite_bytes,
+        protocol_bytes=protocol_bytes,
+        repository_root=repository_root,
+    )
+    verify_authority_copies(
+        candidate_authority,
+        suite_bytes=suite_bytes,
+        protocol_bytes=protocol_bytes,
+        repository_root=repository_root,
+    )
+
     expected_event_authority = {
         "actor": IDENTITY_EVENT_ACTOR,
         "body_sha256": IDENTITY_EVENT_BODY_SHA256,
@@ -369,6 +409,36 @@ def _validate_committed_migration_audit(
     }
     old_by_protocol = {run.protocol_id: run for run in old_runs.values()}
     new_by_protocol = {run.protocol_id: run for run in new_runs.values()}
+    if (
+        set(old_by_protocol) != set(SAMPLE_PROTOCOLS)
+        or len(old_by_protocol) != len(old_runs)
+        or set(new_by_protocol) != set(SAMPLE_PROTOCOLS)
+        or len(new_by_protocol) != len(new_runs)
+    ):
+        raise RuntimeError("persisted migration run protocols are inconsistent")
+    verified_suite = load_suite(path=release_root / "suite.json")
+    try:
+        rederived_authorities = {
+            run.run_id: derive_run_authority(
+                suite_bytes=suite_bytes,
+                protocol_bytes=protocol_bytes,
+                form_ids=tuple(verified_suite.form_sets[run.form_set]),
+                dialect_id=run.dialect_id,
+                protocol_id=run.protocol_id,
+                execution_spec=execution_spec_identity(run.to_dict()),
+                catalog_retrieved_at=run.catalog_retrieved_at,
+                catalog_row=run.catalog_row,
+            ).to_dict()
+            for run in [*old_runs.values(), *new_runs.values()]
+        }
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("persisted migration run selection lacks verified authority") from exc
+    if any(
+        run.suite_version != verified_suite.suite_version
+        or run.authority != rederived_authorities.get(run.run_id)
+        for run in [*old_runs.values(), *new_runs.values()]
+    ):
+        raise RuntimeError("persisted migration run authority is inconsistent")
     tasks = {
         protocol_id: _frozen_identity_task(
             suite_path=release_root / "suite.json",
@@ -416,10 +486,6 @@ def _validate_committed_migration_audit(
             "spend-ledger.jsonl.lock",
         }
         or {path.name for path in state_root.glob("run_*")} != set(new_ids)
-        or set(old_by_protocol) != set(SAMPLE_PROTOCOLS)
-        or len(old_by_protocol) != len(old_runs)
-        or set(new_by_protocol) != set(SAMPLE_PROTOCOLS)
-        or len(new_by_protocol) != len(new_runs)
         or not isinstance(predecessor_run_sha256, dict)
         or predecessor_run_sha256
         != {run_id: canonical_sha256(run.to_dict()) for run_id, run in old_runs.items()}
@@ -673,6 +739,7 @@ def _recover_interrupted_migration(
     journal_path: Path,
     release_root: Path,
     state_root: Path,
+    repository_root: Path | None = None,
 ) -> str | None:
     """Recover one journaled process death while the lifecycle lock is held."""
     if not journal_path.exists():
@@ -720,6 +787,7 @@ def _recover_interrupted_migration(
                 release_root=release_root,
                 state_root=state_root,
                 backup=backup,
+                repository_root=repository_root,
             )
         except Exception as exc:
             raise RuntimeError(
@@ -778,6 +846,7 @@ def recover_working_model_identity_transaction(
     *,
     release_root: Path,
     state_root: Path,
+    repository_root: Path | None = None,
 ) -> str | None:
     """Recover a journaled migration before credentials or catalog access."""
     with state_lifecycle_lock(state_root, blocking=False):
@@ -785,6 +854,7 @@ def recover_working_model_identity_transaction(
             journal_path=_journal_path(state_root),
             release_root=release_root,
             state_root=state_root,
+            repository_root=repository_root,
         )
 
 
@@ -1268,6 +1338,7 @@ def salvage_working_model_identity(
             journal_path=journal_path,
             release_root=release_root,
             state_root=state_root,
+            repository_root=repository_root,
         )
         if recovered_phase is not None:
             action = "finalized" if recovered_phase == "committed" else "rolled back"
@@ -1387,6 +1458,8 @@ def salvage_working_model_identity(
             "repository_commit": current_commit,
             "predecessor_authority": old_manifest["authority"],
             "authority": source_authority.to_dict(),
+            "predecessor_authority_sha256": canonical_sha256(old_manifest["authority"]),
+            "authority_sha256": canonical_sha256(source_authority.to_dict()),
             "predecessor_release_manifest_sha256": _file_sha256(release_root / "release.json"),
             "predecessor_state_sha256": old_state_sha256,
             "predecessor_run_manifest_sha256": {
@@ -1438,6 +1511,8 @@ def salvage_working_model_identity(
             "backup": str(backup),
             "predecessor_release_sha256": sha256(old_release_bytes).hexdigest(),
             "predecessor_state_sha256": old_state_sha256,
+            "predecessor_authority_sha256": audit["predecessor_authority_sha256"],
+            "candidate_authority_sha256": audit["authority_sha256"],
             "candidate_release_sha256": "",
             "candidate_state_sha256": "",
             "migration_audit_sha256": "",
@@ -1532,6 +1607,7 @@ def salvage_working_model_identity(
                 release_root=release_root,
                 state_root=state_root,
                 backup=backup,
+                repository_root=repository_root,
             )
             journal_path.unlink()
             _fsync_directory(journal_path.parent)
@@ -1541,6 +1617,7 @@ def salvage_working_model_identity(
                     journal_path=journal_path,
                     release_root=release_root,
                     state_root=state_root,
+                    repository_root=repository_root,
                 )
             except Exception as rollback_error:
                 raise ExceptionGroup(

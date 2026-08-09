@@ -509,6 +509,24 @@ score/correctness, hashes, token counts, latency, cost, error, ids, ledger pair,
 aggregate. tests recompute every outer digest around both an inactive positional-map
 swap and a coordinated forged attempt graph; both must still fail closed.
 
+## canonical migration authority rereview — ev_01KZJ5K7GT5S9JWY6NFPZERW9Y
+
+the fourth review found that even exact positional maps are meaningless if recovery
+lets candidate registry copies define their own order before proving their authority.
+committed recovery must load both predecessor and candidate `AuthorityManifest`
+objects, bind their canonical digests through both journal and audit, and call the
+existing `verify_authority_copies` for each before parsing suite/protocol content. pass
+the repository when available so both manifests are also proved against their exact
+recorded git trees.
+
+after that boundary, rederive every predecessor and candidate `RunAuthority` from the
+verified suite cells and form order, verified protocol bytes, catalog row/retrieval,
+execution spec, and source provenance. only those rederived authorities may supply run
+and trial identities for the exact map check. an adversarial committed-recovery test
+rewrites suite order, protocol content, candidate runs, maps, manifest/audit authority
+digests, and journal outer digests coherently; git-backed authority-copy verification
+must reject it before registry loading or run parsing.
+
 ## canonical migration review repair — ev_01KZHZR7TDT9ZE1NHVPWZMRXC2
 
 the first canonical-migration review correctly blocked live mutation on three
@@ -739,6 +757,8 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
+
+## Reset 2026-08-09 by agent:codex-root
 
 ## Reset 2026-08-09 by agent:codex-root
 

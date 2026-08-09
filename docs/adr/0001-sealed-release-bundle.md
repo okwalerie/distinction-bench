@@ -137,8 +137,12 @@ identity event—id, actor, type, body, and body digest—from the current sourc
 an arbitrary or missing event id has no authority.
 each migration rename fsyncs every distinct source and destination parent directory,
 including rollback renames across the recovery directory boundary. committed recovery
-also re-closes the persisted audit against its digest, exact identity event, both
-release authorities, the exact protocol-matched positional old/new run and trial maps,
+first loads both predecessor and candidate `AuthorityManifest` values, binds their
+canonical digests through the journal and audit, and calls `verify_authority_copies`
+against the frozen registry bytes and each recorded git tree when the repository is
+available. only then may it parse registry content. every old/new `RunAuthority` is
+rederived from those verified bytes, selected cells and protocol, catalog, and
+execution spec before recovery re-closes the exact protocol-matched positional maps,
 and the one-attempt/nineteen-remaining state before removing the journal. retained raw
 evidence is reprojected with the current projector through the same reconciliation
 derivation used by ordinary execution; recovery requires exact request, call, scored

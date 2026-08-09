@@ -112,9 +112,12 @@ explicitly. only the tracked live mismatch event
 cross-directory migration renames must durably sync both changed parent directories.
 committed recovery must validate the persisted audit and complete one-of-twenty state,
 not merely the journal's top-level state and release digests. reconstruct the exact
-trial map by protocol and frozen sample order; then reproject the retained evidence
-through normal reconciliation and require the complete call, scored trial,
-reserve/settle events, and run aggregates to match exactly.
+trial map by protocol and frozen sample order only after both predecessor/candidate
+authority manifests and registry copies pass `verify_authority_copies` (including git
+proof when the repository is available) and every run authority is rederived from
+those verified bytes. then reproject the retained evidence through normal
+reconciliation and require the complete call, scored trial, reserve/settle events,
+and run aggregates to match exactly.
 
 ## probe, run, and resume
 

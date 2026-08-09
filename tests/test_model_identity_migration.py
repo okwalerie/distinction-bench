@@ -32,13 +32,26 @@ from lofbench.authority import (
     PROTOCOL_REGISTRY_GIT_PATH,
     SUITE_REGISTRY_GIT_PATH,
     canonical_sha256,
+    derive_run_authority,
 )
 from lofbench.orchestration import RunAlreadyRunningError, call_record_from_projection
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
-from lofbench.records import AttemptEvidence, LedgerEvent, RequestStartedRecord
+from lofbench.records import (
+    AttemptEvidence,
+    LedgerEvent,
+    RequestStartedRecord,
+    execution_spec_identity,
+    run_id_for,
+)
 from lofbench.release_bundle import ReleaseBundle
-from lofbench.run_models import ExecutionSpec, call_id_for, plan_run, request_sha256_for
+from lofbench.run_models import (
+    ExecutionSpec,
+    call_id_for,
+    plan_run,
+    request_sha256_for,
+    trial_id_for,
+)
 from lofbench.state_io import append_jsonl_fsynced, read_jsonl, write_json_atomic
 from lofbench.suites import DEFAULT_SUITE_REGISTRY
 
@@ -707,7 +720,7 @@ def test_process_death_phase_rolls_back_exactly_on_next_invocation(tmp_path, tra
     assert not list(state.parent.glob(".state.canonical-model-stage-*"))
 
 
-def test_process_death_after_commit_is_finalized_without_rollback(tmp_path):
+def test_process_death_after_commit_is_finalized_without_rollback(tmp_path, monkeypatch):
     repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
 
     def die(candidate):
@@ -722,8 +735,29 @@ def test_process_death_after_commit_is_finalized_without_rollback(tmp_path):
             state,
             transition_observer=die,
         )
+    verified_authorities = []
+    verify_authority_copies = migration.verify_authority_copies
+
+    def observe_authority(manifest, **kwargs):
+        verified_authorities.append((manifest.source_commit, kwargs["repository_root"]))
+        return verify_authority_copies(manifest, **kwargs)
+
+    monkeypatch.setattr(migration, "verify_authority_copies", observe_authority)
     with pytest.raises(RuntimeError, match="finalized interrupted migration"):
         _salvage(repository, predecessor, release, state)
+    assert verified_authorities == [
+        (predecessor, repository),
+        (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip(),
+            repository,
+        ),
+    ]
     runs = [json.loads(path.read_text()) for path in state.glob("run_*/run.json")]
     assert sum(run["attempts"] for run in runs) == 1
     assert sum(5 - run["attempts"] for run in runs) == 19
@@ -851,6 +885,135 @@ def test_committed_recovery_rejects_coordinated_semantic_forgery(tmp_path, forge
         _salvage(repository, predecessor, release, state)
     assert journal_path.is_file()
     assert audit_path.is_file()
+
+
+def test_committed_recovery_rejects_registry_redefinition_before_deriving_maps(
+    tmp_path,
+    monkeypatch,
+):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    journal_path, journal, audit_path, audit = _committed_recovery_state(
+        repository,
+        predecessor,
+        release,
+        state,
+    )
+    backup = Path(journal["backup"])
+    predecessor_release_path = backup / "predecessor-release.json"
+    predecessor_manifest = json.loads(predecessor_release_path.read_text())
+    candidate_manifest = json.loads((release / "release.json").read_text())
+
+    suite = json.loads((release / "suite.json").read_text())
+    suite["form_sets"]["probe"][:2] = reversed(suite["form_sets"]["probe"][:2])
+    suite_bytes = (json.dumps(suite, indent=2) + "\n").encode()
+    (release / "suite.json").write_bytes(suite_bytes)
+    protocols = json.loads((release / "protocols.json").read_text())
+    protocols["protocols"][SAMPLE_PROTOCOLS[0]]["system_text"] += "\nforged authority"
+    protocol_bytes = (json.dumps(protocols, indent=2) + "\n").encode()
+    (release / "protocols.json").write_bytes(protocol_bytes)
+
+    def forged_manifest_authority(manifest):
+        authority = json.loads(json.dumps(manifest["authority"]))
+        authority["suite_registry"].update(
+            {"sha256": sha256(suite_bytes).hexdigest(), "bytes": len(suite_bytes)}
+        )
+        authority["protocol_registry"].update(
+            {"sha256": sha256(protocol_bytes).hexdigest(), "bytes": len(protocol_bytes)}
+        )
+        return authority
+
+    predecessor_manifest["authority"] = forged_manifest_authority(predecessor_manifest)
+    candidate_manifest["authority"] = forged_manifest_authority(candidate_manifest)
+
+    candidate_runs = {}
+    candidate_id_map = {}
+    for old_run_id in list(candidate_manifest["expected_run_ids"]):
+        old_dir = state / old_run_id
+        run = json.loads((old_dir / "run.json").read_text())
+        form_ids = tuple(suite["form_sets"][run["form_set"]])
+        run["authority"] = derive_run_authority(
+            suite_bytes=suite_bytes,
+            protocol_bytes=protocol_bytes,
+            form_ids=form_ids,
+            dialect_id=run["dialect_id"],
+            protocol_id=run["protocol_id"],
+            execution_spec=execution_spec_identity(run),
+            catalog_retrieved_at=run["catalog_retrieved_at"],
+            catalog_row=run["catalog_row"],
+        ).to_dict()
+        new_run_id = run_id_for(run)
+        run["run_id"] = new_run_id
+        run["expected_trial_ids"] = [
+            trial_id_for(new_run_id, form_id, run["dialect_id"]) for form_id in form_ids
+        ]
+        new_dir = state / new_run_id
+        old_dir.rename(new_dir)
+        write_json_atomic(new_dir / "run.json", run)
+        candidate_runs[run["protocol_id"]] = run
+        candidate_id_map[old_run_id] = new_run_id
+
+    old_runs_by_protocol = {
+        json.loads(path.read_text())["protocol_id"]: json.loads(path.read_text())
+        for path in (backup / "state").glob("run_*/run.json")
+    }
+    audit["run_id_map"] = {
+        old_run["run_id"]: candidate_runs[protocol_id]["run_id"]
+        for protocol_id, old_run in old_runs_by_protocol.items()
+    }
+    audit["trial_id_map"] = {
+        old_trial_id: new_trial_id
+        for protocol_id, old_run in old_runs_by_protocol.items()
+        for old_trial_id, new_trial_id in zip(
+            old_run["expected_trial_ids"],
+            candidate_runs[protocol_id]["expected_trial_ids"],
+            strict=True,
+        )
+    }
+    active = audit["active_attempt"]
+    active["new_run_id"] = candidate_id_map[active["new_run_id"]]
+    active["new_trial_id"] = audit["trial_id_map"][active["old_trial_id"]]
+    active["new_call_id"] = call_id_for(active["new_trial_id"], 1)
+    candidate_manifest["expected_run_ids"] = [
+        candidate_id_map[run_id] for run_id in candidate_manifest["expected_run_ids"]
+    ]
+    candidate_manifest["paid_run_approval"]["run_ids"] = [
+        candidate_id_map[run_id] for run_id in candidate_manifest["paid_run_approval"]["run_ids"]
+    ]
+    audit["predecessor_authority"] = predecessor_manifest["authority"]
+    audit["authority"] = candidate_manifest["authority"]
+    audit["predecessor_authority_sha256"] = canonical_sha256(predecessor_manifest["authority"])
+    audit["authority_sha256"] = canonical_sha256(candidate_manifest["authority"])
+    journal["predecessor_authority_sha256"] = audit["predecessor_authority_sha256"]
+    journal["candidate_authority_sha256"] = audit["authority_sha256"]
+    write_json_atomic(predecessor_release_path, predecessor_manifest)
+    journal["predecessor_release_sha256"] = sha256(
+        predecessor_release_path.read_bytes()
+    ).hexdigest()
+    audit["predecessor_release_manifest_sha256"] = journal["predecessor_release_sha256"]
+    write_json_atomic(release / "release.json", candidate_manifest)
+    _republish_forged_committed_authority(
+        release=release,
+        state=state,
+        journal_path=journal_path,
+        journal=journal,
+        audit_path=audit_path,
+        audit=audit,
+    )
+
+    parsed_registry_or_run = False
+
+    def reject_downstream_derivation(*_args, **_kwargs):
+        nonlocal parsed_registry_or_run
+        parsed_registry_or_run = True
+        raise AssertionError("authority copies must fail before registry/run derivation")
+
+    monkeypatch.setattr(migration, "load_suite", reject_downstream_derivation)
+    monkeypatch.setattr(migration.RunManifest, "from_dict", reject_downstream_derivation)
+    with pytest.raises(RuntimeError, match="committed migration journal is inconsistent") as exc:
+        _salvage(repository, predecessor, release, state)
+    assert "authority manifest does not match its recorded git tree" in str(exc.value.__cause__)
+    assert parsed_registry_or_run is False
+    assert journal_path.is_file()
 
 
 def test_cli_recovers_process_death_before_key_or_catalog_access(tmp_path, monkeypatch):

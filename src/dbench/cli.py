@@ -489,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
                 recovered_phase = recover_working_model_identity_transaction(
                     release_root=args.release,
                     state_root=args.state_root,
+                    repository_root=Path.cwd(),
                 )
                 if recovered_phase is not None:
                     action = "finalized" if recovered_phase == "committed" else "rolled back"
