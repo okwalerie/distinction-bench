@@ -469,6 +469,50 @@ than beginning the broad sweep.
 
 ## Reset 2026-08-08 by agent:codex-root
 
+## live identity repair — ev_01KZHVJWTQAXJEACS9BTVN34Z9
+
+the first paid sample call proved that openrouter exposes two intentional model
+identities: the public requested alias in the chat response and the immutable
+provider permaslug in generation accounting. planning must authenticate
+`/api/v1/models/user`, join exactly one row whose `id` equals the requested alias,
+require its nonempty `canonical_slug`, retain that complete row plus exact retrieval
+evidence and digest in the catalog authority, and use the slug as
+`resolved_model_id`. endpoint and zdr joins remain exact on the requested alias,
+endpoint tag, and provider.
+
+the openrouter evidence projector will validate the chat response model against
+`requested_model_id`, the generation model against `resolved_model_id`, and exact
+provider/endpoint identity independently. it will not require alias and permaslug to
+equal one another. absent or contradictory catalog/user/generation evidence remains
+fail-closed.
+
+add an explicit, one-use `salvage-working-model-identity` application command. it is
+not part of normal run validation. under a migration lock it must prove the release
+is the exact unsealed `v1.0.0-sample.1` predecessor shape, all four old planned runs
+share the same alias/catalog/endpoint and are unadmitted, exactly one run contains
+one request, two linked evidence revisions, two call revisions for one effective call,
+and one unsettled reservation, and the other runs contain no execution records. it must also
+prove the retained raw chat alias, generation canonical permaslug, provider,
+endpoint, tokens, completion, and exact cost without changing any provider source.
+
+the migration constructs fresh current-authority runs from the frozen release
+suite/protocol copies and an authenticated endpoint selection, rekeys every derived
+run/trial/call/request/ledger identity, re-captures the unchanged provider envelopes
+into a fresh digest chain, reprojects the final evidence, settles exactly the
+observed cost, scores the first trial, and updates all four expected/approved run ids.
+it stages a complete replacement state and release metadata set, validates it before
+publication, records old/new ids and digests in a durable migration audit record,
+and commits by recoverable directory swaps without deleting the predecessor backup.
+the migrated first run has one complete trial and one attempt; the other three remain
+planned, leaving nineteen provider calls in the frozen twenty-attempt contract.
+
+tests cover alias/permaslug selection and projection, missing/duplicate/mismatched
+authenticated rows, exact four-run migration, raw-evidence preservation, atomic
+failure rollback, exact ledger settlement, nineteen remaining calls, normal current
+validation, and rejection of forged or non-predecessor state. update the adr,
+domain/release skill vocabulary, run focused/full/ruff/clean gates with no external
+model calls, commit, and hand off for independent review.
+
 ## Review Cycle 7 Findings — idempotent evidence reconciliation
 
 the seventh review found two remaining trust gaps and one publication leak. provider

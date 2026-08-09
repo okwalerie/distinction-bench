@@ -28,6 +28,17 @@ the exact selected forms and cells, the selected protocol, endpoint-catalog evid
 and the provider-neutral execution spec. this projection is part of the sole run-id
 function and is reconstructed during planning, admission, and validation.
 
+openrouter model identity has two distinct fields. `requested_model_id` is the exact
+public alias sent to chat completions and expected in the chat response.
+`resolved_model_id` is the immutable `canonical_slug` returned for that exact alias by
+the authenticated `/api/v1/models/user` catalog and expected as the generation
+accounting `model`/provider permaslug. planning retains the complete authenticated
+user-model row plus timestamped retrieval metadata, raw-response sha256, and byte
+length. the endpoint and zdr intersection remains an exact join on requested alias,
+endpoint tag, and provider name. missing, duplicate, empty, or mismatched canonical
+catalog identity fails before planning; alias and permaslug are never required to be
+the same string.
+
 each provider call has one append-only `AttemptEvidence` revision chain. every row retains an immutable,
 deterministically labelled `ProviderEvidenceEnvelope`: the exact raw chat response,
 every exact raw generation-accounting lookup response (including failed polls), http
@@ -96,12 +107,27 @@ admitted records, and recomputed metrics. `lofsite.build_site` accepts only that
 renderer registries, provider adapters, inspect logs, cli policy, and site code are
 inputs or consumers, never alternative authorities.
 
+the live `v1.0.0-sample.1` predecessor created before this identity rule is handled by
+one explicit working-state salvage operation, not by accepting its legacy identity in
+normal validators. the operation requires the exact unsealed four-run predecessor and
+immediately following source revision, proves the sole retained request, evidence
+revision chain, legacy accounting-unknown call, and unsettled reservation, then rekeys
+all four run/trial/call/request/ledger identities under current authority. it preserves
+every provider-evidence envelope byte-for-byte, reprojects and scores the first
+completion, settles its exact retained cost, records old/new ids and digests in a
+migration audit, and keeps the predecessor state as a recoverable directory backup.
+the migrated sample therefore has one of twenty attempts complete and nineteen—not
+twenty—remaining. partially swapped or forged state fails closed under ordinary
+repository, release, run, and ledger identities.
+
 ## consequences
 
 - public results can be traced to exact stimulus, prompt, provider, and response
   hashes.
 - changing any checked-in registry, selected cell set, protocol, endpoint catalog, or
   execution specification creates a different run identity.
+- changing either the requested public alias or its authenticated canonical slug
+  creates a different run identity.
 - raw provider response bytes are retained exactly (base64 encoded with a verified text
   and json-parse projection); secrets belong to
   request headers and never enter the envelope.

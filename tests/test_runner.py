@@ -253,6 +253,41 @@ def test_plain_run_is_a_dry_run(tmp_path):
     assert not (tmp_path / "shared-ledger.jsonl").exists()
 
 
+def test_reconcile_validates_planned_state_without_scheduling_inference(tmp_path):
+    task, run = _task_and_run()
+    executor = InMemoryExecutor([_success()])
+    reconciled = _orchestrator(tmp_path, executor).reconcile(run, task)
+    assert reconciled.status == "planned"
+    assert reconciled.attempts == 0
+    assert executor.calls == []
+    assert read_jsonl(tmp_path / "shared-ledger.jsonl") == []
+
+
+def test_reconcile_validates_closed_partial_state_without_a_next_call(tmp_path):
+    task, run = _one_sample(*_task_and_run())
+    completed = _orchestrator(tmp_path, InMemoryExecutor([_success()])).execute(
+        run,
+        task,
+        approve_paid_run=True,
+        max_spend_usd=30.0,
+    )
+    full_task, full_run = _task_and_run()
+    partial = replace(
+        full_run,
+        status="probed",
+        attempts=completed.attempts,
+        token_usage=completed.token_usage,
+        latency_ms=completed.latency_ms,
+        cost_usd=completed.cost_usd,
+    )
+    executor = InMemoryExecutor([_success()])
+    reconciled = _orchestrator(tmp_path, executor).reconcile(partial, full_task)
+    assert reconciled.status == "probed"
+    assert reconciled.attempts == 1
+    assert executor.calls == []
+    assert len(read_jsonl(tmp_path / "shared-ledger.jsonl")) == 2
+
+
 def test_typed_approval_requires_exact_30_dollar_cap(tmp_path):
     task, run = _task_and_run()
     executor = InMemoryExecutor([_success()] * 5)

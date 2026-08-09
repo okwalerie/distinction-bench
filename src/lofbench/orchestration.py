@@ -99,6 +99,112 @@ def _latest_evidence(rows: list[dict]) -> dict[str, AttemptEvidence]:
     return latest
 
 
+def project_attempt(
+    evidence: ProviderEvidenceEnvelope,
+    run: RunManifest,
+    projector: EvidenceProjector,
+) -> AttemptProjection:
+    """Apply one adapter projection and enforce the provider-neutral run identity."""
+    try:
+        projection = projector(evidence, run.to_dict())
+    except Exception as exc:  # a projector defect must not erase a paid attempt
+        return fail_closed_projection(evidence, run.to_dict(), f"projector_{type(exc).__name__}")
+    if projection.status in {"complete", "provider_error"} and (
+        projection.resolved_model_id != run.resolved_model_id
+        or projection.endpoint != run.endpoint
+        or projection.provider != run.provider
+    ):
+        return replace(
+            projection,
+            status="accounting_unknown",
+            error_type="provider_identity_contradiction",
+        )
+    return projection
+
+
+def call_record_from_projection(
+    *,
+    call_id: str,
+    trial_id: str,
+    run: RunManifest,
+    attempt: int,
+    reservation: float,
+    projection: AttemptProjection,
+    evidence: AttemptEvidence,
+) -> CallRecord:
+    """Derive the sole call record projection used by execution and migration."""
+    return CallRecord(
+        call_id=call_id,
+        trial_id=trial_id,
+        run_id=run.run_id,
+        attempt=attempt,
+        started_at=projection.started_at,
+        finished_at=projection.finished_at,
+        status=projection.status,
+        reserved_cost_usd=reservation,
+        observed_cost_usd=projection.observed_cost_usd,
+        resolved_model_id=projection.resolved_model_id,
+        provider=projection.provider,
+        endpoint=projection.endpoint,
+        latency_ms=projection.latency_ms,
+        provider_latency_ms=projection.provider_latency_ms,
+        input_tokens=projection.input_tokens,
+        output_tokens=projection.output_tokens,
+        reasoning_tokens=projection.reasoning_tokens,
+        provider_request_id=projection.provider_request_id,
+        error_type=projection.error_type,
+        response_sha256=sha256(projection.response_text.encode()).hexdigest(),
+        evidence_sha256=evidence.evidence_sha256,
+    )
+
+
+def trial_record_from_projection(
+    *,
+    run: RunManifest,
+    sample: Sample,
+    protocol: ProtocolSpec,
+    projection: AttemptProjection,
+    evidence: AttemptEvidence,
+    attempt: int,
+) -> TrialRecord:
+    """Derive the sole scored trial projection used by execution and migration."""
+    parse_status, prediction, correct = protocol.parse_answer(
+        projection.response_text,
+        expected_normal_value=sample.metadata["normal_value"],
+        expected_tree=sample.metadata["abstract_form"],
+    )
+    return TrialRecord(
+        trial_id=evidence.trial_id,
+        run_id=run.run_id,
+        suite_version=run.suite_version,
+        abstract_form_id=sample.metadata["abstract_form_id"],
+        dialect_id=sample.metadata["dialect_id"],
+        protocol_id=run.protocol_id,
+        execution_surface=run.execution_surface,
+        requested_model_id=run.requested_model_id,
+        resolved_model_id=projection.resolved_model_id,
+        provider=projection.provider,
+        endpoint=projection.endpoint,
+        prompt_hash=sample.metadata["prompt_hash"],
+        symbolic_payload_hash=sample.metadata["symbolic_payload_hash"],
+        model_payload_sha256=sample.metadata["model_payload_sha256"],
+        parse_status=parse_status,
+        attempt_count=attempt,
+        latency_ms=projection.latency_ms,
+        provider_latency_ms=projection.provider_latency_ms,
+        input_tokens=projection.input_tokens,
+        output_tokens=projection.output_tokens,
+        reasoning_tokens=projection.reasoning_tokens,
+        observed_cost_usd=projection.observed_cost_usd,
+        prediction=prediction,
+        normal_value=sample.metadata["normal_value"],
+        correct=correct,
+        response_text=projection.response_text,
+        error_type=projection.error_type,
+        completion_evidence_sha256=evidence.evidence_sha256,
+    )
+
+
 class RunOrchestrator:
     def __init__(
         self,
@@ -149,104 +255,7 @@ class RunOrchestrator:
         evidence: ProviderEvidenceEnvelope,
         run: RunManifest,
     ) -> AttemptProjection:
-        try:
-            projection = self.evidence_projector(evidence, run.to_dict())
-        except Exception as exc:  # a projector defect must not erase a paid attempt
-            return fail_closed_projection(
-                evidence, run.to_dict(), f"projector_{type(exc).__name__}"
-            )
-        if projection.status in {"complete", "provider_error"} and (
-            projection.resolved_model_id != run.resolved_model_id
-            or projection.endpoint != run.endpoint
-            or projection.provider != run.provider
-        ):
-            return replace(
-                projection,
-                status="accounting_unknown",
-                error_type="provider_identity_contradiction",
-            )
-        return projection
-
-    @staticmethod
-    def _call(
-        *,
-        call_id: str,
-        trial_id: str,
-        run: RunManifest,
-        attempt: int,
-        reservation: float,
-        projection: AttemptProjection,
-        evidence: AttemptEvidence,
-    ) -> CallRecord:
-        return CallRecord(
-            call_id=call_id,
-            trial_id=trial_id,
-            run_id=run.run_id,
-            attempt=attempt,
-            started_at=projection.started_at,
-            finished_at=projection.finished_at,
-            status=projection.status,
-            reserved_cost_usd=reservation,
-            observed_cost_usd=projection.observed_cost_usd,
-            resolved_model_id=projection.resolved_model_id,
-            provider=projection.provider,
-            endpoint=projection.endpoint,
-            latency_ms=projection.latency_ms,
-            provider_latency_ms=projection.provider_latency_ms,
-            input_tokens=projection.input_tokens,
-            output_tokens=projection.output_tokens,
-            reasoning_tokens=projection.reasoning_tokens,
-            provider_request_id=projection.provider_request_id,
-            error_type=projection.error_type,
-            response_sha256=sha256(projection.response_text.encode()).hexdigest(),
-            evidence_sha256=evidence.evidence_sha256,
-        )
-
-    @staticmethod
-    def _trial(
-        *,
-        run: RunManifest,
-        sample: Sample,
-        protocol: ProtocolSpec,
-        projection: AttemptProjection,
-        evidence: AttemptEvidence,
-        attempt: int,
-    ) -> TrialRecord:
-        parse_status, prediction, correct = protocol.parse_answer(
-            projection.response_text,
-            expected_normal_value=sample.metadata["normal_value"],
-            expected_tree=sample.metadata["abstract_form"],
-        )
-        return TrialRecord(
-            trial_id=evidence.trial_id,
-            run_id=run.run_id,
-            suite_version=run.suite_version,
-            abstract_form_id=sample.metadata["abstract_form_id"],
-            dialect_id=sample.metadata["dialect_id"],
-            protocol_id=run.protocol_id,
-            execution_surface=run.execution_surface,
-            requested_model_id=run.requested_model_id,
-            resolved_model_id=projection.resolved_model_id,
-            provider=projection.provider,
-            endpoint=projection.endpoint,
-            prompt_hash=sample.metadata["prompt_hash"],
-            symbolic_payload_hash=sample.metadata["symbolic_payload_hash"],
-            model_payload_sha256=sample.metadata["model_payload_sha256"],
-            parse_status=parse_status,
-            attempt_count=attempt,
-            latency_ms=projection.latency_ms,
-            provider_latency_ms=projection.provider_latency_ms,
-            input_tokens=projection.input_tokens,
-            output_tokens=projection.output_tokens,
-            reasoning_tokens=projection.reasoning_tokens,
-            observed_cost_usd=projection.observed_cost_usd,
-            prediction=prediction,
-            normal_value=sample.metadata["normal_value"],
-            correct=correct,
-            response_text=projection.response_text,
-            error_type=projection.error_type,
-            completion_evidence_sha256=evidence.evidence_sha256,
-        )
+        return project_attempt(evidence, run, self.evidence_projector)
 
     def _write_run_state(
         self,
@@ -257,9 +266,11 @@ class RunOrchestrator:
         trials = read_jsonl(self.state_dir / "trials.jsonl")
         calls = _effective_calls(read_jsonl(self.state_dir / "calls.jsonl"))
         complete = {row["trial_id"] for row in trials} == set(run.expected_trial_ids)
+        observed = bool(calls or trials)
         updated = replace(
             run,
-            status=status_override or ("complete" if complete else "probed"),
+            status=status_override
+            or ("complete" if complete else "probed" if observed else "planned"),
             attempts=len(calls),
             token_usage={
                 key: sum(row[key] for row in calls)
@@ -289,13 +300,33 @@ class RunOrchestrator:
             raise RuntimeError("run declares an invalid transport-attempt limit")
         try:
             with exclusive_file_lock(self.state_dir / ".run.lock", blocking=False):
-                return self._execute_locked(run, task)
+                return self._execute_locked(run, task, allow_new_inference=True)
         except FileLockUnavailableError as exc:
             raise RunAlreadyRunningError(
                 f"run {run.run_id} is already running in another process"
             ) from exc
 
-    def _execute_locked(self, run: RunManifest, task: Task) -> RunManifest:
+    def reconcile(self, run: RunManifest, task: Task) -> RunManifest:
+        """Validate and close durable local transitions without scheduling inference."""
+        if run.run_id != run.authoritative_run_id():
+            raise RuntimeError("run_id does not match the authoritative execution identity")
+        if not 1 <= run.max_transport_attempts <= MAX_TRANSPORT_ATTEMPTS:
+            raise RuntimeError("run declares an invalid transport-attempt limit")
+        try:
+            with exclusive_file_lock(self.state_dir / ".run.lock", blocking=False):
+                return self._execute_locked(run, task, allow_new_inference=False)
+        except FileLockUnavailableError as exc:
+            raise RunAlreadyRunningError(
+                f"run {run.run_id} is already running in another process"
+            ) from exc
+
+    def _execute_locked(
+        self,
+        run: RunManifest,
+        task: Task,
+        *,
+        allow_new_inference: bool,
+    ) -> RunManifest:
         """Reconcile and execute while the caller owns the run's single-writer lock."""
         is_paid = run.billing_channel != "subscription_unmetered"
         samples_by_trial = {
@@ -401,7 +432,7 @@ class RunOrchestrator:
                     raise RuntimeError("run evidence identity is invalid")
 
                 projection = self._project(evidence.provider_evidence, run)
-                derived_call = self._call(
+                derived_call = call_record_from_projection(
                     call_id=call_id,
                     trial_id=trial_id,
                     run=run,
@@ -461,7 +492,7 @@ class RunOrchestrator:
                     raise RuntimeError("run settlement contradicts its provider evidence")
 
                 if projection.status == "complete":
-                    trial = self._trial(
+                    trial = trial_record_from_projection(
                         run=run,
                         sample=samples_by_trial[trial_id],
                         protocol=protocol,
@@ -483,6 +514,11 @@ class RunOrchestrator:
             if ambiguous:
                 self._write_run_state(run, status_override="ambiguous")
                 raise RuntimeError("request outcome is ambiguous; refusing to resend inference")
+
+            if not allow_new_inference:
+                if reserve_only:
+                    raise RuntimeError("run has a reserved call requiring provider execution")
+                return self._write_run_state(run)
 
             # A reservation is safe to execute only until the durable request
             # marker exists. Started-without-evidence is quarantined above.

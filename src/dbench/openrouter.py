@@ -8,9 +8,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from base64 import b64decode
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from importlib.metadata import version
 from typing import Any
 
@@ -145,7 +147,10 @@ def _request_exchange(
         )
 
 
-def _authenticated_json(url: str, api_key: str) -> tuple[dict[str, Any], str]:
+def _authenticated_json(
+    url: str,
+    api_key: str,
+) -> tuple[dict[str, Any], ProviderEvidenceSource]:
     source = _request_exchange(
         url,
         api_key,
@@ -159,12 +164,31 @@ def _authenticated_json(url: str, api_key: str) -> tuple[dict[str, Any], str]:
         or not isinstance(value, dict)
     ):
         raise RuntimeError("provider catalog response is not a successful json object")
-    return value, source.body_text
+    return value, source
+
+
+def _retrieval_evidence(source: ProviderEvidenceSource) -> dict[str, Any]:
+    """Retain an authenticated catalog exchange without duplicating its whole body."""
+    raw = b64decode(source.raw_body_base64, validate=True)
+    return {
+        "label": source.label,
+        "request_started_at": source.request_started_at,
+        "response_finished_at": source.response_finished_at,
+        "request_method": source.request_method,
+        "request_url": source.request_url,
+        "http_status": source.http_status,
+        "response_headers": [list(row) for row in source.response_headers],
+        "raw_body_sha256": sha256(raw).hexdigest(),
+        "raw_body_bytes": len(raw),
+        "text_decoding": source.text_decoding,
+        "json_parse_outcome": source.json_parse_outcome,
+    }
 
 
 @dataclass(frozen=True)
 class EndpointSelection:
     model_id: str
+    resolved_model_id: str
     endpoint_tag: str
     provider_name: str
     pricing: dict[str, str]
@@ -190,7 +214,7 @@ class EndpointSelection:
     ) -> ExecutionSpec:
         return ExecutionSpec(
             requested_model_id=self.model_id,
-            resolved_model_id=self.model_id,
+            resolved_model_id=self.resolved_model_id,
             execution_surface="direct_api",
             provider="openrouter",
             endpoint=self.endpoint_tag,
@@ -241,13 +265,31 @@ def fetch_openrouter_endpoint(
 ) -> EndpointSelection:
     """Select the cheapest exact endpoint proven present in the ZDR catalog."""
     quoted = urllib.parse.quote(model_id, safe="/")
-    model_payload, _model_raw = _authenticated_json(
+    model_payload, _model_source = _authenticated_json(
         f"{_API_ROOT}/models/{quoted}/endpoints", api_key
     )
-    zdr_payload, _zdr_raw = _authenticated_json(f"{_API_ROOT}/endpoints/zdr", api_key)
+    zdr_payload, _zdr_source = _authenticated_json(f"{_API_ROOT}/endpoints/zdr", api_key)
+    user_payload, user_source = _authenticated_json(f"{_API_ROOT}/models/user", api_key)
     model = model_payload.get("data", {})
     if model.get("id") != model_id:
         raise RuntimeError(f"openrouter did not return exact requested model {model_id!r}")
+    user_rows = [
+        row
+        for row in user_payload.get("data", [])
+        if isinstance(row, dict) and row.get("id") == model_id
+    ]
+    if len(user_rows) != 1:
+        raise RuntimeError(
+            f"authenticated user catalog lacks one exact requested model {model_id!r}"
+        )
+    user_model = user_rows[0]
+    canonical_slug = user_model.get("canonical_slug")
+    if (
+        not isinstance(canonical_slug, str)
+        or not canonical_slug
+        or canonical_slug.strip() != canonical_slug
+    ):
+        raise RuntimeError(f"authenticated user catalog lacks a canonical slug for {model_id!r}")
     input_modalities = set(model.get("architecture", {}).get("input_modalities", []))
     if required_modality and required_modality not in input_modalities:
         raise RuntimeError(
@@ -287,6 +329,7 @@ def fetch_openrouter_endpoint(
     retrieved_at = _now()
     return EndpointSelection(
         model_id=model_id,
+        resolved_model_id=canonical_slug,
         endpoint_tag=selected["tag"],
         provider_name=selected["provider_name"],
         pricing=dict(selected["pricing"]),
@@ -299,6 +342,8 @@ def fetch_openrouter_endpoint(
             "model": model,
             "selected_endpoint": selected,
             "zdr_selected_endpoint": zdr_selected,
+            "authenticated_user_model": user_model,
+            "authenticated_user_models_retrieval": _retrieval_evidence(user_source),
         },
     )
 

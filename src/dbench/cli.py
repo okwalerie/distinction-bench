@@ -17,6 +17,7 @@ from dbench.agent_cli import (
     cli_version,
 )
 from dbench.config import load_env_file
+from dbench.migration import salvage_working_model_identity
 from dbench.openrouter import OpenRouterExecutor, fetch_openrouter_endpoint
 from dbench.provider_evidence import project_provider_evidence, projector_for_run
 from dbench.publication import open_release
@@ -123,6 +124,17 @@ def _parser() -> argparse.ArgumentParser:
     archive = subparsers.add_parser("archive")
     archive.add_argument("--release", type=Path, required=True)
     archive.add_argument("--out", type=Path, required=True)
+    salvage = subparsers.add_parser("salvage-working-model-identity")
+    salvage.add_argument("--release", type=Path, required=True)
+    salvage.add_argument("--state-root", type=Path, required=True)
+    salvage.add_argument("--env-file", type=Path, required=True)
+    salvage.add_argument("--expected-source-commit", required=True)
+    salvage.add_argument("--requested-model", required=True)
+    salvage.add_argument("--resolved-model", required=True)
+    salvage.add_argument("--endpoint", required=True)
+    salvage.add_argument("--provider", required=True)
+    salvage.add_argument("--expected-observed-cost-usd", type=float, required=True)
+    salvage.add_argument("--identity-event", required=True)
     return parser
 
 
@@ -282,11 +294,16 @@ def _plan(args: argparse.Namespace) -> int:
         cost_sheet.update(
             {
                 "catalog_retrieved_at": selection.retrieved_at,
+                "resolved_model_id": selection.resolved_model_id,
                 "endpoint": selection.endpoint_tag,
                 "provider": selection.provider_name,
                 "pricing": execution.pricing,
                 "catalog_pricing": selection.pricing,
                 "authenticated_zdr_intersection": True,
+                "authenticated_user_model": selection.catalog_row["authenticated_user_model"],
+                "authenticated_user_models_retrieval": selection.catalog_row[
+                    "authenticated_user_models_retrieval"
+                ],
             }
         )
     run_costs: list[dict[str, object]] = []
@@ -403,6 +420,31 @@ def main(argv: list[str] | None = None) -> int:
         if publication.status != "sealed":
             raise RuntimeError("archive requires a sealed bundle")
         archive_release(publication.root, args.out)
+        return 0
+    if args.command == "salvage-working-model-identity":
+        values = _load_secret_env(args.env_file)
+        api_key = values.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("authenticated migration requires OPENROUTER_API_KEY")
+        selection = fetch_openrouter_endpoint(
+            args.requested_model,
+            api_key=api_key,
+            required_modality="image",
+        )
+        result = salvage_working_model_identity(
+            release_root=args.release,
+            state_root=args.state_root,
+            repository_root=Path.cwd(),
+            selection=selection,
+            expected_source_commit=args.expected_source_commit,
+            expected_requested_model_id=args.requested_model,
+            expected_resolved_model_id=args.resolved_model,
+            expected_endpoint=args.endpoint,
+            expected_provider=args.provider,
+            expected_observed_cost_usd=args.expected_observed_cost_usd,
+            identity_event_id=args.identity_event,
+        )
+        print(json.dumps(result, indent=2))
         return 0
 
     values = _load_secret_env(args.env_file)

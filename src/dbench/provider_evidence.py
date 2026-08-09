@@ -213,6 +213,10 @@ def _project_openrouter(
     chat_model = chat.get("model")
     if chat_model is not None:
         chat_model = _text(chat_model, "chat_model").removeprefix("openrouter/")
+    if chat_model is not None and chat_model != run.get("requested_model_id"):
+        raise ValueError("contradictory_requested_model")
+    if chat_model is None and not chat_failed:
+        raise ValueError("missing_chat_model")
     chat_provider = chat.get("provider")
     if chat_provider is not None:
         chat_provider = _text(chat_provider, "chat_provider")
@@ -270,8 +274,6 @@ def _project_openrouter(
         raise ValueError("contradictory_request_id")
     generation_model = generation.get("model") or generation.get("model_id")
     model = _text(generation_model, "generation_model").removeprefix("openrouter/")
-    if chat_model is not None and chat_model != model:
-        raise ValueError("contradictory_model")
     provider_name = _text(generation.get("provider_name"), "provider_name")
     if chat_provider is not None and chat_provider != provider_name:
         raise ValueError("contradictory_provider")
@@ -499,11 +501,18 @@ def validate_openrouter_run_policy(run: Mapping[str, Any]) -> None:
     catalog = _object(run.get("catalog_row"), "provider_catalog")
     selected = _object(catalog.get("selected_endpoint"), "selected_endpoint")
     zdr_selected = _object(catalog.get("zdr_selected_endpoint"), "zdr_endpoint")
+    user_model = _object(catalog.get("authenticated_user_model"), "authenticated_user_model")
+    user_retrieval = _object(
+        catalog.get("authenticated_user_models_retrieval"),
+        "authenticated_user_models_retrieval",
+    )
     endpoint_identity = (
-        run.get("resolved_model_id"),
+        run.get("requested_model_id"),
         selected.get("tag"),
         selected.get("provider_name"),
     )
+    retrieval_sha256 = user_retrieval.get("raw_body_sha256")
+    retrieval_bytes = user_retrieval.get("raw_body_bytes")
     if (
         routing.get("order") != [run.get("endpoint")]
         or routing.get("allow_fallbacks") is not False
@@ -514,6 +523,29 @@ def validate_openrouter_run_policy(run: Mapping[str, Any]) -> None:
         or privacy.get("authenticated_zdr_catalog") is not True
         or generation.get("max_retries") != 0
         or catalog.get("authenticated") is not True
+        or user_model.get("id") != run.get("requested_model_id")
+        or user_model.get("canonical_slug") != run.get("resolved_model_id")
+        or not isinstance(run.get("resolved_model_id"), str)
+        or not run.get("resolved_model_id")
+        or user_retrieval.get("label") != "openrouter.catalog.response.v1"
+        or user_retrieval.get("request_method") != "GET"
+        or user_retrieval.get("request_url") != "https://openrouter.ai/api/v1/models/user"
+        or not isinstance(user_retrieval.get("http_status"), int)
+        or not 200 <= user_retrieval["http_status"] < 300
+        or user_retrieval.get("text_decoding") != "utf-8"
+        or user_retrieval.get("json_parse_outcome") != "parsed"
+        or not isinstance(retrieval_sha256, str)
+        or len(retrieval_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in retrieval_sha256)
+        or isinstance(retrieval_bytes, bool)
+        or not isinstance(retrieval_bytes, int)
+        or retrieval_bytes <= 0
+        or endpoint_identity
+        != (
+            selected.get("model_id"),
+            selected.get("tag"),
+            selected.get("provider_name"),
+        )
         or endpoint_identity
         != (
             zdr_selected.get("model_id"),

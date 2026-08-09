@@ -55,7 +55,7 @@ def _provider_envelope(
     selected = run.catalog_row["selected_endpoint"]
     chat = {
         "id": request_id,
-        "model": run.resolved_model_id,
+        "model": run.requested_model_id,
         "provider": selected["provider_name"],
         "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
         "usage": {
@@ -1121,7 +1121,7 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
         dialect_id="enclosure.plain-v1",
         protocol_id=protocol_id,
         requested_model_id="example/vision-model",
-        resolved_model_id="example/vision-model",
+        resolved_model_id="example/vision-model-20260808",
         execution_surface="direct_api",
         provider="openrouter",
         endpoint="eligible-endpoint",
@@ -1153,6 +1153,7 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
         catalog_row={
             "authenticated": True,
             "selected_endpoint": {
+                "model_id": "example/vision-model",
                 "tag": "eligible-endpoint",
                 "provider_name": "Exact Provider",
                 "pricing": {"prompt": "0.001", "completion": "0.002"},
@@ -1162,6 +1163,24 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
                 "tag": "eligible-endpoint",
                 "provider_name": "Exact Provider",
                 "pricing": {"prompt": "0.001", "completion": "0.002"},
+            },
+            "authenticated_user_model": {
+                "id": "example/vision-model",
+                "canonical_slug": "example/vision-model-20260808",
+                "name": "Example Vision Model",
+            },
+            "authenticated_user_models_retrieval": {
+                "label": "openrouter.catalog.response.v1",
+                "request_started_at": "2026-08-08T00:00:00+00:00",
+                "response_finished_at": "2026-08-08T00:00:01+00:00",
+                "request_method": "GET",
+                "request_url": "https://openrouter.ai/api/v1/models/user",
+                "http_status": 200,
+                "response_headers": [["content-type", "application/json"]],
+                "raw_body_sha256": "0" * 64,
+                "raw_body_bytes": 100,
+                "text_decoding": "utf-8",
+                "json_parse_outcome": "parsed",
             },
         },
     )

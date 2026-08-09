@@ -20,8 +20,11 @@ stop before any paid request unless all are true:
   `uv sync --group dev --extra visual`, then require
   `uv run python -m lofbench.suites --verify-only` to pass for all frozen cells.
 - the env file is mode `0600` or stricter. never print its values.
-- authenticated model-endpoint and `/api/v1/endpoints/zdr` catalogs intersect
-  on the exact model id, endpoint tag, and provider name. both rows are active,
+- authenticated `/api/v1/models/user`, model-endpoint, and
+  `/api/v1/endpoints/zdr` catalogs are available. require exactly one user-model row
+  whose `id` equals the requested public alias and whose nonempty `canonical_slug`
+  becomes the resolved model id. endpoint and zdr rows intersect on the requested
+  alias, endpoint tag, and provider name. both endpoint rows are active,
   agree on known prompt/completion prices and structured-output support, and
   the model declares the input modality required by the selected dialect.
 - routing pins exactly one endpoint with fallbacks disabled,
@@ -33,6 +36,10 @@ single fsynced release ledger; never split one release across state roots. paid
 execution requires both literal flags:
 `--approve-paid-run --max-spend-usd 30`. omission or any other cap performs no
 calls. unknown price, usage, endpoint, or resolved model stops the run.
+the chat response model is validated against `requested_model_id`; generation
+accounting `model`/provider permaslug is validated against `resolved_model_id`.
+do not compare those two response fields to each other or infer a canonical slug from
+an endpoint display name.
 
 ## plan a release
 
@@ -47,7 +54,7 @@ uv run python -m dbench plan \
   --state-root /tmp/distinction-state \
   --release-id <release-id> \
   --repository-url https://github.com/okwalerie/distinction-bench \
-  --suite suites/v1.json \
+  --suite src/lofbench/registries/suites-v1.json \
   --model <exact-openrouter-model-id> \
   --form-set <frozen-form-set> \
   --dialect <exact-frozen-dialect-id> \
@@ -64,7 +71,8 @@ uv run python -m dbench plan \
 ```
 
 inspect `/tmp/distinction-state/cost-sheet.json`. check the exact catalog
-timestamp, endpoint, provider, prices, run ids, trials, and conservative
+timestamp, requested alias, resolved canonical slug, authenticated user-model row
+digest, endpoint, provider, prices, run ids, trials, and conservative
 reservations. ask for a typed approval if the operator has not already supplied
 one for this exact scope. a prior generic budget is not approval for a changed
 model, endpoint, suite, dialect, protocol set, or call count.
@@ -88,6 +96,11 @@ next-cheapest qualifying endpoint; record why. never enable a fallback.
 for this sample use `--max-transport-attempts 1`. a failed attempt remains part
 of the twenty-call budget; do not replace it with a twenty-first call. if any run
 is incomplete, report the sample as blocked rather than changing the form set.
+if a pre-canonical unsealed working release must be rekeyed, use only the explicit
+`salvage-working-model-identity` command with its exact predecessor commit, identity
+event, alias, canonical slug, endpoint/provider, and observed cost. never loosen
+normal validation or edit response evidence. preserve the emitted predecessor backup
+and confirm the migrated first trial leaves exactly nineteen calls.
 
 ## probe, run, and resume
 

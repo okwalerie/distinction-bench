@@ -38,5 +38,12 @@ run execution is a single-writer interface: one per-run advisory lock spans repl
 provider execution, and every durable transition. separate runs share one locked
 release ledger, so concurrency cannot split the global spend authority.
 
+for openrouter runs, `requested_model_id` is the exact public alias sent to and
+reported by chat completions. `resolved_model_id` is the immutable canonical slug
+authenticated at planning through `/api/v1/models/user` and reported by generation
+accounting. endpoint/zdr identity joins on the requested alias; provider evidence
+validates the chat alias and generation permaslug against their respective fields.
+they are related identities, not synonyms.
+
 pilot-v0 import code retains historical field names such as `canonical`; new public
 interfaces use the vocabulary above.

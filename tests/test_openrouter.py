@@ -191,17 +191,33 @@ def _catalogs():
             },
         ]
     }
-    return model, zdr
+    user = {
+        "data": [
+            {
+                "id": "example/vision-model",
+                "canonical_slug": "example/vision-model-20260808",
+                "name": "Example Vision Model",
+                "context_length": 123456,
+            }
+        ]
+    }
+    return model, zdr, user
 
 
 def test_endpoint_selection_authenticates_and_intersects_exact_zdr_rows(monkeypatch):
-    model, zdr = _catalogs()
+    model, zdr, user = _catalogs()
     requests: list[urllib.request.Request] = []
 
     def urlopen(request, timeout):
         assert timeout == 30
         requests.append(request)
-        payload = zdr if request.full_url.endswith("/endpoints/zdr") else model
+        payload = (
+            zdr
+            if request.full_url.endswith("/endpoints/zdr")
+            else user
+            if request.full_url.endswith("/models/user")
+            else model
+        )
         return _Response(json.dumps(payload).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
@@ -210,6 +226,8 @@ def test_endpoint_selection_authenticates_and_intersects_exact_zdr_rows(monkeypa
     )
     assert selection.endpoint_tag == "eligible"
     assert selection.provider_name == "Exact Provider"
+    assert selection.model_id == "example/vision-model"
+    assert selection.resolved_model_id == "example/vision-model-20260808"
     assert selection.routing_policy == {
         "order": ["eligible"],
         "allow_fallbacks": False,
@@ -217,23 +235,70 @@ def test_endpoint_selection_authenticates_and_intersects_exact_zdr_rows(monkeypa
         "zdr": True,
     }
     assert selection.catalog_row["authenticated"] is True
-    assert selection.execution_spec(cohort="sample", max_transport_attempts=1).pricing == {
+    assert selection.catalog_row["authenticated_user_model"] == user["data"][0]
+    retrieval = selection.catalog_row["authenticated_user_models_retrieval"]
+    assert retrieval["request_url"].endswith("/models/user")
+    assert len(retrieval["raw_body_sha256"]) == 64
+    execution = selection.execution_spec(cohort="sample", max_transport_attempts=1)
+    assert execution.resolved_model_id == "example/vision-model-20260808"
+    assert execution.pricing == {
         "prompt": 0.000001,
         "completion": 0.000002,
         "image": 0.000003,
     }
-    assert len(requests) == 2
+    assert len(requests) == 3
     assert all(
         request.get_header("Authorization") == "Bearer opaque-test-key" for request in requests
     )
 
 
-def test_endpoint_selection_fails_when_exact_model_endpoint_is_not_zdr(monkeypatch):
-    model, _zdr = _catalogs()
+@pytest.mark.parametrize(
+    "user_rows",
+    [
+        [],
+        [{"id": "example/vision-model", "canonical_slug": ""}],
+        [{"id": "different/model", "canonical_slug": "different/model-1"}],
+        [
+            {"id": "example/vision-model", "canonical_slug": "example/vision-model-1"},
+            {"id": "example/vision-model", "canonical_slug": "example/vision-model-2"},
+        ],
+    ],
+)
+def test_endpoint_selection_fails_closed_without_one_exact_canonical_user_row(
+    monkeypatch, user_rows
+):
+    model, zdr, _user = _catalogs()
 
     def urlopen(request, timeout):
         assert timeout == 30
-        payload = {"data": []} if request.full_url.endswith("/endpoints/zdr") else model
+        payload = (
+            zdr
+            if request.full_url.endswith("/endpoints/zdr")
+            else {"data": user_rows}
+            if request.full_url.endswith("/models/user")
+            else model
+        )
+        return _Response(json.dumps(payload).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="user catalog"):
+        fetch_openrouter_endpoint(
+            "example/vision-model", api_key="opaque-test-key", required_modality="image"
+        )
+
+
+def test_endpoint_selection_fails_when_exact_model_endpoint_is_not_zdr(monkeypatch):
+    model, _zdr, user = _catalogs()
+
+    def urlopen(request, timeout):
+        assert timeout == 30
+        payload = (
+            {"data": []}
+            if request.full_url.endswith("/endpoints/zdr")
+            else user
+            if request.full_url.endswith("/models/user")
+            else model
+        )
         return _Response(json.dumps(payload).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
@@ -244,12 +309,18 @@ def test_endpoint_selection_fails_when_exact_model_endpoint_is_not_zdr(monkeypat
 
 
 def test_endpoint_selection_requires_declared_input_modality(monkeypatch):
-    model, zdr = _catalogs()
+    model, zdr, user = _catalogs()
     model["data"]["architecture"]["input_modalities"] = ["text"]
 
     def urlopen(request, timeout):
         assert timeout == 30
-        payload = zdr if request.full_url.endswith("/endpoints/zdr") else model
+        payload = (
+            zdr
+            if request.full_url.endswith("/endpoints/zdr")
+            else user
+            if request.full_url.endswith("/models/user")
+            else model
+        )
         return _Response(json.dumps(payload).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
@@ -260,13 +331,19 @@ def test_endpoint_selection_requires_declared_input_modality(monkeypatch):
 
 
 def test_multimodal_endpoint_requires_explicit_image_pricing(monkeypatch):
-    model, zdr = _catalogs()
+    model, zdr, user = _catalogs()
     model["data"]["endpoints"][1]["pricing"].pop("image")
     zdr["data"][0]["pricing"].pop("image")
 
     def urlopen(request, timeout):
         assert timeout == 30
-        payload = zdr if request.full_url.endswith("/endpoints/zdr") else model
+        payload = (
+            zdr
+            if request.full_url.endswith("/endpoints/zdr")
+            else user
+            if request.full_url.endswith("/models/user")
+            else model
+        )
         return _Response(json.dumps(payload).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
@@ -344,6 +421,35 @@ def test_direct_executor_retains_exact_chat_and_generation_evidence(monkeypatch,
     assert request_payload["provider"] == run.routing_policy
     assert request_payload["model"] == run.requested_model_id
     assert "max_retries" not in request_payload
+
+
+def test_projection_distinguishes_requested_alias_from_canonical_generation_model():
+    evidence, run = _projection_evidence(
+        chat_changes=lambda chat: chat.update(model="example/model"),
+        generation_changes=lambda wrapper: wrapper["data"].update(model="example/model-20260808"),
+    )
+    run = replace(run, resolved_model_id="example/model-20260808")
+    projection = project_openrouter_evidence(evidence, run.to_dict())
+    assert projection.status == "complete"
+    assert projection.resolved_model_id == "example/model-20260808"
+
+
+def test_projection_rejects_alias_and_canonical_identity_substitutions_independently():
+    bad_chat, run = _projection_evidence(
+        chat_changes=lambda chat: chat.update(model="other/alias"),
+        generation_changes=lambda wrapper: wrapper["data"].update(model="example/model-20260808"),
+    )
+    run = replace(run, resolved_model_id="example/model-20260808")
+    assert project_openrouter_evidence(bad_chat, run.to_dict()).error_type == (
+        "contradictory_requested_model"
+    )
+
+    bad_generation, run = _projection_evidence(
+        generation_changes=lambda wrapper: wrapper["data"].update(model="other/canonical")
+    )
+    assert project_openrouter_evidence(bad_generation, run.to_dict()).error_type == (
+        "contradictory_planned_model"
+    )
 
 
 def test_billed_http_error_uses_generation_id_header_for_exact_accounting(monkeypatch, tmp_path):
@@ -474,7 +580,7 @@ def test_billed_http_error_uses_generation_id_header_for_exact_accounting(monkey
             None,
             lambda row: _set_nested(row, "data", "model", "forged/model"),
             "accounting_unknown",
-            "contradictory_model",
+            "contradictory_planned_model",
         ),
         (
             None,
@@ -486,7 +592,7 @@ def test_billed_http_error_uses_generation_id_header_for_exact_accounting(monkey
             lambda row: row.update({"model": "forged/model"}),
             lambda row: _set_nested(row, "data", "model", "forged/model"),
             "accounting_unknown",
-            "contradictory_planned_model",
+            "contradictory_requested_model",
         ),
         (
             lambda row: row.update({"provider": "Other Provider"}),
