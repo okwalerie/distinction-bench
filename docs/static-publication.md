@@ -10,10 +10,16 @@ old gallery hostname to the canonical host with a permanent redirect, retaining
 the request path and query. Do not place an authentication or analytics worker
 in front of the human pilot: it is deliberately a local-only static workflow.
 
-Pages deployment accepts only a release asset named
-`distinction-bench-<tag>.tar.gz`. Its extracted root must be a sealed release
-bundle. The workflow validates the bundle checksums before building; a working,
-edited, incomplete, or unlisted artifact is rejected.
+Pages deployment accepts the paired release assets
+`distinction-bench-<tag>.tar.gz` and
+`distinction-bench-<tag>.release.json`. The archive's extracted root must be a sealed
+release bundle, and the sidecar must be byte-identical to its root `release.json`.
+The workflow checks both conditions and validates the bundle checksums before
+building; a working, edited, incomplete, or unlisted artifact is rejected.
+the download page embeds selected byte-identical evidence, including
+`request-started.jsonl`, and links to the paired external distribution assets. the
+final manifest and archive are not copied into the sealed tree because either would
+introduce a checksum/content recursion.
 
 site generation accepts only the validated, read-only publication view returned by
 `dbench.publication.open_release(...).publication()`.

@@ -8,6 +8,7 @@ import shutil
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from lofbench.protocols import ProtocolSpec
 from lofbench.records import RunManifest
@@ -24,6 +25,7 @@ _DOWNLOADS = (
     "profiles.parquet",
     "effects.parquet",
     "transcripts.jsonl",
+    "request-started.jsonl",
     "ledger.jsonl",
 )
 
@@ -645,16 +647,42 @@ def _downloads(publication: PublicationView) -> str:
         f"distinction benchmark contributors ({publication.release_id}). "
         "distinction benchmark: laws of form representation invariance evaluation."
     )
+    release_id = quote(publication.release_id, safe="")
+    repository = urlsplit(publication.repository_url)
+    if (
+        repository.scheme != "https"
+        or not repository.hostname
+        or repository.username is not None
+        or repository.password is not None
+        or repository.query
+        or repository.fragment
+    ):
+        raise RuntimeError("repository URL cannot define safe release asset links")
+    repository_url = publication.repository_url.rstrip("/").removesuffix(".git")
+    archive_name = f"distinction-bench-{publication.release_id}.tar.gz"
+    manifest_name = f"distinction-bench-{publication.release_id}.release.json"
+    asset_base = f"{repository_url}/releases/download/{release_id}"
+    archive_url = f"{asset_base}/{quote(archive_name, safe='')}"
+    manifest_url = f"{asset_base}/{quote(manifest_name, safe='')}"
     return (
-        "<h1>downloads + citation</h1><p class=lede>machine-readable release artifacts are copied "
-        "verbatim from the bundle used to build these pages.</p>"
+        "<h1>downloads + citation</h1><p class=lede>the full sealed distribution and its "
+        "embedded evidence exports are separate, explicit artifacts.</p>"
+        "<h2>full sealed distribution</h2><ul>"
+        f'<li><a href="{_e(archive_url)}">{_e(archive_name)}</a> — complete sealed bundle</li>'
+        f'<li><a href="{_e(manifest_url)}">{_e(manifest_name)}</a> — byte-identical sealed '
+        "<code>release.json</code> sidecar</li></ul>"
+        "<p>the manifest is also the archive root and authenticates every in-bundle artifact. "
+        "both distribution files are published after sealing; embedding either the final "
+        "manifest in its checksummed site or the archive inside that bundle would recurse.</p>"
+        "<h2>embedded evidence exports</h2><p>the selected files below are copied verbatim from "
+        "the bundle used to build these pages; this table is not the complete sealed bundle.</p>"
         f"<table><thead><tr><th>artifact</th><th>bytes</th><th>sha256</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
         "<h2>caveats</h2><ul><li>sample releases are protocol smoke tests, not rankings.</li>"
         "<li>untaught runs combine dialect inference with task performance.</li>"
         "<li>image runs include raster perception and layout as possible confounds.</li>"
-        "<li>checksums above cover exact admitted data files; the sealed release manifest "
-        "covers every published artifact.</li></ul>"
+        "<li>checksums above cover exact embedded evidence exports; the external sealed "
+        "manifest covers every in-bundle artifact.</li></ul>"
         f"<h2>suggested citation</h2><pre>{_e(citation)}</pre>"
         "<p>code is mit licensed. the frozen suite, stimuli, documentation, and site content are "
         "licensed cc by 4.0.</p>"

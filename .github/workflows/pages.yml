@@ -31,14 +31,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
-        run: gh release download "$RELEASE_TAG" --pattern "distinction-bench-$RELEASE_TAG.tar.gz"
+        run: |
+          gh release download "$RELEASE_TAG" --pattern "distinction-bench-$RELEASE_TAG.tar.gz"
+          gh release download "$RELEASE_TAG" --pattern "distinction-bench-$RELEASE_TAG.release.json"
       - name: unpack and validate the sealed bundle
         env:
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           mkdir release
           tar -xzf "distinction-bench-$RELEASE_TAG.tar.gz" -C release
-          uv run python -c 'from pathlib import Path; from dbench.publication import open_release; b=open_release(Path("release")); p=b.publication(); assert p.status == "sealed"'
+          cmp "distinction-bench-$RELEASE_TAG.release.json" release/release.json
+          uv run python -c 'import os; from pathlib import Path; from dbench.publication import open_release; b=open_release(Path("release")); p=b.publication(); assert p.status == "sealed"; assert p.release_id == os.environ["RELEASE_TAG"]'
       - name: rebuild and verify sealed site bytes
         run: >-
           uv run python -c 'from pathlib import Path; from dbench.publication import

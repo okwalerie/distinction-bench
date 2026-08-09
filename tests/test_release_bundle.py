@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 
@@ -34,7 +37,7 @@ from lofbench.records import (
     TrialRecord,
     execution_spec_identity,
 )
-from lofbench.release_bundle import ReleaseBundle
+from lofbench.release_bundle import ReleaseBundle, _matches_finite_aggregate
 from lofbench.run_models import call_id_for, request_sha256_for, trial_id_for
 from lofbench.suites import DEFAULT_SUITE_REGISTRY, load_suite
 from lofsite.build import build_site
@@ -274,7 +277,10 @@ def _trials(run: RunManifest, **first_overrides) -> list[TrialRecord]:
 
 
 def _accounting(
-    run: RunManifest, trials: list[TrialRecord]
+    run: RunManifest,
+    trials: list[TrialRecord],
+    *,
+    latencies_ms: tuple[float, ...] | None = None,
 ) -> tuple[list[TrialRecord], list[CallRecord], list[LedgerEvent], list[AttemptEvidence]]:
     calls = []
     events = []
@@ -283,9 +289,13 @@ def _accounting(
     trials_by_id = {trial.trial_id: trial for trial in trials}
     for index, trial_id in enumerate(run.expected_trial_ids, start=1):
         trial = trials_by_id[trial_id]
+        latency_ms = latencies_ms[index - 1] if latencies_ms is not None else 10.0
         call_id = call_id_for(trial_id, 1)
-        started_at = f"2026-08-08T00:00:0{index}.000000+00:00"
-        finished_at = f"2026-08-08T00:00:0{index}.010000+00:00"
+        started = datetime(2026, 8, 8, 0, 0, index, tzinfo=UTC)
+        started_at = started.isoformat(timespec="microseconds")
+        finished_at = (started + timedelta(milliseconds=latency_ms)).isoformat(
+            timespec="microseconds"
+        )
         record = AttemptEvidence.capture(
             call_id=call_id,
             trial_id=trial_id,
@@ -312,7 +322,7 @@ def _accounting(
             resolved_model_id=run.resolved_model_id,
             provider=run.provider,
             endpoint=run.endpoint,
-            latency_ms=10.0,
+            latency_ms=latency_ms,
             provider_latency_ms=10.0,
             input_tokens=20,
             output_tokens=4,
@@ -323,7 +333,13 @@ def _accounting(
         )
         calls.append(call)
         evidence.append(record)
-        linked_trials.append(replace(trial, completion_evidence_sha256=record.evidence_sha256))
+        linked_trials.append(
+            replace(
+                trial,
+                latency_ms=latency_ms if latencies_ms is not None else trial.latency_ms,
+                completion_evidence_sha256=record.evidence_sha256,
+            )
+        )
         events.extend(
             [
                 LedgerEvent(
@@ -701,6 +717,57 @@ def test_admission_persists_and_revalidates_request_started_records(working):
     assert len((bundle.root / "request-started.jsonl").read_text().splitlines()) == 5
     _derive(bundle)
     bundle.validate()
+
+
+@pytest.mark.parametrize("reverse_calls", [False, True])
+def test_release_accepts_cross_runtime_latency_aggregate_at_recorded_scale(
+    working,
+    reverse_calls,
+):
+    bundle, _repository, run = working
+    latencies_ms = (
+        16_400.828,
+        17_015.099,
+        16_374.375,
+        16_631.365999999998,
+        16_558.981,
+    )
+    trials, calls, events, evidence = _accounting(
+        run,
+        _trials(run),
+        latencies_ms=latencies_ms,
+    )
+    recorded_latency_ms = pc.sum(pa.array(latencies_ms)).as_py()
+    assert abs(math.fsum(latencies_ms) - recorded_latency_ms) > 1e-12
+    if reverse_calls:
+        calls.reverse()
+    run = replace(run, latency_ms=recorded_latency_ms)
+
+    bundle.admit_run(
+        run,
+        trials,
+        calls=calls,
+        request_starts=_request_records(run, trials, calls),
+        ledger_events=events,
+        evidence=evidence,
+    )
+    _derive(bundle)
+    bundle.validate()
+
+
+def test_release_aggregate_tolerance_rejects_material_and_nonfinite_drift():
+    latencies_ms = (
+        16_400.828,
+        17_015.099,
+        16_374.375,
+        16_631.365999999998,
+        16_558.981,
+    )
+    recorded_latency_ms = pc.sum(pa.array(latencies_ms)).as_py()
+    assert _matches_finite_aggregate(recorded_latency_ms, latencies_ms)
+    assert not _matches_finite_aggregate(recorded_latency_ms + 1e-6, latencies_ms)
+    assert not _matches_finite_aggregate(float("nan"), latencies_ms)
+    assert not _matches_finite_aggregate(recorded_latency_ms, (*latencies_ms, float("inf")))
 
 
 def test_validation_rejects_a_tampered_request_started_record(working):

@@ -84,6 +84,18 @@ def test_static_site_exposes_suite_protocol_atlas_and_local_human_pilot(working)
     downloads = (bundle.root / "site" / "downloads.html").read_text()
     assert "sha256" in downloads
     assert "caveats" in downloads
+    assert "full sealed distribution" in downloads
+    assert (
+        "https://example.invalid/repo/releases/download/v1.0.0-test/"
+        "distinction-bench-v1.0.0-test.tar.gz"
+    ) in downloads
+    assert "distinction-bench-v1.0.0-test.release.json" in downloads
+    assert "this table is not the complete sealed bundle" in downloads
+    assert (bundle.root / "site" / "downloads" / "request-started.jsonl").read_bytes() == (
+        bundle.root / "request-started.jsonl"
+    ).read_bytes()
+    assert not (bundle.root / "site" / "downloads" / "release.json").exists()
+    assert not list((bundle.root / "site" / "downloads").glob("*.tar.gz"))
     human = (bundle.root / "site" / "human.html").read_text()
     assert "12 local-only stimuli" in human
     assert "participant_code" in human
@@ -102,6 +114,13 @@ def test_sealed_bundle_can_build_an_external_copy(working):
     output = bundle.root.parent / "external"
     build_site(bundle.publication(), output)
     assert (output / "index.html").is_file()
+
+
+def test_static_site_rejects_unsafe_distribution_asset_url(working):
+    bundle, _repository = working
+    bundle.manifest["repository_url"] = "javascript:alert(document.cookie)"
+    with pytest.raises(RuntimeError, match="safe release asset links"):
+        build_site(bundle.publication(), bundle.root / "site")
 
 
 def test_working_site_is_byte_identical_when_rebuilt_from_sealed_bundle(working):

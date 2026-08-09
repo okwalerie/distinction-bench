@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from sys import float_info
 from types import MappingProxyType
 from typing import Any
 
@@ -64,6 +65,7 @@ class PublicationView:
 
     root: Path
     release_id: str
+    repository_url: str
     status: str
     suite_version: str
     stimuli_materialized: bool
@@ -166,6 +168,25 @@ def _require_nonnegative_number(value: Any, label: str) -> None:
 def _require_nonnegative_integer(value: Any, label: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise RuntimeError(f"{label} must be a nonnegative integer")
+
+
+def _matches_finite_aggregate(recorded: float, components: Iterable[float]) -> bool:
+    """Compare cross-runtime binary64 sums against one canonical finite total."""
+    values = tuple(components)
+    if not math.isfinite(recorded) or any(not math.isfinite(value) for value in values):
+        return False
+    try:
+        canonical = math.fsum(values)
+    except OverflowError:
+        return False
+    if not math.isfinite(canonical):
+        return False
+    return math.isclose(
+        recorded,
+        canonical,
+        rel_tol=max(1, len(values)) * float_info.epsilon,
+        abs_tol=1e-12,
+    )
 
 
 def _validate_reasoning_numbers(value: Any, label: str = "reasoning") -> None:
@@ -675,12 +696,18 @@ class ReleaseBundle:
                 _require_nonnegative_integer(trial[field], f"trial {field}")
             for field in ("observed_cost_usd", "latency_ms", "provider_latency_ms"):
                 _require_nonnegative_number(trial[field], f"trial {field}")
-        if abs(sum(call.observed_cost_usd for call in calls) - run.cost_usd) > 1e-12:
+        if not _matches_finite_aggregate(
+            run.cost_usd,
+            (call.observed_cost_usd for call in calls),
+        ):
             raise RuntimeError("run cost does not match call records")
         for field in ("input_tokens", "output_tokens", "reasoning_tokens"):
             if sum(getattr(call, field) for call in calls) != run.token_usage.get(field, 0):
                 raise RuntimeError(f"run usage does not match calls for {field}")
-        if abs(sum(call.latency_ms for call in calls) - run.latency_ms) > 1e-12:
+        if not _matches_finite_aggregate(
+            run.latency_ms,
+            (call.latency_ms for call in calls),
+        ):
             raise RuntimeError("run latency does not match call records")
 
         evidence_revisions: dict[str, list[AttemptEvidence]] = {}
@@ -936,6 +963,7 @@ class ReleaseBundle:
         return PublicationView(
             root=self.root,
             release_id=self.manifest["release_id"],
+            repository_url=self.manifest["repository_url"],
             status=self.manifest["status"],
             suite_version=self.manifest["suite_version"],
             stimuli_materialized=bool(self.manifest.get("stimuli_materialized")),

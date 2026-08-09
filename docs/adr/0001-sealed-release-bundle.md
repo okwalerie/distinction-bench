@@ -96,6 +96,10 @@ attempt. trial error semantics are replayed from that evidence. admission requir
 exact request-start/evidence/call/trial/ledger closure and recomputes all run aggregates. derived
 profiles and site files remain reproducible consumers. sealing lists and hashes every
 file and makes the directory immutable by convention and validation.
+future floating-point cost and latency aggregates use `math.fsum`. validation requires
+finite, nonnegative components and compares a recorded total with that canonical sum
+using an absolute `1e-12` floor plus a component-count-scaled binary64 epsilon bound.
+this admits cross-runtime reduction roundoff while rejecting material drift.
 
 the provider-neutral `release_bundle` module's mutation interface is `create_working`, `admit_run`,
 `materialize_stimuli`, and `seal`; `open`, `validate`, and `validate_planned_run`
@@ -106,6 +110,12 @@ not interpret provider catalogs or sample protocol ids. publication consumers us
 admitted records, and recomputed metrics. `lofsite.build_site` accepts only that view.
 renderer registries, provider adapters, inspect logs, cli policy, and site code are
 inputs or consumers, never alternative authorities.
+the site embeds selected byte-identical evidence exports, including the complete
+request-start intent log, but does not claim that table is the sealed bundle. its full
+distribution links target the deterministic external archive and a byte-identical
+`release.json` sidecar published only after sealing. putting either the archive or the
+final manifest inside its checksummed site would create recursive content, so the
+release workflow verifies the sidecar against the archive root instead.
 
 the live `v1.0.0-sample.1` predecessor created before this identity rule is handled by
 one explicit working-state salvage operation, not by accepting its legacy identity in

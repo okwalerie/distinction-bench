@@ -107,6 +107,7 @@ def validate_sample_release(context: ReleasePolicyContext) -> None:
         "downloads.html",
         "CNAME",
         "downloads/human-trial.schema.json",
+        "downloads/request-started.jsonl",
     }
     missing = [relative for relative in required_files if not (site / relative).is_file()]
     if missing:
@@ -133,7 +134,15 @@ def validate_sample_release(context: ReleasePolicyContext) -> None:
             "human-trial.schema.json",
         ),
         "forms.html": ("system prompt", "possible confounds", "frozen form sets"),
-        "downloads.html": ("sha256", "caveats", "human-trial.schema.json"),
+        "downloads.html": (
+            "sha256",
+            "caveats",
+            "human-trial.schema.json",
+            "request-started.jsonl",
+            "full sealed distribution",
+            "release.json",
+            ".tar.gz",
+        ),
     }
     for relative, markers in required_markers.items():
         page = (site / relative).read_text()

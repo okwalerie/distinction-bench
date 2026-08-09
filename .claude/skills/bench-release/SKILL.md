@@ -211,12 +211,21 @@ uv run python -m dbench export-inspect \
 uv run python -m dbench archive \
   --release /tmp/distinction-release \
   --out /tmp/distinction-bench-<release-id>.tar.gz
+install -m 0644 /tmp/distinction-release/release.json \
+  /tmp/distinction-bench-<release-id>.release.json
 ```
 
 re-open and validate the sealed directory before tagging or upload. never edit a
-sealed directory; any checksum drift invalidates it. attach the tarball to the
-matching github release. pages deployment downloads that exact asset, validates
-it again, builds static output, and publishes the canonical cname.
+sealed directory; any checksum drift invalidates it. attach the tarball and the
+byte-identical manifest sidecar to the matching github release. pages deployment
+requires both, compares the sidecar to the archive-root `release.json`, validates the
+bundle again, builds static output, and publishes the canonical cname. the site embeds
+`request-started.jsonl` but links to the external full archive and manifest; neither
+recursive distribution artifact belongs inside the sealed tree.
+when validation reports an aggregate mismatch, do not rewrite sealed run or call
+records. current validators canonicalize finite cost/latency sums with `math.fsum` and
+accept only the component-count-scaled binary64 roundoff bound; a larger mismatch is
+evidence corruption and remains fail-closed.
 
 ## handoff
 

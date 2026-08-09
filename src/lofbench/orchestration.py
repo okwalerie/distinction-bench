@@ -325,8 +325,8 @@ def reconciled_run_manifest(
             key: sum(getattr(record, key) for record in calls)
             for key in ("input_tokens", "output_tokens", "reasoning_tokens")
         },
-        latency_ms=sum(record.latency_ms for record in calls),
-        cost_usd=sum(record.observed_cost_usd for record in calls),
+        latency_ms=math.fsum(record.latency_ms for record in calls),
+        cost_usd=math.fsum(record.observed_cost_usd for record in calls),
     )
 
 

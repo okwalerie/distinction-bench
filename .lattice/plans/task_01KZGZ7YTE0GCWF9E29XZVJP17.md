@@ -760,6 +760,24 @@ deterministic projection:
 
 ## Reset 2026-08-09 by agent:codex-root
 
+## sealed artifact portability and distribution repair — ev_01KZJAW5W0YWG5GCEMZ41B5BV0
+
+the sealed sample exposes a binary64 aggregation portability defect: three recorded
+run latency totals differ from the same five call values by one ulp at roughly 85,000
+milliseconds. future run aggregation uses `math.fsum`; validation compares finite
+recorded totals with that canonical sum under an absolute `1e-12` floor plus the
+standard component-count-scaled binary64 epsilon bound. exercise both call orders at
+the exact observed scale, accept the one-ulp cross-runtime result, and reject material
+or nonfinite drift. re-open the real sealed artifact read-only as the end-to-end loop.
+
+the site download table is a selected evidence export, not the complete sealed bundle.
+add `request-started.jsonl` to it. link the deterministic full archive and a standalone
+byte-identical `release.json` sidecar at the matching repository release; require the
+pages workflow to download both and compare the sidecar with the archive root before
+validation. do not copy the final manifest or archive into the sealed tree: manifest
+inclusion in its checksummed site and archive inclusion are recursive. keep the sealed
+release/state immutable pending independent review.
+
 ## canonical migration lineage-preflight repair — ev_01KZJ8JWKNTRXVW9A925XRB4YW
 
 the first approved live invocation refused before migration state or release mutation
