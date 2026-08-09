@@ -74,16 +74,21 @@ class ProtocolSpec:
         return sha256(material.encode()).hexdigest()
 
 
-def load_protocol_registry(path: Path = DEFAULT_PROTOCOL_REGISTRY) -> dict[str, ProtocolSpec]:
-    payload = json.loads(path.read_text())
-    if payload.get("schema_version") != 1:
+def protocol_registry_from_bytes(payload: bytes) -> dict[str, ProtocolSpec]:
+    """Parse one already-authorized protocol registry byte string."""
+    value = json.loads(payload)
+    if value.get("schema_version") != 1:
         raise RuntimeError("unsupported protocol registry schema")
     protocols = {
-        key: ProtocolSpec.from_dict(value) for key, value in payload["protocols"].items()
+        key: ProtocolSpec.from_dict(protocol) for key, protocol in value["protocols"].items()
     }
     if any(key != value.protocol_id for key, value in protocols.items()):
         raise RuntimeError("protocol registry key does not match protocol_id")
     return protocols
+
+
+def load_protocol_registry(path: Path = DEFAULT_PROTOCOL_REGISTRY) -> dict[str, ProtocolSpec]:
+    return protocol_registry_from_bytes(path.read_bytes())
 
 
 PROTOCOLS = load_protocol_registry()

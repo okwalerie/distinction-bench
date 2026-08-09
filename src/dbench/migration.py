@@ -37,7 +37,7 @@ from lofbench.orchestration import (
     reconciled_attempt_records,
     reconciled_run_manifest,
 )
-from lofbench.protocols import get_protocol
+from lofbench.protocols import ProtocolSpec, protocol_registry_from_bytes
 from lofbench.records import (
     AttemptEvidence,
     LedgerEvent,
@@ -417,6 +417,9 @@ def _validate_committed_migration_audit(
     ):
         raise RuntimeError("persisted migration run protocols are inconsistent")
     verified_suite = load_suite(path=release_root / "suite.json")
+    verified_protocols = protocol_registry_from_bytes(protocol_bytes)
+    if set(verified_protocols) != set(SAMPLE_PROTOCOLS):
+        raise RuntimeError("verified migration protocol set is inconsistent")
     try:
         rederived_authorities = {
             run.run_id: derive_run_authority(
@@ -444,7 +447,7 @@ def _validate_committed_migration_audit(
             suite_path=release_root / "suite.json",
             form_set="probe",
             dialect_id="enclosure.plain-v1",
-            protocol_id=protocol_id,
+            protocol=verified_protocols[protocol_id],
         )
         for protocol_id in SAMPLE_PROTOCOLS
     }
@@ -651,7 +654,7 @@ def _validate_committed_migration_audit(
     reconciled = reconciled_attempt_records(
         run=active,
         sample=sample,
-        protocol=get_protocol(active.protocol_id),
+        protocol=verified_protocols[active.protocol_id],
         evidence=expected_evidence[-1],
         evidence_projector=project_provider_evidence,
         reservation_amount=old_reservation.amount_usd,
@@ -870,7 +873,7 @@ def _frozen_identity_task(
     suite_path: Path,
     form_set: str,
     dialect_id: str,
-    protocol_id: str,
+    protocol: ProtocolSpec,
 ) -> Task:
     """Build non-executable task identity from frozen rows, without rasterizing.
 
@@ -878,7 +881,7 @@ def _frozen_identity_task(
     ids and hashes that define run/request/trial identity and scoring.
     """
     suite = load_suite(path=suite_path)
-    protocol = get_protocol(protocol_id)
+    protocol_id = protocol.protocol_id
     spec = suite.specs[dialect_id]
     forms = {row["abstract_form_id"]: row for row in suite.forms}
     cells = {(row["abstract_form_id"], row["dialect_id"]): row for row in suite.cells}
@@ -957,7 +960,13 @@ def _load_predecessor(
     expected_requested_model_id: str,
     expected_endpoint: str,
     expected_provider: str,
-) -> tuple[ReleaseBundle, dict[str, RunManifest], RunManifest, list[AttemptEvidence]]:
+) -> tuple[
+    ReleaseBundle,
+    dict[str, RunManifest],
+    RunManifest,
+    list[AttemptEvidence],
+    dict[str, ProtocolSpec],
+]:
     _require_regular_tree(release_root, label="predecessor release")
     _require_regular_tree(state_root, label="predecessor state")
     bundle = ReleaseBundle.open(
@@ -968,6 +977,16 @@ def _load_predecessor(
     )
     bundle.validate()
     manifest = bundle.manifest
+    predecessor_authority = AuthorityManifest.from_dict(manifest["authority"])
+    suite_bytes = (release_root / "suite.json").read_bytes()
+    protocol_bytes = (release_root / "protocols.json").read_bytes()
+    verify_authority_copies(
+        predecessor_authority,
+        suite_bytes=suite_bytes,
+        protocol_bytes=protocol_bytes,
+        repository_root=repository_root,
+    )
+    verified_protocols = protocol_registry_from_bytes(protocol_bytes)
     contract = manifest.get("sample_contract") or {}
     if (
         manifest.get("release_id") != SAMPLE_RELEASE_ID
@@ -982,6 +1001,7 @@ def _load_predecessor(
         or contract.get("form_set") != "probe"
         or contract.get("dialect_id") != "enclosure.plain-v1"
         or contract.get("execution_surface") != "direct_api"
+        or set(verified_protocols) != set(SAMPLE_PROTOCOLS)
     ):
         raise RuntimeError("release is not the exact unsealed predecessor sample")
     expected_run_ids = manifest.get("expected_run_ids")
@@ -1098,7 +1118,7 @@ def _load_predecessor(
         suite_path=release_root / "suite.json",
         form_set=active_run.form_set,
         dialect_id=active_run.dialect_id,
-        protocol_id=active_run.protocol_id,
+        protocol=verified_protocols[active_run.protocol_id],
     )
     active_sample = list(active_task.dataset.samples)[0]
     expected_request_sha256 = request_sha256_for(
@@ -1191,7 +1211,7 @@ def _load_predecessor(
         or active_run.latency_ms != final_call["latency_ms"]
     ):
         raise RuntimeError("predecessor run aggregates do not match its effective call")
-    return bundle, runs, active_run, evidence
+    return bundle, runs, active_run, evidence, verified_protocols
 
 
 def _write_staged_state(
@@ -1200,6 +1220,7 @@ def _write_staged_state(
     runs: dict[str, RunManifest],
     tasks: dict[str, Any],
     active_protocol: str,
+    protocol: ProtocolSpec,
     old_run: RunManifest,
     old_evidence: list[AttemptEvidence],
     old_request: RequestStartedRecord,
@@ -1258,7 +1279,7 @@ def _write_staged_state(
     reconciled = reconciled_attempt_records(
         run=active_run,
         sample=sample,
-        protocol=get_protocol(active_protocol),
+        protocol=protocol,
         evidence=revised_evidence,
         evidence_projector=project_openrouter_evidence,
         reservation_amount=old_reservation.amount_usd,
@@ -1366,7 +1387,7 @@ def salvage_working_model_identity(
             commit=current_commit,
             identity_event_id=identity_event_id,
         )
-        bundle, old_runs, old_active, old_evidence = _load_predecessor(
+        bundle, old_runs, old_active, old_evidence, verified_protocols = _load_predecessor(
             release_root,
             state_root,
             repository_root,
@@ -1405,7 +1426,7 @@ def salvage_working_model_identity(
                 suite_path=release_root / "suite.json",
                 form_set="probe",
                 dialect_id="enclosure.plain-v1",
-                protocol_id=protocol_id,
+                protocol=verified_protocols[protocol_id],
             )
             run = plan_run(
                 task,
@@ -1528,6 +1549,7 @@ def salvage_working_model_identity(
                 runs=runs,
                 tasks=tasks,
                 active_protocol=old_active.protocol_id,
+                protocol=verified_protocols[old_active.protocol_id],
                 old_run=old_active,
                 old_evidence=old_evidence,
                 old_request=old_request,
@@ -1547,6 +1569,7 @@ def salvage_working_model_identity(
                     InMemoryExecutor([]),
                     ledger=ledger,
                     evidence_projector=project_openrouter_evidence,
+                    protocol=verified_protocols[protocol_id],
                 ).reconcile(runs[protocol_id], tasks[protocol_id])
                 runs[protocol_id] = reconciled
             if ledger.totals("sample") != (expected_observed_cost_usd, 0.0):

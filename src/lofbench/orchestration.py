@@ -235,7 +235,8 @@ def reconciled_attempt_records(
     )
     call_id = call_id_for(trial_id, evidence.attempt)
     if (
-        (evidence.call_id, evidence.trial_id, evidence.run_id) != (call_id, trial_id, run.run_id)
+        protocol.protocol_id != run.protocol_id
+        or (evidence.call_id, evidence.trial_id, evidence.run_id) != (call_id, trial_id, run.run_id)
         or evidence.authoritative_digest() != evidence.evidence_sha256
         or not math.isfinite(reservation_amount)
         or reservation_amount < 0
@@ -337,6 +338,7 @@ class RunOrchestrator:
         *,
         ledger: SpendLedger,
         evidence_projector: EvidenceProjector,
+        protocol: ProtocolSpec | None = None,
         accounting_recoverer: AccountingRecoverer | None = None,
         transition_observer: TransitionObserver | None = None,
     ) -> None:
@@ -344,6 +346,7 @@ class RunOrchestrator:
         self.executor = executor
         self.ledger = ledger
         self.evidence_projector = evidence_projector
+        self.protocol = protocol
         self.accounting_recoverer = accounting_recoverer
         self.transition_observer = transition_observer
 
@@ -451,7 +454,9 @@ class RunOrchestrator:
         }
         if set(samples_by_trial) != set(run.expected_trial_ids):
             raise RuntimeError("task samples do not match the run's expected trial ids")
-        protocol = get_protocol(run.protocol_id)
+        protocol = self.protocol or get_protocol(run.protocol_id)
+        if protocol.protocol_id != run.protocol_id:
+            raise RuntimeError("run protocol does not match its reconciliation authority")
         call_identity = {
             call_id_for(trial_id, attempt): (trial_id, attempt)
             for trial_id in run.expected_trial_ids

@@ -760,6 +760,24 @@ deterministic projection:
 
 ## Reset 2026-08-09 by agent:codex-root
 
+## canonical migration protocol-authority rereview — ev_01KZJ7FF2HAYDXY6AB2DT9MDN4
+
+the fifth review found that proving bundled `protocols.json` was insufficient while
+frozen-task construction and reconciliation could still consult the running source
+tree's module-global protocol registry. parse `ProtocolSpec` values directly from the
+exact bytes that passed predecessor/candidate authority-copy verification and thread
+those values through every migration task, staged reconciliation, orchestrator, and
+committed-recovery derivation. protocol id agreement is an explicit reconciliation
+precondition; the runtime registry has no authority on this path.
+
+an adversarial committed-recovery test replaces the runtime registry with divergent
+prompts, answer kinds, targets, and scoring semantics while retaining the verified
+bundle. recovery must still derive the valid retained trial solely from the bundle;
+the existing coherent bundled-registry forgery remains rejected at the authority-copy
+boundary. keep the live release and state untouched pending another review.
+
+## Reset 2026-08-09 by agent:codex-root
+
 ## Reset 2026-08-09 by agent:codex-root
 
 ## Reset 2026-08-09 by agent:codex-root

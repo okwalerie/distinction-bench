@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import dbench.migration as migration
+import lofbench.protocols as runtime_protocols
 from dbench.cli import main as cli_main
 from dbench.migration import (
     IDENTITY_EVENT_ACTOR,
@@ -35,7 +36,7 @@ from lofbench.authority import (
     derive_run_authority,
 )
 from lofbench.orchestration import RunAlreadyRunningError, call_record_from_projection
-from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
+from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY, protocol_registry_from_bytes
 from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
 from lofbench.records import (
     AttemptEvidence,
@@ -267,12 +268,13 @@ def _evidence() -> tuple[ProviderEvidenceEnvelope, ProviderEvidenceEnvelope]:
 
 def _fixture(tmp_path: Path):
     repository, predecessor = _repository(tmp_path / "repository")
+    protocols = protocol_registry_from_bytes((repository / PROTOCOL_REGISTRY_GIT_PATH).read_bytes())
     tasks = {
         protocol: _frozen_identity_task(
             suite_path=repository / SUITE_REGISTRY_GIT_PATH,
             form_set="probe",
             dialect_id="enclosure.plain-v1",
-            protocol_id=protocol,
+            protocol=protocols[protocol],
         )
         for protocol in SAMPLE_PROTOCOLS
     }
@@ -1016,6 +1018,44 @@ def test_committed_recovery_rejects_registry_redefinition_before_deriving_maps(
     assert journal_path.is_file()
 
 
+def test_runtime_protocol_registry_is_irrelevant_to_verified_bundle_recovery(
+    tmp_path,
+    monkeypatch,
+):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    divergent = {
+        protocol_id: replace(
+            protocol,
+            system_text="forged runtime protocol outside release authority",
+            answer_kind=(
+                "structural_transcription"
+                if protocol.answer_kind == "normal_value"
+                else "normal_value"
+            ),
+        )
+        for protocol_id, protocol in runtime_protocols.PROTOCOLS.items()
+    }
+    monkeypatch.setattr(runtime_protocols, "PROTOCOLS", divergent)
+
+    def die(candidate):
+        if candidate == "journal:committed":
+            raise _ProcessDeath(candidate)
+
+    with pytest.raises(_ProcessDeath, match="journal:committed"):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            transition_observer=die,
+        )
+    with pytest.raises(RuntimeError, match="finalized interrupted migration"):
+        _salvage(repository, predecessor, release, state)
+    trials = [row for path in state.glob("run_*/trials.jsonl") for row in read_jsonl(path)]
+    assert len(trials) == 1
+    assert trials[0]["parse_status"] == "valid"
+
+
 def test_cli_recovers_process_death_before_key_or_catalog_access(tmp_path, monkeypatch):
     repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
     before_release = (release / "release.json").read_bytes()
@@ -1182,7 +1222,9 @@ def test_lifecycle_lock_blocks_runner_until_migration_publishes_new_ids(
             suite_path=Path(suite),
             form_set=form_set,
             dialect_id=dialect,
-            protocol_id=protocol,
+            protocol=protocol_registry_from_bytes(
+                (repository / PROTOCOL_REGISTRY_GIT_PATH).read_bytes()
+            )[protocol],
         ),
     )
     env_file = tmp_path / "test.env"

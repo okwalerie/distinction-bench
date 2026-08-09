@@ -147,7 +147,10 @@ and the one-attempt/nineteen-remaining state before removing the journal. retain
 evidence is reprojected with the current projector through the same reconciliation
 derivation used by ordinary execution; recovery requires exact request, call, scored
 trial, reserve/settle pair, and run aggregates rather than trusting recorded hashes or
-set membership.
+set membership. the verified bundled `protocols.json` bytes are parsed once into the
+`ProtocolSpec` values supplied to frozen-task construction, staging, orchestration,
+scoring, and committed recovery. the running source tree's module-global protocol
+registry is not an authority for migration or recovery.
 
 ## consequences
 

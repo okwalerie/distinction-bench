@@ -117,7 +117,10 @@ authority manifests and registry copies pass `verify_authority_copies` (includin
 proof when the repository is available) and every run authority is rederived from
 those verified bytes. then reproject the retained evidence through normal
 reconciliation and require the complete call, scored trial, reserve/settle events,
-and run aggregates to match exactly.
+and run aggregates to match exactly. parse `ProtocolSpec` values only from the exact
+verified bundled protocol bytes and inject them through frozen-task construction,
+staging, reconciliation, and committed recovery. never consult the running source
+tree's module-global protocol registry on this path.
 
 ## probe, run, and resume
 
