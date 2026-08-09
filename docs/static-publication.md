@@ -23,3 +23,23 @@ introduce a checksum/content recursion.
 
 site generation accepts only the validated, read-only publication view returned by
 `dbench.publication.open_release(...).publication()`.
+
+an older sealed sample that predates the portable-download policy is reissued, never
+edited in place. from a clean current commit, the operator supplies its immutable
+directory, matching external archive, absent sibling target, and the four complete
+state directories:
+
+```text
+python -m dbench reissue-sealed-release \
+  --source-release <sealed-directory> \
+  --source-archive <sealed-archive.tar.gz> \
+  --target-release <absent-sibling-directory> \
+  --state-root <complete-state-directory>
+```
+
+this command authenticates the old checksums, archive, authority, evidence/accounting
+core, and embedded working-state migration audit; it then readmits the exact records
+through the normal admission boundary into a fresh working bundle. it performs no
+planning, execution, provider request, credential load, or network access. prepare,
+independent review, sealing, sidecar publication, and archiving remain separate normal
+steps.

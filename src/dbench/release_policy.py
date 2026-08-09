@@ -7,8 +7,59 @@ import pyarrow.parquet as pq
 from dbench.provider_evidence import validate_openrouter_run_policy
 from lofbench.release_bundle import ReleasePolicyContext
 
+_SITE_FILES = {
+    "index.html",
+    "forms.html",
+    "atlas.html",
+    "runs.html",
+    "human.html",
+    "downloads.html",
+    "CNAME",
+    "downloads/human-trial.schema.json",
+    "downloads/request-started.jsonl",
+}
+_SITE_MARKERS = {
+    "runs.html": (
+        "containment tree and frozen form",
+        "actual rendered stimulus",
+        "reading rule, protocol, and exact prompt",
+        "target and recorded response",
+        "parse and scorer identity",
+        "profile contribution",
+        "dialect matrix",
+        "family matrix",
+        "reasoning contrasts",
+        "not run",
+        "exact endpoint + routing provenance",
+        "input/output/reasoning tokens",
+    ),
+    "human.html": (
+        "HumanTrialRecord",
+        "familiarity_band",
+        "elapsed_ms",
+        "human-trial.schema.json",
+    ),
+    "forms.html": ("system prompt", "possible confounds", "frozen form sets"),
+    "downloads.html": (
+        "sha256",
+        "caveats",
+        "human-trial.schema.json",
+        "request-started.jsonl",
+        "full sealed distribution",
+        "release.json",
+        ".tar.gz",
+    ),
+}
+_LEGACY_PUBLICATION_GAPS = {
+    ("file", "downloads/request-started.jsonl"),
+    ("downloads.html", "request-started.jsonl"),
+    ("downloads.html", "full sealed distribution"),
+    ("downloads.html", "release.json"),
+    ("downloads.html", ".tar.gz"),
+}
 
-def validate_sample_release(context: ReleasePolicyContext) -> None:
+
+def _validate_sample_core(context: ReleasePolicyContext) -> None:
     contract = context.manifest.get("sample_contract")
     if not contract:
         return
@@ -97,55 +148,50 @@ def validate_sample_release(context: ReleasePolicyContext) -> None:
         or any(row["coverage"] != 1.0 for row in profiles)
     ):
         raise RuntimeError("sealed sample requires complete derived profiles")
+
+
+def _site_gaps(context: ReleasePolicyContext) -> set[tuple[str, str]]:
     site = context.root / "site"
-    required_files = {
-        "index.html",
-        "forms.html",
-        "atlas.html",
-        "runs.html",
-        "human.html",
-        "downloads.html",
-        "CNAME",
-        "downloads/human-trial.schema.json",
-        "downloads/request-started.jsonl",
-    }
-    missing = [relative for relative in required_files if not (site / relative).is_file()]
-    if missing:
-        raise RuntimeError(f"sealed sample site is missing required artifacts: {missing}")
-    required_markers = {
-        "runs.html": (
-            "containment tree and frozen form",
-            "actual rendered stimulus",
-            "reading rule, protocol, and exact prompt",
-            "target and recorded response",
-            "parse and scorer identity",
-            "profile contribution",
-            "dialect matrix",
-            "family matrix",
-            "reasoning contrasts",
-            "not run",
-            "exact endpoint + routing provenance",
-            "input/output/reasoning tokens",
-        ),
-        "human.html": (
-            "HumanTrialRecord",
-            "familiarity_band",
-            "elapsed_ms",
-            "human-trial.schema.json",
-        ),
-        "forms.html": ("system prompt", "possible confounds", "frozen form sets"),
-        "downloads.html": (
-            "sha256",
-            "caveats",
-            "human-trial.schema.json",
-            "request-started.jsonl",
-            "full sealed distribution",
-            "release.json",
-            ".tar.gz",
-        ),
-    }
-    for relative, markers in required_markers.items():
-        page = (site / relative).read_text()
-        absent = [marker for marker in markers if marker not in page]
-        if absent:
-            raise RuntimeError(f"sealed sample site {relative} lacks required evidence: {absent}")
+    gaps = {("file", relative) for relative in _SITE_FILES if not (site / relative).is_file()}
+    for relative, markers in _SITE_MARKERS.items():
+        path = site / relative
+        if not path.is_file():
+            continue
+        page = path.read_text()
+        gaps.update((relative, marker) for marker in markers if marker not in page)
+    return gaps
+
+
+def validate_sample_release(context: ReleasePolicyContext) -> None:
+    """Validate the current sample evidence and publication contract."""
+    if not context.manifest.get("sample_contract"):
+        return
+    _validate_sample_core(context)
+    if context.manifest["status"] != "sealed" and not context.sealing:
+        return
+    gaps = _site_gaps(context)
+    if gaps:
+        raise RuntimeError(f"sealed sample site violates publication policy: {sorted(gaps)}")
+
+
+def validate_legacy_sample_reissue_source(context: ReleasePolicyContext) -> None:
+    """Accept only the one sealed sample predating the portable-download policy.
+
+    This is deliberately a source-authentication policy for reissue, not a switch
+    on ordinary validation. Every evidence, accounting, approval, metrics, and
+    sealed-checksum rule remains current; only the enumerated publication gaps
+    are admitted.
+    """
+    if not context.manifest.get("sample_contract"):
+        raise RuntimeError("legacy reissue source lacks the frozen sample contract")
+    _validate_sample_core(context)
+    if context.manifest["status"] != "sealed" or context.sealing:
+        raise RuntimeError("legacy reissue source must be an already sealed sample")
+    gaps = _site_gaps(context)
+    if not gaps or ("file", "downloads/request-started.jsonl") not in gaps:
+        raise RuntimeError("legacy reissue source is not the stale publication shape")
+    unexpected = gaps - _LEGACY_PUBLICATION_GAPS
+    if unexpected:
+        raise RuntimeError(
+            f"legacy reissue source has non-publication-policy gaps: {sorted(unexpected)}"
+        )

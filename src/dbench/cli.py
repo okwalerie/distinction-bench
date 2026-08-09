@@ -24,6 +24,7 @@ from dbench.migration import (
 from dbench.openrouter import OpenRouterExecutor, fetch_openrouter_endpoint
 from dbench.provider_evidence import project_provider_evidence, projector_for_run
 from dbench.publication import open_release
+from dbench.reissue import reissue_sealed_release
 from dbench.release_policy import validate_sample_release
 from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
 from lofbench.authority import authority_from_git
@@ -143,6 +144,11 @@ def _parser() -> argparse.ArgumentParser:
     salvage.add_argument("--provider", required=True)
     salvage.add_argument("--expected-observed-cost-usd", type=float, required=True)
     salvage.add_argument("--identity-event", required=True)
+    reissue = subparsers.add_parser("reissue-sealed-release")
+    reissue.add_argument("--source-release", type=Path, required=True)
+    reissue.add_argument("--source-archive", type=Path, required=True)
+    reissue.add_argument("--target-release", type=Path, required=True)
+    reissue.add_argument("--state-root", type=Path, required=True)
     return parser
 
 
@@ -407,6 +413,16 @@ def _execute_run_command(args: argparse.Namespace, values: dict[str, str]) -> in
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "reissue-sealed-release":
+        result = reissue_sealed_release(
+            source_root=args.source_release,
+            source_archive=args.source_archive,
+            target_root=args.target_release,
+            state_root=args.state_root,
+            repository_root=Path.cwd(),
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        return 0
     if args.command == "plan":
         try:
             with state_lifecycle_lock(args.state_root, blocking=False):

@@ -166,6 +166,27 @@ set membership. the verified bundled `protocols.json` bytes are parsed once into
 scoring, and committed recovery. the running source tree's module-global protocol
 registry is not an authority for migration or recovery.
 
+a sealed bundle is never edited to adopt a later publication contract. the typed
+`reissue-sealed-release` boundary accepts only the known sealed sample shape whose
+evidence, accounting, application core, authority copies, manifest checksums, and
+deterministic external archive all validate, but whose site is missing only the
+enumerated portable-download artifacts. this is a named legacy source policy, not a
+normal-validation flag. it additionally revalidates the complete canonical-identity
+migration audit, exact event authority, predecessor/current registry authorities,
+run/trial maps, and admitted model/catalog identity.
+
+reissue holds the existing state lifecycle lock and requires a distinct absent sibling
+target. it creates a fresh working bundle at the current clean commit from the source's
+exact release id, repository url, expected ids, approval, contract, spend caps, and
+stimulus policy; then it compares each of the four complete state directories with the
+sealed records and calls ordinary `admit_run` for all twenty attempts. no planner,
+executor, provider, credential, or network seam is reachable. exact observed spend is
+`0.069506875` with no reservation remaining. the fresh manifest embeds the unchanged
+`working_state_migrations` audit and typed `reissued_from` hashes for the old
+`release.json`, complete source tree, and external archive. only after rederived
+metrics and normal working-bundle validation pass is the staged sibling atomically
+published; the original sealed directory and archive remain immutable.
+
 ## consequences
 
 - public results can be traced to exact stimulus, prompt, provider, and response
@@ -178,6 +199,8 @@ registry is not an authority for migration or recovery.
   and json-parse projection); secrets belong to
   request headers and never enter the envelope.
 - a renderer or analysis edit cannot revise an existing sealed release.
+- a publication-only policy change produces a provenance-linked fresh bundle rather
+  than mutating or relabelling sealed bytes.
 - working runs remain mutable until admitted; incomplete or provenance-deficient runs
   cannot enter a sealed bundle.
 - pilot-v0 data needs an explicit importer and cannot be relabelled as v1.

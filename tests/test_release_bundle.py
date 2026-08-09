@@ -19,15 +19,19 @@ from dbench.provider_evidence import (
     OPENROUTER_GENERATION_SOURCE,
     project_openrouter_evidence,
 )
+from dbench.reissue import reissue_sealed_release
 from dbench.release_policy import validate_sample_release
 from lofbench.authority import (
     PROTOCOL_REGISTRY_GIT_PATH,
     SUITE_REGISTRY_GIT_PATH,
+    authority_from_git,
+    canonical_sha256,
     derive_run_authority,
 )
 from lofbench.metrics import write_release_metrics
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY, get_protocol
 from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
+from lofbench.publication import archive_release
 from lofbench.records import (
     AttemptEvidence,
     CallRecord,
@@ -1270,7 +1274,12 @@ def _sample_run(protocol_id: str, form_ids: tuple[str, ...]) -> RunManifest:
     )
 
 
-def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
+def _sample_records(
+    run: RunManifest,
+    form_ids: tuple[str, ...],
+    *,
+    costs: tuple[float, ...] | None = None,
+):
     suite = load_suite()
     forms = {form["abstract_form_id"]: form for form in suite.forms}
     cells = {
@@ -1283,8 +1292,9 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
     calls = []
     events = []
     evidence = []
-    for index, (trial_id, form_id) in enumerate(
-        zip(run.expected_trial_ids, form_ids, strict=True), start=1
+    cost_values = costs or (0.001,) * len(form_ids)
+    for index, (trial_id, form_id, cost_usd) in enumerate(
+        zip(run.expected_trial_ids, form_ids, cost_values, strict=True), start=1
     ):
         form = forms[form_id]
         cell = cells[form_id]
@@ -1313,6 +1323,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                 request_id=provider_request_id,
                 started_at=started_at,
                 finished_at=finished_at,
+                cost_usd=cost_usd,
             ),
         )
         trials.append(
@@ -1341,7 +1352,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
                 input_tokens=20,
                 output_tokens=4,
                 reasoning_tokens=0,
-                observed_cost_usd=0.001,
+                observed_cost_usd=cost_usd,
                 prediction=prediction,
                 normal_value=form["normal_value"],
                 correct=correct,
@@ -1358,7 +1369,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
             finished_at=finished_at,
             status="complete",
             reserved_cost_usd=0.01,
-            observed_cost_usd=0.001,
+            observed_cost_usd=cost_usd,
             resolved_model_id=run.resolved_model_id,
             provider=run.provider,
             endpoint=run.endpoint,
@@ -1375,7 +1386,7 @@ def _sample_records(run: RunManifest, form_ids: tuple[str, ...]):
         evidence.append(record)
         for event_type, amount, at in (
             ("reserved", 0.01, call.started_at),
-            ("settled", 0.001, call.finished_at),
+            ("settled", cost_usd, call.finished_at),
         ):
             events.append(
                 LedgerEvent(
@@ -1504,3 +1515,298 @@ def test_sample_contract_rejects_empty_call_evidence(tmp_path):
     trials, _calls, _events, _evidence = _sample_records(run, form_ids)
     with pytest.raises(RuntimeError, match="attempt count"):
         bundle.admit_run(run, trials)
+
+
+@pytest.fixture(scope="module")
+def sealed_reissue_source(tmp_path_factory):
+    root = tmp_path_factory.mktemp("sealed-reissue")
+    repository = root / "repository"
+    subprocess.run(["git", "clone", "-q", "--shared", str(Path.cwd()), str(repository)], check=True)
+    candidate_authority, _, _ = authority_from_git(repository)
+    predecessor_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD^"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    predecessor_authority, _, _ = authority_from_git(repository, commit=predecessor_commit)
+    protocols = (
+        "reduce-infer-v1",
+        "reduce-taught-v1",
+        "transcribe-infer-v1",
+        "transcribe-taught-v1",
+    )
+    form_ids = tuple(load_suite().form_sets["probe"])
+    cost_values = (0.002320875, *(0.0035 for _ in range(18)), 0.004186)
+    runs = []
+    offset = 0
+    for protocol in protocols:
+        costs = tuple(cost_values[offset : offset + 5])
+        offset += 5
+        runs.append(replace(_sample_run(protocol, form_ids), cost_usd=math.fsum(costs)))
+    old_run_ids = {run.run_id: f"run_precanonical_{index}" for index, run in enumerate(runs)}
+    trial_map = {
+        trial_id_for(old_run_ids[run.run_id], form_id, run.dialect_id): trial_id
+        for run in runs
+        for form_id, trial_id in zip(form_ids, run.expected_trial_ids, strict=True)
+    }
+    audit = {
+        "schema_version": 1,
+        "kind": "openrouter-canonical-model-identity-v1",
+        "identity_event_id": "ev_01KZHVJWTQAXJEACS9BTVN34Z9",
+        "identity_event_authority": {
+            "actor": "agent:codex-root",
+            "body_sha256": "908c7d1a5e0b42765fc807402051ab43900c03f8985ec6e86d7ee4aff3cc8103",
+            "type": "comment_added",
+        },
+        "migrated_at": "2026-08-08T00:00:00+00:00",
+        "predecessor_repository_commit": predecessor_commit,
+        "repository_commit": candidate_authority.source_commit,
+        "predecessor_authority": predecessor_authority.to_dict(),
+        "authority": candidate_authority.to_dict(),
+        "predecessor_authority_sha256": canonical_sha256(predecessor_authority.to_dict()),
+        "authority_sha256": canonical_sha256(candidate_authority.to_dict()),
+        "predecessor_release_manifest_sha256": "1" * 64,
+        "predecessor_state_sha256": "2" * 64,
+        "predecessor_run_manifest_sha256": {
+            old_run_id: canonical_sha256({"run_id": old_run_id, "protocol": run.protocol_id})
+            for run, old_run_id in ((run, old_run_ids[run.run_id]) for run in runs)
+        },
+        "authenticated_catalog_sha256": canonical_sha256(runs[0].catalog_row),
+        "predecessor_call_record_sha256": ["3" * 64, "4" * 64],
+        "requested_model_id": runs[0].requested_model_id,
+        "resolved_model_id": runs[0].resolved_model_id,
+        "endpoint": runs[0].endpoint,
+        "provider": runs[0].provider,
+        "run_id_map": {old: new for new, old in old_run_ids.items()},
+        "trial_id_map": trial_map,
+        "attempts_retained": 1,
+        "remaining_attempts": 19,
+    }
+    source = root / "source"
+    state = root / "state"
+    bundle = ReleaseBundle.create_working(
+        source,
+        release_id="v1.0.0-sample.1",
+        repository_url="https://example.invalid/repo",
+        repository_root=repository,
+        expected_run_ids=[run.run_id for run in runs],
+        paid_run_approval={
+            "approved_by": "human:test",
+            "approved_at": "2026-08-08T00:00:00+00:00",
+            "scope": "test sample only",
+            "max_spend_usd": 30.0,
+            "release_id": "v1.0.0-sample.1",
+            "run_ids": [run.run_id for run in runs],
+            "model_id": runs[0].requested_model_id,
+            "endpoint": runs[0].endpoint,
+            "provider": "Exact Provider",
+            "paid_calls": 20,
+        },
+        sample_contract={
+            "protocol_ids": list(protocols),
+            "form_set": "probe",
+            "dialect_id": "enclosure.plain-v1",
+            "execution_surface": "direct_api",
+            "max_transport_attempts": 1,
+            "trials_per_run": 5,
+            "total_attempts": 20,
+        },
+        spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
+        evidence_projector=project_openrouter_evidence,
+        release_policy_validator=validate_sample_release,
+        working_state_migrations=[audit],
+    )
+    all_ledger = []
+    for index, run in enumerate(runs):
+        costs = tuple(cost_values[index * 5 : index * 5 + 5])
+        trials, calls, events, evidence = _sample_records(run, form_ids, costs=costs)
+        requests = _request_records(run, trials, calls)
+        bundle.admit_run(
+            run,
+            trials,
+            calls=calls,
+            request_starts=requests,
+            ledger_events=events,
+            evidence=evidence,
+        )
+        run_dir = state / run.run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps(run.to_dict()) + "\n")
+        for name, rows in (
+            ("trials.jsonl", [row.to_dict() for row in trials]),
+            ("calls.jsonl", [row.to_dict() for row in calls]),
+            ("request-started.jsonl", [row.to_dict() for row in requests]),
+            ("transcripts.jsonl", [row.to_dict() for row in evidence]),
+        ):
+            (run_dir / name).write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
+            )
+        all_ledger.extend(row.to_dict() for row in events)
+    (state / "spend-ledger.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in all_ledger)
+    )
+    write_release_metrics(bundle.root, suite=load_suite(), runs=bundle.runs())
+    build_site(bundle.publication(), bundle.root / "site")
+    bundle.seal(repository_root=repository)
+    stale_download = bundle.root / "site" / "downloads" / "request-started.jsonl"
+    stale_download.unlink()
+    sealed_manifest = json.loads((bundle.root / "release.json").read_text())
+    sealed_manifest["files"].pop("site/downloads/request-started.jsonl")
+    (bundle.root / "release.json").write_text(json.dumps(sealed_manifest, indent=2) + "\n")
+    archive = archive_release(source, root / "source.tar.gz")
+    return repository, source, state, archive
+
+
+def _copy_reissue_source(sealed_reissue_source, root: Path):
+    repository, original_source, original_state, original_archive = sealed_reissue_source
+    source = shutil.copytree(original_source, root / "source")
+    state = shutil.copytree(original_state, root / "state")
+    archive = shutil.copyfile(original_archive, root / "source.tar.gz")
+    return repository, source, state, Path(archive)
+
+
+def test_reissue_accepts_only_stale_site_and_preserves_exact_core(tmp_path, sealed_reissue_source):
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+    with pytest.raises(RuntimeError, match="publication policy"):
+        ReleaseBundle.open(
+            source,
+            repository_root=repository,
+            evidence_projector=project_openrouter_evidence,
+            release_policy_validator=validate_sample_release,
+        ).validate()
+    target = tmp_path / "target"
+    result = reissue_sealed_release(
+        source_root=source,
+        source_archive=archive,
+        target_root=target,
+        state_root=state,
+        repository_root=repository,
+    )
+    assert result.attempts == 20
+    assert result.observed_cost_usd == 0.069506875
+    reissued = ReleaseBundle.open(
+        target,
+        repository_root=repository,
+        evidence_projector=project_openrouter_evidence,
+        release_policy_validator=validate_sample_release,
+    )
+    reissued.validate()
+    assert reissued.manifest["status"] == "working"
+    assert (
+        reissued.manifest["working_state_migrations"]
+        == json.loads((source / "release.json").read_text())["working_state_migrations"]
+    )
+    assert (
+        reissued.manifest["reissued_from"]["source_archive_sha256"]
+        == sha256(archive.read_bytes()).hexdigest()
+    )
+    calls = pq.read_table(target / "calls.parquet").to_pylist()
+    assert len(calls) == 20
+    assert math.fsum(row["observed_cost_usd"] for row in calls) == 0.069506875
+
+
+@pytest.mark.parametrize("mutation", ["drop", "swap"])
+def test_reissue_rejects_dropped_or_tampered_migration_audit(
+    tmp_path, sealed_reissue_source, mutation
+):
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+    manifest_path = source / "release.json"
+    manifest = json.loads(manifest_path.read_text())
+    if mutation == "drop":
+        manifest.pop("working_state_migrations")
+    else:
+        mapping = manifest["working_state_migrations"][0]["trial_id_map"]
+        first, second = list(mapping)[:2]
+        mapping[first], mapping[second] = mapping[second], mapping[first]
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    target = tmp_path / "target"
+    with pytest.raises(RuntimeError, match="migration"):
+        reissue_sealed_release(
+            source_root=source,
+            source_archive=archive,
+            target_root=target,
+            state_root=state,
+            repository_root=repository,
+        )
+    assert not target.exists()
+
+
+def test_reissue_rejects_core_tamper_and_target_collisions(tmp_path, sealed_reissue_source):
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+    with (source / "calls.parquet").open("ab") as handle:
+        handle.write(b"tamper")
+    target = tmp_path / "target"
+    with pytest.raises(RuntimeError):
+        reissue_sealed_release(
+            source_root=source,
+            source_archive=archive,
+            target_root=target,
+            state_root=state,
+            repository_root=repository,
+        )
+    assert not target.exists()
+
+    with pytest.raises(RuntimeError, match="distinct sibling"):
+        reissue_sealed_release(
+            source_root=source,
+            source_archive=archive,
+            target_root=source,
+            state_root=state,
+            repository_root=repository,
+        )
+    target.mkdir()
+    with pytest.raises(FileExistsError, match="absent"):
+        reissue_sealed_release(
+            source_root=source,
+            source_archive=archive,
+            target_root=target,
+            state_root=state,
+            repository_root=repository,
+        )
+    (target / "unexpected").write_text("occupied\n")
+    with pytest.raises(FileExistsError, match="absent"):
+        reissue_sealed_release(
+            source_root=source,
+            source_archive=archive,
+            target_root=target,
+            state_root=state,
+            repository_root=repository,
+        )
+
+
+def test_reissue_cli_has_no_secret_or_executor_path(
+    tmp_path, sealed_reissue_source, monkeypatch, capsys
+):
+    from dbench import cli
+
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("reissue entered a secret, catalog, or executor path")
+
+    monkeypatch.setattr(cli, "_load_secret_env", forbidden)
+    monkeypatch.setattr(cli, "_executor", forbidden)
+    monkeypatch.setattr(cli, "fetch_openrouter_endpoint", forbidden)
+    monkeypatch.chdir(repository)
+    target = tmp_path / "target"
+    assert (
+        cli.main(
+            [
+                "reissue-sealed-release",
+                "--source-release",
+                str(source),
+                "--source-archive",
+                str(archive),
+                "--target-release",
+                str(target),
+                "--state-root",
+                str(state),
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert output["attempts"] == 20
+    assert output["observed_cost_usd"] == 0.069506875

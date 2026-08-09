@@ -96,6 +96,73 @@ class ReleasePolicyContext:
 ReleasePolicyValidator = Callable[[ReleasePolicyContext], None]
 
 
+@dataclass(frozen=True)
+class ReleaseReissueProvenance:
+    """Immutable link from a fresh working bundle to one authenticated distribution."""
+
+    schema_version: int
+    kind: str
+    source_release_id: str
+    source_repository_commit: str
+    source_release_manifest_sha256: str
+    source_bundle_sha256: str
+    source_archive_sha256: str
+    source_archive_bytes: int
+    source_file_count: int
+    reissued_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {field: getattr(self, field) for field in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> ReleaseReissueProvenance:
+        expected = set(cls.__dataclass_fields__)
+        if set(value) != expected:
+            raise RuntimeError("release reissue provenance schema is invalid")
+        result = cls(**dict(value))
+        if result.schema_version != 1 or result.kind != "sealed-release-reissue-v1":
+            raise RuntimeError("release reissue provenance kind is invalid")
+        for field in (
+            "source_release_id",
+            "source_repository_commit",
+            "reissued_at",
+        ):
+            if not isinstance(getattr(result, field), str) or not getattr(result, field):
+                raise RuntimeError(f"release reissue provenance {field} is invalid")
+        if len(result.source_repository_commit) not in {40, 64} or any(
+            character not in "0123456789abcdef" for character in result.source_repository_commit
+        ):
+            raise RuntimeError("release reissue source commit is invalid")
+        for field in (
+            "source_release_manifest_sha256",
+            "source_bundle_sha256",
+            "source_archive_sha256",
+        ):
+            digest = getattr(result, field)
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+            ):
+                raise RuntimeError(f"release reissue provenance {field} is invalid")
+        if (
+            isinstance(result.source_archive_bytes, bool)
+            or not isinstance(result.source_archive_bytes, int)
+            or result.source_archive_bytes <= 0
+            or isinstance(result.source_file_count, bool)
+            or not isinstance(result.source_file_count, int)
+            or result.source_file_count <= 0
+        ):
+            raise RuntimeError("release reissue provenance values are invalid")
+        try:
+            timestamp = datetime.fromisoformat(result.reissued_at)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("release reissue timestamp is invalid") from exc
+        if timestamp.tzinfo is None:
+            raise RuntimeError("release reissue timestamp is invalid")
+        return result
+
+
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
         return MappingProxyType({key: _freeze(child) for key, child in value.items()})
@@ -234,6 +301,8 @@ class ReleaseBundle:
         spend_caps_usd: dict[str, Any],
         evidence_projector: EvidenceProjector | None = None,
         release_policy_validator: ReleasePolicyValidator | None = None,
+        reissued_from: ReleaseReissueProvenance | None = None,
+        working_state_migrations: Iterable[Mapping[str, Any]] = (),
     ) -> ReleaseBundle:
         if root.exists() and any(root.iterdir()):
             raise FileExistsError(f"release directory is not empty: {root}")
@@ -284,6 +353,11 @@ class ReleaseBundle:
             "stimuli_materialized": False,
             "files": {},
         }
+        migrations = [json.loads(json.dumps(dict(value))) for value in working_state_migrations]
+        if migrations:
+            manifest["working_state_migrations"] = migrations
+        if reissued_from is not None:
+            manifest["reissued_from"] = reissued_from.to_dict()
         (root / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
         bundle = cls(
             root,
@@ -987,6 +1061,14 @@ class ReleaseBundle:
         if set(path.name for path in self.root.iterdir() if path.is_file()) != _ROOT_FILES:
             raise RuntimeError("release root files do not match the bundle schema")
         self._verify_authorities()
+        reissued = self.manifest.get("reissued_from")
+        if reissued is not None:
+            if not isinstance(reissued, Mapping):
+                raise RuntimeError("release reissue provenance is invalid")
+            ReleaseReissueProvenance.from_dict(reissued)
+            migrations = self.manifest.get("working_state_migrations")
+            if not isinstance(migrations, list) or not migrations:
+                raise RuntimeError("reissued release must preserve working-state migrations")
         if json.loads((self.root / "human-trial.schema.json").read_text()) != (
             HUMAN_TRIAL_EXPORT_SCHEMA
         ):

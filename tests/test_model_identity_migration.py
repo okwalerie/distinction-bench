@@ -625,7 +625,7 @@ def test_salvage_rejects_tampered_tracked_identity_event(tmp_path):
         _salvage(repository, predecessor, release, state)
 
 
-def test_current_head_is_the_exact_bounded_repair_lineage(tmp_path):
+def test_current_head_cannot_reopen_the_consumed_bounded_repair_lineage(tmp_path):
     source_repository = Path(__file__).resolve().parents[1]
     repository = tmp_path / "current-head"
     subprocess.run(
@@ -642,7 +642,7 @@ def test_current_head_is_the_exact_bounded_repair_lineage(tmp_path):
             text=True,
         ).stdout.strip()
 
-    expected_paths = frozenset(
+    repair_paths = frozenset(
         {
             "src/dbench/cli.py",
             "src/dbench/migration.py",
@@ -651,6 +651,13 @@ def test_current_head_is_the_exact_bounded_repair_lineage(tmp_path):
             "src/lofbench/orchestration.py",
             "src/lofbench/protocols.py",
             "src/lofbench/state_io.py",
+        }
+    )
+    post_salvage_paths = frozenset(
+        {
+            "src/dbench/reissue.py",
+            "src/dbench/release_policy.py",
+            "src/lofbench/release_bundle.py",
         }
     )
     head = git("rev-parse", "HEAD")
@@ -679,17 +686,15 @@ def test_current_head_is_the_exact_bounded_repair_lineage(tmp_path):
         PROTOCOL_REGISTRY_GIT_PATH,
     )
 
-    assert migration._REPAIR_SOURCE_PATHS == expected_paths
-    assert changed_paths == expected_paths
+    assert migration._REPAIR_SOURCE_PATHS == repair_paths
+    assert changed_paths == repair_paths | post_salvage_paths
     assert source_merges == ""
     assert changed_registries == ""
-    assert (
+    with pytest.raises(RuntimeError, match="bounded canonical-identity repair lineage"):
         migration._require_predecessor_commit(
             repository,
             predecessor=REAL_REPAIR_PREDECESSOR,
         )
-        == head
-    )
 
 
 def test_salvage_rejects_unrelated_source_changes_in_repair_lineage(tmp_path):
