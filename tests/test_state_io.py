@@ -5,6 +5,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -14,6 +15,8 @@ from lofbench.state_io import (
     append_jsonl_fsynced,
     exclusive_file_lock,
     read_jsonl,
+    state_lifecycle_lock,
+    state_lifecycle_lock_path,
     write_json_atomic,
 )
 
@@ -99,6 +102,29 @@ def test_nonblocking_lock_reports_that_an_owner_is_active(tmp_path):
         with pytest.raises(FileLockUnavailableError, match="already held"):
             with exclusive_file_lock(path, blocking=False):
                 pass
+
+
+def test_state_lifecycle_lock_is_stable_outside_replaceable_root(tmp_path):
+    state_root = tmp_path / "release-state"
+    expected = tmp_path / ".release-state.lifecycle.lock"
+    assert state_lifecycle_lock_path(state_root) == expected
+    outcome = []
+
+    def contend():
+        try:
+            with state_lifecycle_lock(state_root, blocking=False):
+                outcome.append("acquired")
+        except FileLockUnavailableError:
+            outcome.append("blocked")
+
+    with state_lifecycle_lock(state_root, blocking=False):
+        assert expected.is_file()
+        with state_lifecycle_lock(state_root, blocking=False):
+            pass
+        worker = threading.Thread(target=contend)
+        worker.start()
+        worker.join(timeout=5)
+    assert outcome == ["blocked"]
 
 
 def test_first_creation_and_append_survive_a_real_subprocess(tmp_path):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +14,9 @@ from typing import Any
 
 class FileLockUnavailableError(RuntimeError):
     """A nonblocking advisory lock is already owned elsewhere."""
+
+
+_lifecycle_local = threading.local()
 
 
 def _fsync_directory(path: Path) -> None:
@@ -122,6 +126,27 @@ def exclusive_file_lock(path: Path, *, blocking: bool) -> Iterator[None]:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
     finally:
         os.close(descriptor)
+
+
+def state_lifecycle_lock_path(state_root: Path) -> Path:
+    """Return the stable lock inode shared by all writers of one state root."""
+    return state_root.parent / f".{state_root.name}.lifecycle.lock"
+
+
+@contextmanager
+def state_lifecycle_lock(state_root: Path, *, blocking: bool) -> Iterator[None]:
+    """Serialize state-root lifecycles before narrower run and ledger locks."""
+    identity = state_root.resolve(strict=False)
+    held = getattr(_lifecycle_local, "held", set())
+    if identity in held:
+        yield
+        return
+    with exclusive_file_lock(state_lifecycle_lock_path(state_root), blocking=blocking):
+        _lifecycle_local.held = {*held, identity}
+        try:
+            yield
+        finally:
+            _lifecycle_local.held = held
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

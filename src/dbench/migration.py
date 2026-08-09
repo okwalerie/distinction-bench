@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -47,8 +48,8 @@ from lofbench.run_models import (
 )
 from lofbench.state_io import (
     append_jsonl_fsynced,
-    exclusive_file_lock,
     read_jsonl,
+    state_lifecycle_lock,
     write_json_atomic,
 )
 from lofbench.suites import load_suite
@@ -61,6 +62,31 @@ SAMPLE_PROTOCOLS = (
     "transcribe-taught-v1",
 )
 _SOURCE_PATHS = ("src/dbench", "src/lofbench")
+_REPAIR_SOURCE_PATHS = frozenset(
+    {
+        "src/dbench/cli.py",
+        "src/dbench/migration.py",
+        "src/dbench/openrouter.py",
+        "src/dbench/provider_evidence.py",
+        "src/lofbench/orchestration.py",
+        "src/lofbench/state_io.py",
+    }
+)
+IDENTITY_EVENT_ID = "ev_01KZHVJWTQAXJEACS9BTVN34Z9"
+IDENTITY_EVENT_ACTOR = "agent:codex-root"
+IDENTITY_EVENT_TYPE = "comment_added"
+IDENTITY_EVENT_BODY = (
+    "live sample attempt 1/20 stopped fail-closed after generation accounting recovery: "
+    "chat reports requested google/gemini-3.1-flash-lite, while generation reports canonical "
+    "provider model google/gemini-3.1-flash-lite-20260507. key observed cost $0.002320875; "
+    "reservation remains. authenticated /models/user exposes canonical_slug at plan time, but "
+    "endpoint selector ignored it. no retry/new inference until plan identity is corrected and "
+    "the retained first attempt is safely re-keyed into the canonical run; total sample attempt "
+    "budget remains 20."
+)
+IDENTITY_EVENT_BODY_SHA256 = "908c7d1a5e0b42765fc807402051ab43900c03f8985ec6e86d7ee4aff3cc8103"
+_IDENTITY_EVENT_PATH = ".lattice/events/task_01KZGZ7YTE0GCWF9E29XZVJP17.jsonl"
+MigrationObserver = Callable[[str], None]
 
 
 def _now() -> str:
@@ -99,10 +125,31 @@ def _require_predecessor_commit(
         "--",
         *_SOURCE_PATHS,
     ).splitlines()
-    if len(source_commits) != 1:
-        raise RuntimeError(
-            "migration accepts only a release from the immediately preceding source revision"
-        )
+    changed_source_paths = set(
+        _git(
+            repository_root,
+            "diff",
+            "--name-only",
+            f"{predecessor}..{current}",
+            "--",
+            *_SOURCE_PATHS,
+        ).splitlines()
+    )
+    source_merges = _git(
+        repository_root,
+        "rev-list",
+        "--merges",
+        f"{predecessor}..{current}",
+        "--",
+        *_SOURCE_PATHS,
+    )
+    if (
+        not source_commits
+        or source_merges
+        or not changed_source_paths
+        or not changed_source_paths <= _REPAIR_SOURCE_PATHS
+    ):
+        raise RuntimeError("migration accepts only the bounded canonical-identity repair lineage")
     changed_registries = _git(
         repository_root,
         "diff",
@@ -115,6 +162,37 @@ def _require_predecessor_commit(
     if changed_registries:
         raise RuntimeError("migration cannot change the frozen suite or protocol authority")
     return current
+
+
+def _require_identity_event(
+    repository_root: Path,
+    *,
+    commit: str,
+    identity_event_id: str,
+) -> None:
+    if identity_event_id != IDENTITY_EVENT_ID:
+        raise RuntimeError("migration identity event is not the exact live mismatch event")
+    if sha256(IDENTITY_EVENT_BODY.encode()).hexdigest() != IDENTITY_EVENT_BODY_SHA256:
+        raise RuntimeError("compiled migration identity-event authority is inconsistent")
+    try:
+        payload = _git(repository_root, "show", f"{commit}:{_IDENTITY_EVENT_PATH}")
+        rows = [json.loads(line) for line in payload.splitlines() if line.strip()]
+    except (json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("source commit lacks readable tracked identity-event authority") from exc
+    matches = [row for row in rows if row.get("id") == IDENTITY_EVENT_ID]
+    if len(matches) != 1:
+        raise RuntimeError("source commit lacks one exact tracked identity event")
+    event = matches[0]
+    body = (event.get("data") or {}).get("body")
+    if (
+        event.get("schema_version") != 1
+        or event.get("task_id") != "task_01KZGZ7YTE0GCWF9E29XZVJP17"
+        or event.get("actor") != IDENTITY_EVENT_ACTOR
+        or event.get("type") != IDENTITY_EVENT_TYPE
+        or body != IDENTITY_EVENT_BODY
+        or sha256(body.encode()).hexdigest() != IDENTITY_EVENT_BODY_SHA256
+    ):
+        raise RuntimeError("tracked identity event contradicts the live mismatch authority")
 
 
 def _fsync_directory(path: Path) -> None:
@@ -168,6 +246,146 @@ def _state_digest(state_root: Path) -> str:
             if path.is_file() and not path.name.endswith(".lock")
         }
     )
+
+
+def _json_bytes(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode()
+
+
+def _observe(observer: MigrationObserver | None, transition: str) -> None:
+    if observer is not None:
+        observer(transition)
+
+
+def _journal_path(state_root: Path) -> Path:
+    return state_root.parent / f".{state_root.name}.canonical-model-migration.json"
+
+
+def _write_journal(
+    path: Path,
+    journal: dict[str, Any],
+    phase: str,
+    observer: MigrationObserver | None,
+) -> None:
+    journal["phase"] = phase
+    write_json_atomic(path, journal)
+    _observe(observer, f"journal:{phase}")
+
+
+def _existing_state_digest(path: Path) -> str | None:
+    return _state_digest(path) if path.is_dir() else None
+
+
+def _recover_interrupted_migration(
+    *,
+    journal_path: Path,
+    release_root: Path,
+    state_root: Path,
+) -> str | None:
+    """Recover one journaled process death while the lifecycle lock is held."""
+    if not journal_path.exists():
+        return None
+    try:
+        journal = json.loads(journal_path.read_text())
+        phase = journal["phase"]
+        stage = Path(journal["stage"])
+        backup = Path(journal["backup"])
+        predecessor_state = backup / "state"
+        predecessor_release = backup / "predecessor-release.json"
+        predecessor_state_sha256 = journal["predecessor_state_sha256"]
+        predecessor_release_sha256 = journal["predecessor_release_sha256"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"migration recovery journal is unreadable and retained at {journal_path}"
+        ) from exc
+    if (
+        journal.get("schema_version") != 1
+        or journal.get("kind") != "openrouter-canonical-model-identity-transaction-v1"
+        or Path(journal.get("state_root", "")) != state_root
+        or Path(journal.get("release_root", "")) != release_root
+        or stage
+        != state_root.parent
+        / f".{state_root.name}.canonical-model-stage-{predecessor_state_sha256[:12]}"
+        or backup
+        != state_root.parent
+        / f"{state_root.name}.pre-canonical-model-{predecessor_state_sha256[:12]}"
+    ):
+        raise RuntimeError(f"migration recovery journal has foreign authority: {journal_path}")
+
+    if phase == "committed":
+        if (
+            _existing_state_digest(state_root) != journal.get("candidate_state_sha256")
+            or _file_sha256(release_root / "release.json")
+            != journal.get("candidate_release_sha256")
+            or _existing_state_digest(predecessor_state) != predecessor_state_sha256
+            or not predecessor_release.is_file()
+            or _file_sha256(predecessor_release) != predecessor_release_sha256
+        ):
+            raise RuntimeError(
+                f"committed migration journal is inconsistent and retained at {journal_path}"
+            )
+        journal_path.unlink()
+        _fsync_directory(journal_path.parent)
+        return phase
+
+    current_state_sha256 = _existing_state_digest(state_root)
+    backup_state_sha256 = _existing_state_digest(predecessor_state)
+    if current_state_sha256 != predecessor_state_sha256:
+        if backup_state_sha256 != predecessor_state_sha256:
+            raise RuntimeError(
+                f"interrupted migration phase {phase!r} lacks a recoverable predecessor state; "
+                f"journal retained at {journal_path}"
+            )
+        if state_root.exists():
+            if current_state_sha256 != journal.get("candidate_state_sha256"):
+                raise RuntimeError(
+                    f"interrupted migration phase {phase!r} contains an unknown current state; "
+                    f"journal retained at {journal_path}"
+                )
+            shutil.rmtree(state_root)
+        os.replace(predecessor_state, state_root)
+        _fsync_directory(state_root.parent)
+
+    release_path = release_root / "release.json"
+    if _file_sha256(release_path) != predecessor_release_sha256:
+        if (
+            not predecessor_release.is_file()
+            or _file_sha256(predecessor_release) != predecessor_release_sha256
+        ):
+            raise RuntimeError(
+                f"interrupted migration phase {phase!r} lacks recoverable release bytes; "
+                f"journal retained at {journal_path}"
+            )
+        _write_bytes_atomic(release_path, predecessor_release.read_bytes())
+    if (
+        _existing_state_digest(state_root) != predecessor_state_sha256
+        or _file_sha256(release_path) != predecessor_release_sha256
+    ):
+        raise RuntimeError(
+            f"interrupted migration phase {phase!r} could not restore the predecessor; "
+            f"journal retained at {journal_path}"
+        )
+    if stage.exists():
+        shutil.rmtree(stage)
+    if backup.exists():
+        shutil.rmtree(backup)
+    journal_path.unlink()
+    _fsync_directory(journal_path.parent)
+    return phase
+
+
+def recover_working_model_identity_transaction(
+    *,
+    release_root: Path,
+    state_root: Path,
+) -> str | None:
+    """Recover a journaled migration before credentials or catalog access."""
+    with state_lifecycle_lock(state_root, blocking=False):
+        return _recover_interrupted_migration(
+            journal_path=_journal_path(state_root),
+            release_root=release_root,
+            state_root=state_root,
+        )
 
 
 def _effective_calls(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -675,23 +893,41 @@ def salvage_working_model_identity(
     expected_provider: str,
     expected_observed_cost_usd: float,
     identity_event_id: str,
+    transition_observer: MigrationObserver | None = None,
 ) -> dict[str, Any]:
     """Re-key one exact unsealed predecessor release without provider inference."""
-    if (
-        selection.model_id != expected_requested_model_id
-        or selection.resolved_model_id != expected_resolved_model_id
-        or selection.endpoint_tag != expected_endpoint
-        or selection.provider_name != expected_provider
-        or not identity_event_id
-        or not math.isfinite(expected_observed_cost_usd)
-        or expected_observed_cost_usd < 0
-    ):
-        raise RuntimeError("authenticated selection does not match the explicit migration scope")
-    migration_lock = state_root.parent / f".{state_root.name}.model-identity-migration.lock"
-    with exclusive_file_lock(migration_lock, blocking=False):
+    journal_path = _journal_path(state_root)
+    with state_lifecycle_lock(state_root, blocking=False):
+        recovered_phase = _recover_interrupted_migration(
+            journal_path=journal_path,
+            release_root=release_root,
+            state_root=state_root,
+        )
+        if recovered_phase is not None:
+            action = "finalized" if recovered_phase == "committed" else "rolled back"
+            raise RuntimeError(
+                f"{action} interrupted migration phase {recovered_phase!r}; rerun explicitly"
+            )
+        if (
+            selection.model_id != expected_requested_model_id
+            or selection.resolved_model_id != expected_resolved_model_id
+            or selection.endpoint_tag != expected_endpoint
+            or selection.provider_name != expected_provider
+            or identity_event_id != IDENTITY_EVENT_ID
+            or not math.isfinite(expected_observed_cost_usd)
+            or expected_observed_cost_usd < 0
+        ):
+            raise RuntimeError(
+                "authenticated selection does not match the explicit migration scope"
+            )
         current_commit = _require_predecessor_commit(
             repository_root,
             predecessor=expected_source_commit,
+        )
+        _require_identity_event(
+            repository_root,
+            commit=current_commit,
+            identity_event_id=identity_event_id,
         )
         bundle, old_runs, old_active, old_evidence = _load_predecessor(
             release_root,
@@ -814,21 +1050,32 @@ def salvage_working_model_identity(
             for protocol_id in SAMPLE_PROTOCOLS
         ]
 
-        stage = Path(
-            tempfile.mkdtemp(
-                prefix=f".{state_root.name}.canonical-model-stage-",
-                dir=state_root.parent,
-            )
+        stage = state_root.parent / (
+            f".{state_root.name}.canonical-model-stage-{old_state_sha256[:12]}"
         )
         backup = state_root.parent / (
             f"{state_root.name}.pre-canonical-model-{old_state_sha256[:12]}"
         )
-        if backup.exists():
-            shutil.rmtree(stage)
+        if backup.exists() or stage.exists():
             raise RuntimeError("predecessor backup already exists; migration is one-time only")
-        predecessor_moved = False
-        stage_installed = False
+        journal: dict[str, Any] = {
+            "schema_version": 1,
+            "kind": "openrouter-canonical-model-identity-transaction-v1",
+            "release_root": str(release_root),
+            "state_root": str(state_root),
+            "stage": str(stage),
+            "backup": str(backup),
+            "predecessor_release_sha256": sha256(old_release_bytes).hexdigest(),
+            "predecessor_state_sha256": old_state_sha256,
+            "candidate_release_sha256": "",
+            "candidate_state_sha256": "",
+        }
+        _write_journal(journal_path, journal, "initializing", transition_observer)
         try:
+            stage.mkdir()
+            backup.mkdir()
+            _fsync_directory(state_root.parent)
+            _observe(transition_observer, "workspace:created")
             runs = _write_staged_state(
                 stage,
                 runs=runs,
@@ -880,13 +1127,25 @@ def salvage_working_model_identity(
             for run in runs.values():
                 candidate.validate_planned_run(run)
 
-            os.replace(state_root, backup)
-            predecessor_moved = True
+            journal["candidate_state_sha256"] = _state_digest(stage)
+            journal["candidate_release_sha256"] = sha256(_json_bytes(new_manifest)).hexdigest()
+            _write_bytes_atomic(backup / "predecessor-release.json", old_release_bytes)
+            _observe(transition_observer, "backup:release")
+            write_json_atomic(backup / "migration-audit.json", audit)
+            _observe(transition_observer, "backup:audit")
+            _write_journal(journal_path, journal, "prepared", transition_observer)
+
+            os.replace(state_root, backup / "state")
             _fsync_directory(state_root.parent)
+            _observe(transition_observer, "rename:predecessor")
+            _write_journal(journal_path, journal, "predecessor_moved", transition_observer)
             os.replace(stage, state_root)
-            stage_installed = True
             _fsync_directory(state_root.parent)
+            _observe(transition_observer, "rename:candidate")
+            _write_journal(journal_path, journal, "candidate_installed", transition_observer)
             write_json_atomic(release_root / "release.json", new_manifest)
+            _observe(transition_observer, "release:installed")
+            _write_journal(journal_path, journal, "release_installed", transition_observer)
             actual = ReleaseBundle.open(
                 release_root,
                 repository_root=repository_root,
@@ -896,46 +1155,25 @@ def salvage_working_model_identity(
             actual.validate()
             for run in runs.values():
                 actual.validate_planned_run(run)
-            _write_bytes_atomic(backup / "predecessor-release.json", old_release_bytes)
+            _write_journal(journal_path, journal, "committed", transition_observer)
+            journal_path.unlink()
+            _fsync_directory(journal_path.parent)
         except Exception as migration_error:
-            rollback_errors: list[Exception] = []
-            if stage_installed:
-                try:
-                    failed = Path(
-                        tempfile.mkdtemp(
-                            prefix=f".{state_root.name}.failed-canonical-model-",
-                            dir=state_root.parent,
-                        )
-                    )
-                    failed.rmdir()
-                    os.replace(state_root, failed)
-                    os.replace(backup, state_root)
-                    (state_root / "predecessor-release.json").unlink(missing_ok=True)
-                    _fsync_directory(state_root.parent)
-                    shutil.rmtree(failed)
-                except Exception as exc:
-                    rollback_errors.append(exc)
-            elif predecessor_moved:
-                try:
-                    os.replace(backup, state_root)
-                    _fsync_directory(state_root.parent)
-                except Exception as exc:
-                    rollback_errors.append(exc)
-            if stage.exists():
-                try:
-                    shutil.rmtree(stage)
-                except Exception as exc:
-                    rollback_errors.append(exc)
-            if predecessor_moved:
-                try:
-                    _write_bytes_atomic(release_root / "release.json", old_release_bytes)
-                except Exception as exc:
-                    rollback_errors.append(exc)
-            if rollback_errors:
+            try:
+                recovered_phase = _recover_interrupted_migration(
+                    journal_path=journal_path,
+                    release_root=release_root,
+                    state_root=state_root,
+                )
+            except Exception as rollback_error:
                 raise ExceptionGroup(
                     "working-state migration and rollback both failed",
-                    [migration_error, *rollback_errors],
-                )
+                    [migration_error, rollback_error],
+                ) from migration_error
+            if recovered_phase == "committed":
+                raise RuntimeError(
+                    "migration committed but final journal cleanup failed; committed state retained"
+                ) from migration_error
             raise
         return {
             "release_id": SAMPLE_RELEASE_ID,

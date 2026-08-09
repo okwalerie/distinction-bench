@@ -37,6 +37,9 @@ around it to mutable registries, self-asserted rows, or loose logs.
 run execution is a single-writer interface: one per-run advisory lock spans replay,
 provider execution, and every durable transition. separate runs share one locked
 release ledger, so concurrency cannot split the global spend authority.
+all state-root writers additionally share one stable lifecycle lock outside the
+replaceable root. its order is lifecycle → run → ledger, allowing a whole-state
+migration to exclude stale-id runners without weakening the narrower locks.
 
 for openrouter runs, `requested_model_id` is the exact public alias sent to and
 reported by chat completions. `resolved_model_id` is the immutable canonical slug

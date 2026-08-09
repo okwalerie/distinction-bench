@@ -101,6 +101,12 @@ if a pre-canonical unsealed working release must be rekeyed, use only the explic
 event, alias, canonical slug, endpoint/provider, and observed cost. never loosen
 normal validation or edit response evidence. preserve the emitted predecessor backup
 and confirm the migrated first trial leaves exactly nineteen calls.
+the command and ordinary `run`/`resume`/`probe` execution share one state-root
+lifecycle lock; never remove or bypass it. lock order is root, then run, then ledger.
+salvage recovers an interrupted journal before credential or catalog access. if it
+reports a recovered phase, verify the restored predecessor and invoke it again
+explicitly. only the tracked live mismatch event
+`ev_01KZHVJWTQAXJEACS9BTVN34Z9` authorizes this one migration.
 
 ## probe, run, and resume
 

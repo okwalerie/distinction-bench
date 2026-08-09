@@ -3,13 +3,19 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 import dbench.migration as migration
+from dbench.cli import main as cli_main
 from dbench.migration import (
+    IDENTITY_EVENT_ACTOR,
+    IDENTITY_EVENT_BODY,
+    IDENTITY_EVENT_ID,
+    IDENTITY_EVENT_TYPE,
     SAMPLE_PROTOCOLS,
     _frozen_identity_task,
     salvage_working_model_identity,
@@ -22,7 +28,7 @@ from dbench.provider_evidence import (
 )
 from dbench.publication import open_release
 from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH, SUITE_REGISTRY_GIT_PATH
-from lofbench.orchestration import call_record_from_projection
+from lofbench.orchestration import RunAlreadyRunningError, call_record_from_projection
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.provider_evidence import ProviderEvidenceEnvelope, ProviderEvidenceSource
 from lofbench.records import AttemptEvidence, LedgerEvent, RequestStartedRecord
@@ -36,7 +42,7 @@ RESOLVED = "example/vision-model-20260808"
 ENDPOINT = "provider/example/flex"
 PROVIDER = "Example Provider"
 COST = 0.002320875
-EVENT = "ev_test_live_identity"
+EVENT = IDENTITY_EVENT_ID
 
 
 def _repository(path: Path) -> tuple[Path, str]:
@@ -50,7 +56,23 @@ def _repository(path: Path) -> tuple[Path, str]:
     protocols.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(DEFAULT_SUITE_REGISTRY, suite)
     shutil.copyfile(DEFAULT_PROTOCOL_REGISTRY, protocols)
-    subprocess.run(["git", "add", "src"], cwd=path, check=True)
+    events = path / ".lattice/events/task_01KZGZ7YTE0GCWF9E29XZVJP17.jsonl"
+    events.parent.mkdir(parents=True)
+    events.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": IDENTITY_EVENT_ID,
+                "task_id": "task_01KZGZ7YTE0GCWF9E29XZVJP17",
+                "actor": IDENTITY_EVENT_ACTOR,
+                "type": IDENTITY_EVENT_TYPE,
+                "data": {"body": IDENTITY_EVENT_BODY},
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    subprocess.run(["git", "add", "src", ".lattice"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-qm", "predecessor"], cwd=path, check=True)
     return path, subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -382,15 +404,25 @@ def _fixture(tmp_path: Path):
             ],
         },
     )
-    marker = repository / "src/dbench/canonical-model-migration.py"
+    marker = repository / "src/dbench/migration.py"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("# migration implementation\n")
     subprocess.run(["git", "add", "src/dbench"], cwd=repository, check=True)
     subprocess.run(["git", "commit", "-qm", "canonical migration"], cwd=repository, check=True)
+    review_fix = repository / "src/lofbench/state_io.py"
+    review_fix.parent.mkdir(parents=True, exist_ok=True)
+    review_fix.write_text("# lifecycle-lock review repair\n")
+    subprocess.run(["git", "add", str(review_fix)], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "migration review repair"], cwd=repository, check=True)
     return repository, predecessor, release, state, runs, second.provider_evidence
 
 
-def _salvage(repository, predecessor, release, state):
+def _salvage(repository, predecessor, release, state, **changes):
+    values = {
+        "identity_event_id": EVENT,
+        "transition_observer": None,
+    }
+    values.update(changes)
     return salvage_working_model_identity(
         release_root=release,
         state_root=state,
@@ -402,7 +434,13 @@ def _salvage(repository, predecessor, release, state):
         expected_endpoint=ENDPOINT,
         expected_provider=PROVIDER,
         expected_observed_cost_usd=COST,
-        identity_event_id=EVENT,
+        **values,
+    )
+
+
+def _tree_snapshot(root: Path):
+    return sorted(
+        (path.relative_to(root), path.read_bytes()) for path in root.rglob("*") if path.is_file()
     )
 
 
@@ -470,6 +508,8 @@ def test_salvage_rekeys_retained_attempt_and_leaves_exactly_nineteen_calls(tmp_p
     )
     assert Path(result["predecessor_backup"]).is_dir()
     assert (Path(result["predecessor_backup"]) / "predecessor-release.json").is_file()
+    assert (Path(result["predecessor_backup"]) / "migration-audit.json").is_file()
+    assert (Path(result["predecessor_backup"]) / "state").is_dir()
 
 
 def test_salvage_rejects_forged_generation_without_mutating_predecessor(tmp_path):
@@ -481,16 +521,12 @@ def test_salvage_rejects_forged_generation_without_mutating_predecessor(tmp_path
         {"data": {"model": "forged/model"}}
     )
     transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
-    forged_state = sorted(
-        (path.relative_to(state), path.read_bytes()) for path in state.rglob("*") if path.is_file()
-    )
+    forged_state = _tree_snapshot(state)
     with pytest.raises(RuntimeError, match="raw body contradicts|evidence revision"):
         _salvage(repository, predecessor, release, state)
     assert (release / "release.json").read_bytes() == before_release
     assert not list(state.parent.glob("state.pre-canonical-model-*"))
-    assert forged_state == sorted(
-        (path.relative_to(state), path.read_bytes()) for path in state.rglob("*") if path.is_file()
-    )
+    assert forged_state == _tree_snapshot(state)
 
 
 def test_salvage_is_one_time_and_rejects_the_migrated_state(tmp_path):
@@ -503,9 +539,7 @@ def test_salvage_is_one_time_and_rejects_the_migrated_state(tmp_path):
 def test_salvage_restores_exact_predecessor_if_state_install_fails(tmp_path, monkeypatch):
     repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
     before_release = (release / "release.json").read_bytes()
-    before_state = sorted(
-        (path.relative_to(state), path.read_bytes()) for path in state.rglob("*") if path.is_file()
-    )
+    before_state = _tree_snapshot(state)
     replace = migration.os.replace
 
     def fail_stage_install(source, destination):
@@ -517,9 +551,7 @@ def test_salvage_restores_exact_predecessor_if_state_install_fails(tmp_path, mon
     with pytest.raises(OSError, match="simulated state installation failure"):
         _salvage(repository, predecessor, release, state)
     assert (release / "release.json").read_bytes() == before_release
-    assert before_state == sorted(
-        (path.relative_to(state), path.read_bytes()) for path in state.rglob("*") if path.is_file()
-    )
+    assert before_state == _tree_snapshot(state)
     assert not list(state.parent.glob("state.pre-canonical-model-*"))
     assert not list(state.parent.glob(".state.canonical-model-stage-*"))
 
@@ -527,9 +559,7 @@ def test_salvage_restores_exact_predecessor_if_state_install_fails(tmp_path, mon
 def test_salvage_restores_exact_predecessor_if_release_update_fails(tmp_path, monkeypatch):
     repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
     before_release = (release / "release.json").read_bytes()
-    before_state = sorted(
-        (path.relative_to(state), path.read_bytes()) for path in state.rglob("*") if path.is_file()
-    )
+    before_state = _tree_snapshot(state)
     write_json = migration.write_json_atomic
 
     def fail_release_update(path, value):
@@ -541,8 +571,253 @@ def test_salvage_restores_exact_predecessor_if_release_update_fails(tmp_path, mo
     with pytest.raises(OSError, match="simulated release update failure"):
         _salvage(repository, predecessor, release, state)
     assert (release / "release.json").read_bytes() == before_release
-    assert before_state == sorted(
-        (path.relative_to(state), path.read_bytes()) for path in state.rglob("*") if path.is_file()
-    )
+    assert before_state == _tree_snapshot(state)
     assert not list(state.parent.glob("state.pre-canonical-model-*"))
     assert not list(state.parent.glob(".state.failed-canonical-model-*"))
+
+
+def test_salvage_rejects_arbitrary_or_missing_identity_event(tmp_path):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    before_release = (release / "release.json").read_bytes()
+    before_state = _tree_snapshot(state)
+    with pytest.raises(RuntimeError, match="migration scope"):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            identity_event_id="ev_nonexistent",
+        )
+    assert (release / "release.json").read_bytes() == before_release
+    assert _tree_snapshot(state) == before_state
+
+
+def test_salvage_rejects_tampered_tracked_identity_event(tmp_path):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    events = repository / ".lattice/events/task_01KZGZ7YTE0GCWF9E29XZVJP17.jsonl"
+    row = json.loads(events.read_text())
+    row["data"]["body"] = "forged live identity event"
+    events.write_text(json.dumps(row) + "\n")
+    subprocess.run(["git", "add", ".lattice"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "--amend", "--no-edit", "-q"], cwd=repository, check=True)
+    with pytest.raises(RuntimeError, match="tracked identity event"):
+        _salvage(repository, predecessor, release, state)
+
+
+def test_salvage_rejects_unrelated_source_changes_in_repair_lineage(tmp_path):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    unrelated = repository / "src/dbench/unrelated.py"
+    unrelated.write_text("raise RuntimeError('unrelated')\n")
+    subprocess.run(["git", "add", str(unrelated)], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "unrelated source"], cwd=repository, check=True)
+    with pytest.raises(RuntimeError, match="bounded canonical-identity repair lineage"):
+        _salvage(repository, predecessor, release, state)
+
+
+class _ProcessDeath(BaseException):
+    pass
+
+
+@pytest.mark.parametrize(
+    "transition",
+    [
+        "journal:initializing",
+        "workspace:created",
+        "backup:release",
+        "backup:audit",
+        "journal:prepared",
+        "rename:predecessor",
+        "journal:predecessor_moved",
+        "rename:candidate",
+        "journal:candidate_installed",
+        "release:installed",
+        "journal:release_installed",
+    ],
+)
+def test_process_death_phase_rolls_back_exactly_on_next_invocation(tmp_path, transition):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    before_release = (release / "release.json").read_bytes()
+    before_state = _tree_snapshot(state)
+
+    def die(candidate):
+        if candidate == transition:
+            raise _ProcessDeath(candidate)
+
+    with pytest.raises(_ProcessDeath, match=transition):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            transition_observer=die,
+        )
+    assert list(state.parent.glob(".state.canonical-model-migration.json"))
+    with pytest.raises(RuntimeError, match="rolled back interrupted migration"):
+        _salvage(repository, predecessor, release, state)
+    assert (release / "release.json").read_bytes() == before_release
+    assert _tree_snapshot(state) == before_state
+    assert not list(state.parent.glob(".state.canonical-model-migration.json"))
+    assert not list(state.parent.glob("state.pre-canonical-model-*"))
+    assert not list(state.parent.glob(".state.canonical-model-stage-*"))
+
+
+def test_process_death_after_commit_is_finalized_without_rollback(tmp_path):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+
+    def die(candidate):
+        if candidate == "journal:committed":
+            raise _ProcessDeath(candidate)
+
+    with pytest.raises(_ProcessDeath, match="journal:committed"):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            transition_observer=die,
+        )
+    with pytest.raises(RuntimeError, match="finalized interrupted migration"):
+        _salvage(repository, predecessor, release, state)
+    runs = [json.loads(path.read_text()) for path in state.glob("run_*/run.json")]
+    assert sum(run["attempts"] for run in runs) == 1
+    assert sum(5 - run["attempts"] for run in runs) == 19
+    assert not list(state.parent.glob(".state.canonical-model-migration.json"))
+
+
+def test_cli_recovers_process_death_before_key_or_catalog_access(tmp_path, monkeypatch):
+    repository, predecessor, release, state, _runs, _evidence = _fixture(tmp_path)
+    before_release = (release / "release.json").read_bytes()
+    before_state = _tree_snapshot(state)
+
+    def die(candidate):
+        if candidate == "rename:candidate":
+            raise _ProcessDeath(candidate)
+
+    with pytest.raises(_ProcessDeath):
+        _salvage(
+            repository,
+            predecessor,
+            release,
+            state,
+            transition_observer=die,
+        )
+    catalog_called = False
+
+    def reject_catalog(*_args, **_kwargs):
+        nonlocal catalog_called
+        catalog_called = True
+        raise AssertionError("catalog must not be called during recovery")
+
+    monkeypatch.chdir(repository)
+    monkeypatch.setattr("dbench.cli.fetch_openrouter_endpoint", reject_catalog)
+    with pytest.raises(RuntimeError, match="rolled back interrupted migration"):
+        cli_main(
+            [
+                "salvage-working-model-identity",
+                "--release",
+                str(release),
+                "--state-root",
+                str(state),
+                "--env-file",
+                str(tmp_path / "does-not-exist.env"),
+                "--expected-source-commit",
+                predecessor,
+                "--requested-model",
+                REQUESTED,
+                "--resolved-model",
+                RESOLVED,
+                "--endpoint",
+                ENDPOINT,
+                "--provider",
+                PROVIDER,
+                "--expected-observed-cost-usd",
+                str(COST),
+                "--identity-event",
+                EVENT,
+            ]
+        )
+    assert catalog_called is False
+    assert (release / "release.json").read_bytes() == before_release
+    assert _tree_snapshot(state) == before_state
+
+
+def test_lifecycle_lock_blocks_runner_until_migration_publishes_new_ids(
+    tmp_path, monkeypatch, capsys
+):
+    repository, predecessor, release, state, old_runs, _evidence = _fixture(tmp_path)
+    monkeypatch.chdir(repository)
+    prepared = threading.Event()
+    proceed = threading.Event()
+    outcome = {}
+
+    def pause(candidate):
+        if candidate == "journal:prepared":
+            prepared.set()
+            assert proceed.wait(timeout=10)
+
+    def migrate():
+        try:
+            outcome["result"] = _salvage(
+                repository,
+                predecessor,
+                release,
+                state,
+                transition_observer=pause,
+            )
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=migrate)
+    worker.start()
+    assert prepared.wait(timeout=10)
+    old_run_id = old_runs[SAMPLE_PROTOCOLS[0]].run_id
+    with pytest.raises(RunAlreadyRunningError, match="lifecycle operation"):
+        cli_main(
+            [
+                "resume",
+                "--release",
+                str(release),
+                "--state-root",
+                str(state),
+                "--run-id",
+                old_run_id,
+            ]
+        )
+    proceed.set()
+    worker.join(timeout=30)
+    assert not worker.is_alive()
+    assert "error" not in outcome
+    result = outcome["result"]
+    assert not (state / old_run_id).exists()
+    assert set(path.name for path in state.glob("run_*")) == set(result["run_ids"])
+    assert (Path(result["predecessor_backup"]) / "state" / old_run_id).is_dir()
+
+    monkeypatch.setattr(
+        "dbench.cli.single_lof_task",
+        lambda *, suite, form_set, dialect, protocol: _frozen_identity_task(
+            suite_path=Path(suite),
+            form_set=form_set,
+            dialect_id=dialect,
+            protocol_id=protocol,
+        ),
+    )
+    env_file = tmp_path / "test.env"
+    env_file.write_text("OPENROUTER_API_KEY=not-used-by-dry-run\n")
+    env_file.chmod(0o600)
+    assert (
+        cli_main(
+            [
+                "resume",
+                "--release",
+                str(release),
+                "--state-root",
+                str(state),
+                "--run-id",
+                result["run_ids"][0],
+                "--env-file",
+                str(env_file),
+            ]
+        )
+        == 0
+    )
+    assert result["run_ids"][0] in capsys.readouterr().out

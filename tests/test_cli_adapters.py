@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -9,9 +10,11 @@ import pytest
 from test_runner import _task_and_run
 
 from dbench.agent_cli import ClaudeCliExecutor, CodexCliExecutor, agent_subprocess_env
-from dbench.cli import _executor, _load_secret_env, _parser, _validate_probe_run
+from dbench.cli import _executor, _load_secret_env, _parser, _validate_probe_run, main
+from dbench.migration import IDENTITY_EVENT_ID
 from dbench.provider_evidence import project_agent_cli_evidence
 from lofbench.run_models import ExecutionRequest
+from lofbench.state_io import FileLockUnavailableError, state_lifecycle_lock
 
 
 def test_application_dispatches_both_subscription_cli_adapters():
@@ -142,3 +145,53 @@ def test_probe_is_a_real_guarded_execution_command():
         ]
     )
     assert parsed.command == "probe"
+
+
+def test_salvage_holds_lifecycle_lock_during_catalog_selection(tmp_path, monkeypatch):
+    state_root = tmp_path / "state"
+    env_file = tmp_path / "dbench.env"
+    env_file.write_text("OPENROUTER_API_KEY=local-only-sentinel\n")
+    env_file.chmod(0o600)
+    outcome = []
+
+    def fake_fetch(*_args, **_kwargs):
+        def contend():
+            try:
+                with state_lifecycle_lock(state_root, blocking=False):
+                    outcome.append("acquired")
+            except FileLockUnavailableError:
+                outcome.append("blocked")
+
+        worker = threading.Thread(target=contend)
+        worker.start()
+        worker.join(timeout=5)
+        raise RuntimeError("catalog selection stopped after lock check")
+
+    monkeypatch.setattr("dbench.cli.fetch_openrouter_endpoint", fake_fetch)
+    with pytest.raises(RuntimeError, match="stopped after lock check"):
+        main(
+            [
+                "salvage-working-model-identity",
+                "--release",
+                str(tmp_path / "release"),
+                "--state-root",
+                str(state_root),
+                "--env-file",
+                str(env_file),
+                "--expected-source-commit",
+                "0" * 40,
+                "--requested-model",
+                "example/model",
+                "--resolved-model",
+                "example/model-1",
+                "--endpoint",
+                "provider/flex",
+                "--provider",
+                "provider",
+                "--expected-observed-cost-usd",
+                "0.01",
+                "--identity-event",
+                IDENTITY_EVENT_ID,
+            ]
+        )
+    assert outcome == ["blocked"]

@@ -469,6 +469,31 @@ than beginning the broad sweep.
 
 ## Reset 2026-08-08 by agent:codex-root
 
+## canonical migration review repair — ev_01KZHZR7TDT9ZE1NHVPWZMRXC2
+
+the first canonical-migration review correctly blocked live mutation on three
+authority gaps. replace the private migration lock with one stable state-root
+lifecycle flock shared by `run`, `resume`, and `probe`; application commands hold it
+from preflight (including salvage catalog selection) through reconciliation/provider
+execution and final manifests. retain run and ledger locks inside the fixed
+lifecycle → run → ledger order.
+
+make the state replacement a predecessor-first journaled transaction. before any
+rename, fsync the exact predecessor release bytes and completed migration audit into
+the recovery directory, then fsync each initializing, prepared, predecessor-moved,
+candidate-installed, release-installed, and committed phase. next invocation must
+idempotently roll back every noncommitted phase to the verified predecessor, finalize
+only a verified committed phase, or retain the journal and report an explicit
+unrecoverable phase. simulate process death with `baseexception` after every durable
+write/rename boundary, not merely caught exceptions.
+
+bind the migration to the one tracked live mismatch event
+`ev_01KZHVJWTQAXJEACS9BTVN34Z9`: verify its unique id, task, actor, type, exact body,
+and body sha256 from the current git authority. arbitrary ids and tampered tracked
+events fail before staging. concurrency tests pause migration under the lifecycle
+lock, prove a stale-id runner receives already-running, then prove the next dry runner
+observes only migrated ids. keep the real release untouched until independent review.
+
 ## live identity repair — ev_01KZHVJWTQAXJEACS9BTVN34Z9
 
 the first paid sample call proved that openrouter exposes two intentional model
@@ -674,3 +699,5 @@ deterministic projection:
 ## Reset 2026-08-08 by agent:codex-root
 
 ## Reset 2026-08-08 by agent:codex-root
+
+## Reset 2026-08-09 by agent:codex-root

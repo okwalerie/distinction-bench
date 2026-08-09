@@ -110,7 +110,8 @@ inputs or consumers, never alternative authorities.
 the live `v1.0.0-sample.1` predecessor created before this identity rule is handled by
 one explicit working-state salvage operation, not by accepting its legacy identity in
 normal validators. the operation requires the exact unsealed four-run predecessor and
-immediately following source revision, proves the sole retained request, evidence
+the bounded canonical-identity repair lineage with no unrelated source or registry
+changes, proves the sole retained request, evidence
 revision chain, legacy accounting-unknown call, and unsettled reservation, then rekeys
 all four run/trial/call/request/ledger identities under current authority. it preserves
 every provider-evidence envelope byte-for-byte, reprojects and scores the first
@@ -119,6 +120,19 @@ migration audit, and keeps the predecessor state as a recoverable directory back
 the migrated sample therefore has one of twenty attempts complete and nineteen—not
 twenty—remaining. partially swapped or forged state fails closed under ordinary
 repository, release, run, and ledger identities.
+
+every state-root writer takes one stable lifecycle flock outside the replaceable
+state directory. `run`, `resume`, and `probe` hold it from state/release preflight
+through provider execution and the final run manifest; salvage holds the same lock
+through authenticated catalog selection, predecessor validation, reconciliation, and
+publication. narrower locks are always acquired root → run → ledger. before its first
+rename, salvage fsyncs the exact predecessor release bytes and migration audit into a
+recovery directory and records a fsynced phase journal. a later invocation either
+rolls every noncommitted phase back to the verified predecessor or finalizes a
+verified committed phase before reading credentials or querying the catalog. the
+migration additionally requires the exact tracked live
+identity event—id, actor, type, body, and body digest—from the current source commit;
+an arbitrary or missing event id has no authority.
 
 ## consequences
 

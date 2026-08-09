@@ -17,7 +17,10 @@ from dbench.agent_cli import (
     cli_version,
 )
 from dbench.config import load_env_file
-from dbench.migration import salvage_working_model_identity
+from dbench.migration import (
+    recover_working_model_identity_transaction,
+    salvage_working_model_identity,
+)
 from dbench.openrouter import OpenRouterExecutor, fetch_openrouter_endpoint
 from dbench.provider_evidence import project_provider_evidence, projector_for_run
 from dbench.publication import open_release
@@ -25,7 +28,7 @@ from dbench.release_policy import validate_sample_release
 from lofbench.accounting import DEFAULT_GLOBAL_CAP_USD, SpendLedger
 from lofbench.authority import authority_from_git
 from lofbench.metrics import write_release_metrics
-from lofbench.orchestration import RunOrchestrator
+from lofbench.orchestration import RunAlreadyRunningError, RunOrchestrator
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
 from lofbench.publication import (
     archive_release,
@@ -40,7 +43,12 @@ from lofbench.records import (
 )
 from lofbench.release_bundle import ReleaseBundle
 from lofbench.run_models import ExecutionSpec, TrialExecutor, plan_run
-from lofbench.state_io import read_jsonl, write_json_atomic
+from lofbench.state_io import (
+    FileLockUnavailableError,
+    read_jsonl,
+    state_lifecycle_lock,
+    write_json_atomic,
+)
 from lofbench.suites import DEFAULT_SUITE_REGISTRY, load_suite
 from lofbench.tasks.single import single_lof_task
 
@@ -349,6 +357,54 @@ def _executor(run: RunManifest, *, secrets: dict[str, str]) -> TrialExecutor:
     raise RuntimeError(f"unsupported execution surface {run.execution_surface!r}")
 
 
+def _execute_run_command(args: argparse.Namespace, values: dict[str, str]) -> int:
+    """Execute one run while the caller owns the state-root lifecycle lock."""
+    state_dir = _state_dir(args)
+    run = RunManifest.from_dict(json.loads((state_dir / "run.json").read_text()))
+    bundle = open_release(args.release, repository_root=Path.cwd())
+    bundle.require_repository_state(Path.cwd())
+    publication = bundle.publication()
+    if run.run_id not in publication.expected_run_ids:
+        raise RuntimeError("run is not declared by this release bundle")
+    bundle.validate_planned_run(run)
+    if args.command == "probe":
+        _validate_probe_run(run, publication.sample_contract)
+    if run.execution_surface == "direct_api" and "OPENROUTER_API_KEY" not in values:
+        raise RuntimeError("direct-api execution requires OPENROUTER_API_KEY")
+    if run.billing_channel != "subscription_unmetered" and args.approve_paid_run:
+        approval = publication.paid_run_approval or {}
+        if (
+            approval.get("max_spend_usd") != DEFAULT_GLOBAL_CAP_USD
+            or run.run_id not in approval.get("run_ids", [])
+            or approval.get("model_id") != run.requested_model_id
+            or approval.get("endpoint") != run.endpoint
+        ):
+            raise RuntimeError("paid-run approval does not match this exact run identity")
+    task = single_lof_task(
+        suite=str(args.release / "suite.json"),
+        form_set=run.form_set,
+        dialect=run.dialect_id,
+        protocol=run.protocol_id,
+    )
+    executor = _executor(run, secrets=values)
+    updated = RunOrchestrator(
+        state_dir,
+        executor,
+        ledger=_ledger(args.state_root),
+        evidence_projector=projector_for_run(run.to_dict()),
+        accounting_recoverer=(
+            executor.recover_accounting if isinstance(executor, OpenRouterExecutor) else None
+        ),
+    ).execute(
+        run,
+        task,
+        approve_paid_run=args.approve_paid_run,
+        max_spend_usd=args.max_spend_usd,
+    )
+    print(json.dumps({"run_id": updated.run_id, "status": updated.status}, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "plan":
@@ -422,73 +478,52 @@ def main(argv: list[str] | None = None) -> int:
         archive_release(publication.root, args.out)
         return 0
     if args.command == "salvage-working-model-identity":
-        values = _load_secret_env(args.env_file)
-        api_key = values.get("OPENROUTER_API_KEY")
-        if not api_key:
-            raise RuntimeError("authenticated migration requires OPENROUTER_API_KEY")
-        selection = fetch_openrouter_endpoint(
-            args.requested_model,
-            api_key=api_key,
-            required_modality="image",
-        )
-        result = salvage_working_model_identity(
-            release_root=args.release,
-            state_root=args.state_root,
-            repository_root=Path.cwd(),
-            selection=selection,
-            expected_source_commit=args.expected_source_commit,
-            expected_requested_model_id=args.requested_model,
-            expected_resolved_model_id=args.resolved_model,
-            expected_endpoint=args.endpoint,
-            expected_provider=args.provider,
-            expected_observed_cost_usd=args.expected_observed_cost_usd,
-            identity_event_id=args.identity_event,
-        )
+        try:
+            with state_lifecycle_lock(args.state_root, blocking=False):
+                recovered_phase = recover_working_model_identity_transaction(
+                    release_root=args.release,
+                    state_root=args.state_root,
+                )
+                if recovered_phase is not None:
+                    action = "finalized" if recovered_phase == "committed" else "rolled back"
+                    raise RuntimeError(
+                        f"{action} interrupted migration phase {recovered_phase!r}; "
+                        "rerun explicitly"
+                    )
+                values = _load_secret_env(args.env_file)
+                api_key = values.get("OPENROUTER_API_KEY")
+                if not api_key:
+                    raise RuntimeError("authenticated migration requires OPENROUTER_API_KEY")
+                selection = fetch_openrouter_endpoint(
+                    args.requested_model,
+                    api_key=api_key,
+                    required_modality="image",
+                )
+                result = salvage_working_model_identity(
+                    release_root=args.release,
+                    state_root=args.state_root,
+                    repository_root=Path.cwd(),
+                    selection=selection,
+                    expected_source_commit=args.expected_source_commit,
+                    expected_requested_model_id=args.requested_model,
+                    expected_resolved_model_id=args.resolved_model,
+                    expected_endpoint=args.endpoint,
+                    expected_provider=args.provider,
+                    expected_observed_cost_usd=args.expected_observed_cost_usd,
+                    identity_event_id=args.identity_event,
+                )
+        except FileLockUnavailableError as exc:
+            raise RunAlreadyRunningError(
+                f"state root {args.state_root} is undergoing another lifecycle operation"
+            ) from exc
         print(json.dumps(result, indent=2))
         return 0
 
     values = _load_secret_env(args.env_file)
-    state_dir = _state_dir(args)
-    run = RunManifest.from_dict(json.loads((state_dir / "run.json").read_text()))
-    bundle = open_release(args.release, repository_root=Path.cwd())
-    bundle.require_repository_state(Path.cwd())
-    publication = bundle.publication()
-    if run.run_id not in publication.expected_run_ids:
-        raise RuntimeError("run is not declared by this release bundle")
-    bundle.validate_planned_run(run)
-    if args.command == "probe":
-        _validate_probe_run(run, publication.sample_contract)
-    if run.execution_surface == "direct_api" and "OPENROUTER_API_KEY" not in values:
-        raise RuntimeError("direct-api execution requires OPENROUTER_API_KEY")
-    if run.billing_channel != "subscription_unmetered" and args.approve_paid_run:
-        approval = publication.paid_run_approval or {}
-        if (
-            approval.get("max_spend_usd") != DEFAULT_GLOBAL_CAP_USD
-            or run.run_id not in approval.get("run_ids", [])
-            or approval.get("model_id") != run.requested_model_id
-            or approval.get("endpoint") != run.endpoint
-        ):
-            raise RuntimeError("paid-run approval does not match this exact run identity")
-    task = single_lof_task(
-        suite=str(args.release / "suite.json"),
-        form_set=run.form_set,
-        dialect=run.dialect_id,
-        protocol=run.protocol_id,
-    )
-    executor = _executor(run, secrets=values)
-    updated = RunOrchestrator(
-        state_dir,
-        executor,
-        ledger=_ledger(args.state_root),
-        evidence_projector=projector_for_run(run.to_dict()),
-        accounting_recoverer=(
-            executor.recover_accounting if isinstance(executor, OpenRouterExecutor) else None
-        ),
-    ).execute(
-        run,
-        task,
-        approve_paid_run=args.approve_paid_run,
-        max_spend_usd=args.max_spend_usd,
-    )
-    print(json.dumps({"run_id": updated.run_id, "status": updated.status}, indent=2))
-    return 0
+    try:
+        with state_lifecycle_lock(args.state_root, blocking=False):
+            return _execute_run_command(args, values)
+    except FileLockUnavailableError as exc:
+        raise RunAlreadyRunningError(
+            f"state root {args.state_root} is undergoing another lifecycle operation"
+        ) from exc
