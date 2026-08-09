@@ -24,6 +24,7 @@ from dbench.migration import (
     _require_identity_event,
     _state_digest,
 )
+from dbench.model_identity_audit import MODEL_IDENTITY_AUDIT_FIELDS
 from dbench.provider_evidence import project_provider_evidence
 from dbench.release_policy import (
     validate_legacy_sample_reissue_source,
@@ -52,33 +53,6 @@ _MIGRATION_KIND = "openrouter-canonical-model-identity-v1"
 _REISSUE_KIND = "sealed-release-reissue-v1"
 _EXPECTED_ATTEMPTS = 20
 _EXPECTED_OBSERVED_USD = 0.069506875
-_MIGRATION_FIELDS = {
-    "schema_version",
-    "kind",
-    "identity_event_id",
-    "identity_event_authority",
-    "migrated_at",
-    "predecessor_repository_commit",
-    "repository_commit",
-    "predecessor_authority",
-    "authority",
-    "predecessor_authority_sha256",
-    "authority_sha256",
-    "predecessor_release_manifest_sha256",
-    "predecessor_state_sha256",
-    "predecessor_run_manifest_sha256",
-    "authenticated_catalog_sha256",
-    "predecessor_call_record_sha256",
-    "requested_model_id",
-    "resolved_model_id",
-    "endpoint",
-    "provider",
-    "run_id_map",
-    "trial_id_map",
-    "attempts_retained",
-    "remaining_attempts",
-    "active_attempt",
-}
 
 
 @dataclass(frozen=True)
@@ -212,7 +186,7 @@ def _verified_migration_audit(
     ):
         raise RuntimeError("sealed reissue source must preserve one complete migration audit")
     audit = migrations[0]
-    if set(audit) != _MIGRATION_FIELDS:
+    if set(audit) != MODEL_IDENTITY_AUDIT_FIELDS:
         raise RuntimeError("sealed reissue migration audit schema is invalid")
     state_audit_path = state_root / "model-identity-migration.json"
     backup = (

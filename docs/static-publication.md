@@ -43,7 +43,8 @@ and deterministic predecessor-backup copies; predecessor release, state, run, ca
 map, and active-attempt bytes are reclosed before readmission. the fresh bundle's typed
 origin keeps the audit and source hashes mandatory through later validation and seal.
 the application policy also matches them to its checked-in source contract, rather
-than trusting manifest self-digests alone.
+than trusting manifest self-digests alone. it recognizes the exact known run lineage
+independently of removable manifest markers, so it cannot be downgraded to fresh.
 publication uses an atomic no-replace rename, so a racing target is never clobbered.
 the command performs no planning, execution, provider request, credential load, or
 network access. prepare, independent review, sealing, sidecar publication, and

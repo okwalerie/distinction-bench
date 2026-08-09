@@ -1820,6 +1820,7 @@ def sealed_reissue_source(tmp_path_factory):
     source_manifest = json.loads((source / "release.json").read_text())
     source_bundle_sha256, source_file_count, source_tree_entries = _source_bundle_digest(source)
     original_contract = release_policy._SAMPLE_REISSUE_SOURCE_CONTRACT
+    original_run_ids = release_policy._SAMPLE_REISSUE_RUN_IDS
     release_policy._SAMPLE_REISSUE_SOURCE_CONTRACT = {
         "source_release_id": source_manifest["release_id"],
         "source_repository_commit": source_manifest["repository_commit"],
@@ -1833,10 +1834,12 @@ def sealed_reissue_source(tmp_path_factory):
         "source_tree_entries": source_tree_entries,
         "migration_audit_sha256": canonical_sha256(audit),
     }
+    release_policy._SAMPLE_REISSUE_RUN_IDS = frozenset(run.run_id for run in runs)
     try:
         yield repository, source, state, archive
     finally:
         release_policy._SAMPLE_REISSUE_SOURCE_CONTRACT = original_contract
+        release_policy._SAMPLE_REISSUE_RUN_IDS = original_run_ids
 
 
 def _copy_reissue_source(sealed_reissue_source, root: Path):
@@ -1855,7 +1858,7 @@ def _copy_reissue_source(sealed_reissue_source, root: Path):
 
 def test_reissue_accepts_only_stale_site_and_preserves_exact_core(tmp_path, sealed_reissue_source):
     repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
-    with pytest.raises(RuntimeError, match="publication policy"):
+    with pytest.raises(RuntimeError, match="reissue origin"):
         ReleaseBundle.open(
             source,
             repository_root=repository,
@@ -2054,6 +2057,45 @@ def test_reissue_origin_and_audit_remain_validation_invariants(tmp_path, sealed_
             evidence_projector=project_openrouter_evidence,
             release_policy_validator=validate_sample_release,
         ).validate()
+
+
+def test_reissue_cannot_downgrade_known_lineage_to_fresh(
+    tmp_path, sealed_reissue_source, monkeypatch
+):
+    from dbench import cli
+
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+    target = tmp_path / "target"
+    reissue_sealed_release(
+        source_root=source,
+        source_archive=archive,
+        target_root=target,
+        state_root=state,
+        repository_root=repository,
+    )
+    release_path = target / "release.json"
+    downgraded = json.loads(release_path.read_text())
+    downgraded.pop("sample_contract")
+    downgraded.pop("reissued_from")
+    downgraded.pop("working_state_migrations")
+    downgraded["origin"] = {"schema_version": 1, "kind": "fresh"}
+    release_path.write_text(json.dumps(downgraded, indent=2) + "\n")
+
+    def reopened() -> ReleaseBundle:
+        return ReleaseBundle.open(
+            target,
+            repository_root=repository,
+            evidence_projector=project_openrouter_evidence,
+            release_policy_validator=validate_sample_release,
+        )
+
+    with pytest.raises(RuntimeError, match="sample contract"):
+        reopened().validate()
+    with pytest.raises(RuntimeError, match="sample contract"):
+        reopened().seal(repository_root=repository)
+    monkeypatch.chdir(repository)
+    with pytest.raises(RuntimeError, match="sample contract"):
+        cli.main(["prepare", "--release", str(target)])
 
 
 def test_reissue_cli_has_no_secret_or_executor_path(

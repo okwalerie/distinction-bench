@@ -7,6 +7,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from dbench.model_identity_audit import MODEL_IDENTITY_AUDIT_FIELDS
 from dbench.provider_evidence import validate_openrouter_run_policy
 from lofbench.authority import canonical_sha256
 from lofbench.release_bundle import (
@@ -64,33 +65,6 @@ _LEGACY_PUBLICATION_GAPS = {
     ("downloads.html", "release.json"),
     ("downloads.html", ".tar.gz"),
 }
-_MIGRATION_FIELDS = {
-    "schema_version",
-    "kind",
-    "identity_event_id",
-    "identity_event_authority",
-    "migrated_at",
-    "predecessor_repository_commit",
-    "repository_commit",
-    "predecessor_authority",
-    "authority",
-    "predecessor_authority_sha256",
-    "authority_sha256",
-    "predecessor_release_manifest_sha256",
-    "predecessor_state_sha256",
-    "predecessor_run_manifest_sha256",
-    "authenticated_catalog_sha256",
-    "predecessor_call_record_sha256",
-    "requested_model_id",
-    "resolved_model_id",
-    "endpoint",
-    "provider",
-    "run_id_map",
-    "trial_id_map",
-    "attempts_retained",
-    "remaining_attempts",
-    "active_attempt",
-}
 _SAMPLE_REISSUE_SOURCE_CONTRACT = {
     "source_release_id": "v1.0.0-sample.1",
     "source_repository_commit": "aa542e748000c05ab5dcf4f2cc48e02e3d976433",
@@ -104,6 +78,14 @@ _SAMPLE_REISSUE_SOURCE_CONTRACT = {
     "source_tree_entries": 7_327,
     "migration_audit_sha256": "aefb04b663fc93fa8d55a6db0f99af377e8b80288d532a284a810e12ba844974",
 }
+_SAMPLE_REISSUE_RUN_IDS = frozenset(
+    {
+        "run_b774a85c7ef012f6764e24ae",
+        "run_e1d20bb0df788eb70f646cab",
+        "run_f6dcb089075447af8c9b5fed",
+        "run_541eca2746213cfa3e84e85e",
+    }
+)
 
 
 def _plain_json(value: Any) -> Any:
@@ -114,10 +96,21 @@ def _plain_json(value: Any) -> Any:
     return value
 
 
-def _validate_reissued_sample(context: ReleasePolicyContext) -> None:
+def _known_reissue_identity(context: ReleasePolicyContext) -> bool:
+    run_ids = {run.run_id for run in context.runs}
+    expected = context.manifest.get("expected_run_ids")
+    expected_ids = set(expected) if isinstance(expected, tuple) else set()
+    return context.manifest.get("release_id") == _SAMPLE_REISSUE_SOURCE_CONTRACT[
+        "source_release_id"
+    ] and (run_ids == _SAMPLE_REISSUE_RUN_IDS or expected_ids == _SAMPLE_REISSUE_RUN_IDS)
+
+
+def _validate_reissued_sample(context: ReleasePolicyContext, *, required: bool) -> None:
     origin = context.manifest.get("origin")
-    if not isinstance(origin, Mapping) or origin.get("kind") != "reissue":
+    if not required and (not isinstance(origin, Mapping) or origin.get("kind") != "reissue"):
         return
+    if not isinstance(origin, Mapping) or origin.get("kind") != "reissue":
+        raise RuntimeError("known sample lineage must preserve its reissue origin")
     provenance_value = context.manifest.get("reissued_from")
     migrations = context.manifest.get("working_state_migrations")
     if not isinstance(provenance_value, Mapping) or not isinstance(migrations, Sequence):
@@ -147,7 +140,7 @@ def _validate_reissued_sample(context: ReleasePolicyContext) -> None:
         }
         or canonical_sha256(_plain_json(audit))
         != _SAMPLE_REISSUE_SOURCE_CONTRACT["migration_audit_sha256"]
-        or set(audit) != _MIGRATION_FIELDS
+        or set(audit) != MODEL_IDENTITY_AUDIT_FIELDS
         or audit.get("schema_version") != 1
         or audit.get("kind") != "openrouter-canonical-model-identity-v1"
         or audit.get("attempts_retained") != 1
@@ -289,10 +282,13 @@ def _site_gaps(context: ReleasePolicyContext) -> set[tuple[str, str]]:
 
 def validate_sample_release(context: ReleasePolicyContext) -> None:
     """Validate the current sample evidence and publication contract."""
+    known_reissue = _known_reissue_identity(context)
     if not context.manifest.get("sample_contract"):
+        if known_reissue:
+            raise RuntimeError("known sample lineage cannot remove its sample contract")
         return
     _validate_sample_core(context)
-    _validate_reissued_sample(context)
+    _validate_reissued_sample(context, required=known_reissue)
     if context.manifest["status"] != "sealed" and not context.sealing:
         return
     gaps = _site_gaps(context)

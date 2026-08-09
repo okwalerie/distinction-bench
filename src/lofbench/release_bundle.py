@@ -1242,10 +1242,10 @@ class ReleaseBundle:
         calls: list[dict[str, Any]],
         sealing: bool = False,
     ) -> None:
-        if not self.manifest.get("sample_contract"):
-            return
         if self.release_policy_validator is None:
-            raise RuntimeError("release requires an application policy validator")
+            if self.manifest.get("sample_contract"):
+                raise RuntimeError("release requires an application policy validator")
+            return
         self.release_policy_validator(
             ReleasePolicyContext(
                 root=self.root,

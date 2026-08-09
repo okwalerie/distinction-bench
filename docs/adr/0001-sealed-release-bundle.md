@@ -190,7 +190,9 @@ executor, provider, credential, or network seam is reachable. exact observed spe
 record binds those provenance and audit digests on every later validation and seal, so
 the separately reviewed working bundle cannot shed or substitute them. the application
 policy matches those values to the checked-in one-off source contract; coordinately
-rewriting the manifest and its self-digests is therefore insufficient. only after
+rewriting the manifest and its self-digests is therefore insufficient. the exact known
+run lineage makes the reissue policy mandatory even if removable manifest markers are
+deleted or relabelled as fresh. only after
 rederived metrics and normal working-bundle validation pass is the staged sibling
 published with the kernel's atomic no-replace rename; a target appearing in the race
 window is never overwritten. the original sealed directory and archive remain
