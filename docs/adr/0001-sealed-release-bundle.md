@@ -173,7 +173,10 @@ deterministic external archive all validate, but whose site is missing only the
 enumerated portable-download artifacts. this is a named legacy source policy, not a
 normal-validation flag. it additionally revalidates the complete canonical-identity
 migration audit, exact event authority, predecessor/current registry authorities,
-run/trial maps, and admitted model/catalog identity.
+run/trial maps, and admitted model/catalog identity. the sealed audit must equal both
+the current state's audit and the deterministic predecessor backup's audit. the backup
+bytes independently reclose the predecessor release, state, run manifests, call
+revisions, and retained active-attempt mapping.
 
 reissue holds the existing state lifecycle lock and requires a distinct absent sibling
 target. it creates a fresh working bundle at the current clean commit from the source's
@@ -183,9 +186,15 @@ sealed records and calls ordinary `admit_run` for all twenty attempts. no planne
 executor, provider, credential, or network seam is reachable. exact observed spend is
 `0.069506875` with no reservation remaining. the fresh manifest embeds the unchanged
 `working_state_migrations` audit and typed `reissued_from` hashes for the old
-`release.json`, complete source tree, and external archive. only after rederived
-metrics and normal working-bundle validation pass is the staged sibling atomically
-published; the original sealed directory and archive remain immutable.
+`release.json`, complete typed source tree, and external archive. a typed `origin`
+record binds those provenance and audit digests on every later validation and seal, so
+the separately reviewed working bundle cannot shed or substitute them. the application
+policy matches those values to the checked-in one-off source contract; coordinately
+rewriting the manifest and its self-digests is therefore insufficient. only after
+rederived metrics and normal working-bundle validation pass is the staged sibling
+published with the kernel's atomic no-replace rename; a target appearing in the race
+window is never overwritten. the original sealed directory and archive remain
+immutable.
 
 ## consequences
 

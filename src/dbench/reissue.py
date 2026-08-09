@@ -20,7 +20,9 @@ from dbench.migration import (
     IDENTITY_EVENT_BODY_SHA256,
     IDENTITY_EVENT_ID,
     IDENTITY_EVENT_TYPE,
+    SAMPLE_PROTOCOLS,
     _require_identity_event,
+    _state_digest,
 )
 from dbench.provider_evidence import project_provider_evidence
 from dbench.release_policy import (
@@ -39,8 +41,11 @@ from lofbench.records import (
     TrialRecord,
 )
 from lofbench.release_bundle import ReleaseBundle, ReleaseReissueProvenance
-from lofbench.run_models import trial_id_for
-from lofbench.state_io import read_jsonl, replace_path_durable, state_lifecycle_lock
+from lofbench.state_io import (
+    read_jsonl,
+    rename_path_noreplace_durable,
+    state_lifecycle_lock,
+)
 from lofbench.suites import load_suite
 
 _MIGRATION_KIND = "openrouter-canonical-model-identity-v1"
@@ -72,6 +77,7 @@ _MIGRATION_FIELDS = {
     "trial_id_map",
     "attempts_retained",
     "remaining_attempts",
+    "active_attempt",
 }
 
 
@@ -165,13 +171,21 @@ def _verified_archive(source_root: Path, archive_path: Path) -> tuple[str, int]:
     return sha256(payload).hexdigest(), len(payload)
 
 
-def _source_bundle_digest(source_root: Path) -> tuple[str, int]:
-    files = {
-        path.relative_to(source_root).as_posix(): _digest(path)
-        for path in sorted(source_root.rglob("*"))
-        if path.is_file() and not path.is_symlink()
-    }
-    return canonical_sha256(files), len(files)
+def _source_bundle_digest(source_root: Path) -> tuple[str, int, int]:
+    entries: dict[str, dict[str, Any]] = {}
+    file_count = 0
+    for path in sorted(source_root.rglob("*")):
+        relative = path.relative_to(source_root).as_posix()
+        if path.is_symlink():
+            raise RuntimeError("sealed source contains an unsupported symbolic link")
+        if path.is_dir():
+            entries[relative] = {"type": "directory"}
+        elif path.is_file():
+            entries[relative] = {"type": "file", **_digest(path)}
+            file_count += 1
+        else:
+            raise RuntimeError("sealed source contains an unsupported filesystem entry")
+    return canonical_sha256(entries), file_count, len(entries)
 
 
 def _tree_digest(root: Path) -> str:
@@ -188,6 +202,7 @@ def _verified_migration_audit(
     source: ReleaseBundle,
     *,
     repository_root: Path,
+    state_root: Path,
 ) -> dict[str, Any]:
     migrations = source.manifest.get("working_state_migrations")
     if (
@@ -199,6 +214,37 @@ def _verified_migration_audit(
     audit = migrations[0]
     if set(audit) != _MIGRATION_FIELDS:
         raise RuntimeError("sealed reissue migration audit schema is invalid")
+    state_audit_path = state_root / "model-identity-migration.json"
+    backup = (
+        state_root.parent
+        / f"{state_root.name}.pre-canonical-model-{audit.get('predecessor_state_sha256', '')[:12]}"
+    )
+    if (
+        not state_audit_path.is_file()
+        or state_audit_path.is_symlink()
+        or not backup.is_dir()
+        or backup.is_symlink()
+        or {path.name for path in backup.iterdir()}
+        != {"migration-audit.json", "predecessor-release.json", "state"}
+        or any(path.is_symlink() for path in backup.rglob("*"))
+    ):
+        raise RuntimeError("sealed reissue lacks the deterministic migration backup")
+    try:
+        state_audit = json.loads(state_audit_path.read_text())
+        backup_audit = json.loads((backup / "migration-audit.json").read_text())
+        predecessor_release_bytes = (backup / "predecessor-release.json").read_bytes()
+        predecessor_release = json.loads(predecessor_release_bytes)
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError("sealed reissue migration backup is unreadable") from exc
+    if state_audit != audit or backup_audit != audit:
+        raise RuntimeError("sealed, state, and backup migration audits differ")
+    predecessor_state = backup / "state"
+    if (
+        sha256(predecessor_release_bytes).hexdigest()
+        != audit["predecessor_release_manifest_sha256"]
+        or _state_digest(predecessor_state) != audit["predecessor_state_sha256"]
+    ):
+        raise RuntimeError("migration predecessor release or state digest is inconsistent")
     event_authority = {
         "actor": IDENTITY_EVENT_ACTOR,
         "body_sha256": IDENTITY_EVENT_BODY_SHA256,
@@ -258,47 +304,122 @@ def _verified_migration_audit(
 
     runs = source.runs()
     run_id_map = audit["run_id_map"]
+    old_ids = predecessor_release.get("expected_run_ids")
     if (
         len(runs) != 4
+        or not isinstance(old_ids, list)
+        or len(old_ids) != 4
         or not isinstance(run_id_map, dict)
         or len(run_id_map) != 4
+        or set(run_id_map) != set(old_ids)
         or set(run_id_map.values()) != {run.run_id for run in runs}
         or any(not isinstance(value, str) or not value.startswith("run_") for value in run_id_map)
     ):
         raise RuntimeError("sealed reissue migration run map is invalid")
+    try:
+        old_runs = {
+            run_id: RunManifest.from_dict(
+                json.loads((predecessor_state / run_id / "run.json").read_text())
+            )
+            for run_id in old_ids
+        }
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError("migration predecessor run manifests are invalid") from exc
     predecessor_hashes = audit["predecessor_run_manifest_sha256"]
-    if not isinstance(predecessor_hashes, dict) or set(predecessor_hashes) != set(run_id_map):
+    if (
+        not isinstance(predecessor_hashes, dict)
+        or predecessor_hashes
+        != {run_id: canonical_sha256(run.to_dict()) for run_id, run in old_runs.items()}
+        or predecessor_release.get("repository_commit") != audit["predecessor_repository_commit"]
+        or predecessor_release.get("authority") != audit["predecessor_authority"]
+        or any(run.authoritative_run_id() != run.run_id for run in old_runs.values())
+    ):
         raise RuntimeError("sealed reissue predecessor-run hashes are incomplete")
-    for digest in predecessor_hashes.values():
-        _require_digest(digest, "migration predecessor run hash")
-    call_hashes = audit["predecessor_call_record_sha256"]
-    if not isinstance(call_hashes, list) or len(call_hashes) != 2:
-        raise RuntimeError("sealed reissue predecessor-call hashes are incomplete")
-    for digest in call_hashes:
-        _require_digest(digest, "migration predecessor call hash")
-
-    by_new_run = {new: old for old, new in run_id_map.items()}
-    trials = pq.read_table(source.root / "trials.parquet").to_pylist()
-    expected_trial_map = {
-        trial_id_for(by_new_run[row["run_id"]], row["abstract_form_id"], row["dialect_id"]): row[
-            "trial_id"
-        ]
-        for row in trials
+    old_by_protocol = {run.protocol_id: run for run in old_runs.values()}
+    new_by_protocol = {run.protocol_id: run for run in runs}
+    if (
+        set(old_by_protocol) != set(SAMPLE_PROTOCOLS)
+        or len(old_by_protocol) != len(old_runs)
+        or set(new_by_protocol) != set(SAMPLE_PROTOCOLS)
+        or len(new_by_protocol) != len(runs)
+    ):
+        raise RuntimeError("sealed reissue migration protocol map is invalid")
+    expected_run_map = {
+        old_by_protocol[protocol_id].run_id: new_by_protocol[protocol_id].run_id
+        for protocol_id in SAMPLE_PROTOCOLS
     }
-    if audit["trial_id_map"] != expected_trial_map:
+    expected_trial_map = {
+        old_trial_id: new_trial_id
+        for protocol_id in SAMPLE_PROTOCOLS
+        for old_trial_id, new_trial_id in zip(
+            old_by_protocol[protocol_id].expected_trial_ids,
+            new_by_protocol[protocol_id].expected_trial_ids,
+            strict=True,
+        )
+    }
+    if run_id_map != expected_run_map or audit["trial_id_map"] != expected_trial_map:
         raise RuntimeError("sealed reissue migration trial map is not authoritative")
     identity = {
         "requested_model_id": audit["requested_model_id"],
         "resolved_model_id": audit["resolved_model_id"],
         "endpoint": audit["endpoint"],
-        "provider": audit["provider"],
     }
     if any(
         any(getattr(run, field) != value for field, value in identity.items())
+        or run.catalog_row["selected_endpoint"]["provider_name"] != audit["provider"]
         or canonical_sha256(run.catalog_row) != audit["authenticated_catalog_sha256"]
         for run in runs
     ):
         raise RuntimeError("sealed reissue migration identity differs from admitted runs")
+
+    old_active = [run for run in old_runs.values() if run.attempts]
+    active_audit = audit["active_attempt"]
+    if len(old_active) != 1 or not isinstance(active_audit, dict):
+        raise RuntimeError("sealed reissue migration active attempt is invalid")
+    old_run = old_active[0]
+    new_run_id = run_id_map[old_run.run_id]
+    old_dir = predecessor_state / old_run.run_id
+    old_calls = read_jsonl(old_dir / "calls.jsonl")
+    old_requests = read_jsonl(old_dir / "request-started.jsonl")
+    old_evidence = read_jsonl(old_dir / "transcripts.jsonl")
+    source_calls = pq.read_table(source.root / "calls.parquet").to_pylist()
+    source_requests = read_jsonl(source.root / "request-started.jsonl")
+    source_evidence = read_jsonl(source.root / "transcripts.jsonl")
+    new_call_id = active_audit.get("new_call_id")
+    new_calls = [row for row in source_calls if row["call_id"] == new_call_id]
+    new_requests = [row for row in source_requests if row["call_id"] == new_call_id]
+    new_evidence = [row for row in source_evidence if row["call_id"] == new_call_id]
+    if (
+        len(old_calls) != 2
+        or len(old_requests) != 1
+        or len(old_evidence) != 2
+        or len(new_calls) != 1
+        or len(new_requests) != 1
+        or len(new_evidence) != 2
+    ):
+        raise RuntimeError("sealed reissue predecessor attempt records are incomplete")
+    expected_active = {
+        "old_run_id": old_run.run_id,
+        "new_run_id": new_run_id,
+        "old_trial_id": old_run.expected_trial_ids[0],
+        "new_trial_id": expected_trial_map[old_run.expected_trial_ids[0]],
+        "old_call_id": old_evidence[0]["call_id"],
+        "new_call_id": new_call_id,
+        "old_request_sha256": old_requests[0]["request_sha256"],
+        "new_request_sha256": new_requests[0]["request_sha256"],
+        "old_evidence_sha256": [row["evidence_sha256"] for row in old_evidence],
+        "new_evidence_sha256": [row["evidence_sha256"] for row in new_evidence],
+        "new_call_record_sha256": canonical_sha256(new_calls[0]),
+        "provider_evidence_sha256": [
+            canonical_sha256(row["provider_evidence"]) for row in old_evidence
+        ],
+        "observed_cost_usd": new_calls[0]["observed_cost_usd"],
+    }
+    if (
+        audit["predecessor_call_record_sha256"] != [canonical_sha256(row) for row in old_calls]
+        or active_audit != expected_active
+    ):
+        raise RuntimeError("sealed reissue predecessor attempt closure is inconsistent")
     return json.loads(json.dumps(audit))
 
 
@@ -414,6 +535,7 @@ def reissue_sealed_release(
             repository_root=repository_root,
             evidence_projector=project_provider_evidence,
             release_policy_validator=validate_legacy_sample_reissue_source,
+            allow_legacy_origin=True,
         )
         if source.manifest.get("reissued_from") is not None:
             raise RuntimeError("legacy sealed source has already been reissued")
@@ -421,9 +543,13 @@ def reissue_sealed_release(
             source.validate()
         except Exception as exc:
             raise RuntimeError("sealed reissue source core is invalid") from exc
-        audit = _verified_migration_audit(source, repository_root=repository_root)
+        audit = _verified_migration_audit(
+            source,
+            repository_root=repository_root,
+            state_root=state_root,
+        )
         archive_sha256, archive_bytes = _verified_archive(source_root, source_archive)
-        bundle_sha256, file_count = _source_bundle_digest(source_root)
+        bundle_sha256, file_count, tree_entries = _source_bundle_digest(source_root)
         release_sha256 = sha256((source_root / "release.json").read_bytes()).hexdigest()
         provenance = ReleaseReissueProvenance(
             schema_version=1,
@@ -435,6 +561,7 @@ def reissue_sealed_release(
             source_archive_sha256=archive_sha256,
             source_archive_bytes=archive_bytes,
             source_file_count=file_count,
+            source_tree_entries=tree_entries,
             reissued_at=datetime.now(UTC).isoformat(),
         )
         stage = Path(
@@ -471,14 +598,12 @@ def reissue_sealed_release(
             )
             target.validate()
             if (
-                _source_bundle_digest(source_root) != (bundle_sha256, file_count)
+                _source_bundle_digest(source_root) != (bundle_sha256, file_count, tree_entries)
                 or sha256((source_root / "release.json").read_bytes()).hexdigest() != release_sha256
                 or sha256(source_archive.read_bytes()).hexdigest() != archive_sha256
             ):
                 raise RuntimeError("sealed source or archive changed during reissue")
-            if target_root.exists():
-                raise FileExistsError(f"reissue target appeared during validation: {target_root}")
-            replace_path_durable(stage, target_root)
+            rename_path_noreplace_durable(stage, target_root)
         finally:
             if stage.exists():
                 shutil.rmtree(stage)

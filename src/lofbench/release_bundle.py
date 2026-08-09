@@ -21,6 +21,7 @@ import pyarrow.parquet as pq
 from lofbench.authority import (
     AuthorityManifest,
     authority_from_git,
+    canonical_sha256,
     derive_run_authority,
     verify_authority_copies,
 )
@@ -109,6 +110,7 @@ class ReleaseReissueProvenance:
     source_archive_sha256: str
     source_archive_bytes: int
     source_file_count: int
+    source_tree_entries: int
     reissued_at: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -152,6 +154,9 @@ class ReleaseReissueProvenance:
             or isinstance(result.source_file_count, bool)
             or not isinstance(result.source_file_count, int)
             or result.source_file_count <= 0
+            or isinstance(result.source_tree_entries, bool)
+            or not isinstance(result.source_tree_entries, int)
+            or result.source_tree_entries < result.source_file_count
         ):
             raise RuntimeError("release reissue provenance values are invalid")
         try:
@@ -278,12 +283,14 @@ class ReleaseBundle:
         repository_root: Path | None = None,
         evidence_projector: EvidenceProjector | None = None,
         release_policy_validator: ReleasePolicyValidator | None = None,
+        allow_legacy_origin: bool = False,
     ) -> None:
         self.root = root
         self.manifest = manifest
         self.repository_root = repository_root
         self.evidence_projector = evidence_projector
         self.release_policy_validator = release_policy_validator
+        self.allow_legacy_origin = allow_legacy_origin
 
     @classmethod
     def create_working(
@@ -357,7 +364,16 @@ class ReleaseBundle:
         if migrations:
             manifest["working_state_migrations"] = migrations
         if reissued_from is not None:
-            manifest["reissued_from"] = reissued_from.to_dict()
+            reissue = reissued_from.to_dict()
+            manifest["reissued_from"] = reissue
+            manifest["origin"] = {
+                "schema_version": 1,
+                "kind": "reissue",
+                "reissued_from_sha256": canonical_sha256(reissue),
+                "working_state_migrations_sha256": canonical_sha256(migrations),
+            }
+        else:
+            manifest["origin"] = {"schema_version": 1, "kind": "fresh"}
         (root / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
         bundle = cls(
             root,
@@ -378,6 +394,7 @@ class ReleaseBundle:
         repository_root: Path | None = None,
         evidence_projector: EvidenceProjector | None = None,
         release_policy_validator: ReleasePolicyValidator | None = None,
+        allow_legacy_origin: bool = False,
     ) -> ReleaseBundle:
         manifest = json.loads((root / "release.json").read_text())
         if manifest.get("bundle_schema_version") != BUNDLE_SCHEMA_VERSION:
@@ -388,6 +405,7 @@ class ReleaseBundle:
             repository_root=repository_root,
             evidence_projector=evidence_projector,
             release_policy_validator=release_policy_validator,
+            allow_legacy_origin=allow_legacy_origin,
         )
 
     def _verify_authorities(self, repository_root: Path | None = None) -> AuthorityManifest:
@@ -1061,14 +1079,34 @@ class ReleaseBundle:
         if set(path.name for path in self.root.iterdir() if path.is_file()) != _ROOT_FILES:
             raise RuntimeError("release root files do not match the bundle schema")
         self._verify_authorities()
+        origin = self.manifest.get("origin")
         reissued = self.manifest.get("reissued_from")
-        if reissued is not None:
+        if origin is None:
+            if not self.allow_legacy_origin:
+                raise RuntimeError("release lacks typed origin provenance")
+        elif origin == {"schema_version": 1, "kind": "fresh"}:
+            if reissued is not None:
+                raise RuntimeError("fresh release cannot contain reissue provenance")
+        elif isinstance(origin, Mapping) and set(origin) == {
+            "schema_version",
+            "kind",
+            "reissued_from_sha256",
+            "working_state_migrations_sha256",
+        }:
+            if origin.get("schema_version") != 1 or origin.get("kind") != "reissue":
+                raise RuntimeError("release origin provenance is invalid")
             if not isinstance(reissued, Mapping):
                 raise RuntimeError("release reissue provenance is invalid")
             ReleaseReissueProvenance.from_dict(reissued)
             migrations = self.manifest.get("working_state_migrations")
             if not isinstance(migrations, list) or not migrations:
                 raise RuntimeError("reissued release must preserve working-state migrations")
+            if origin.get("reissued_from_sha256") != canonical_sha256(dict(reissued)) or origin.get(
+                "working_state_migrations_sha256"
+            ) != canonical_sha256(migrations):
+                raise RuntimeError("release origin digests do not match reissue provenance")
+        else:
+            raise RuntimeError("release origin provenance is invalid")
         if json.loads((self.root / "human-trial.schema.json").read_text()) != (
             HUMAN_TRIAL_EXPORT_SCHEMA
         ):

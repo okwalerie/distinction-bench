@@ -1545,11 +1545,154 @@ def sealed_reissue_source(tmp_path_factory):
         costs = tuple(cost_values[offset : offset + 5])
         offset += 5
         runs.append(replace(_sample_run(protocol, form_ids), cost_usd=math.fsum(costs)))
-    old_run_ids = {run.run_id: f"run_precanonical_{index}" for index, run in enumerate(runs)}
+    source = root / "source"
+    state = root / "state"
+    records_by_run = {}
+    all_ledger = []
+    for index, run in enumerate(runs):
+        costs = tuple(cost_values[index * 5 : index * 5 + 5])
+        trials, calls, events, evidence = _sample_records(run, form_ids, costs=costs)
+        if index == 0:
+            recovered = evidence[0].revise(evidence[0].provider_evidence)
+            evidence[0:1] = [evidence[0], recovered]
+            calls[0] = replace(calls[0], evidence_sha256=recovered.evidence_sha256)
+            trials[0] = replace(trials[0], completion_evidence_sha256=recovered.evidence_sha256)
+        requests = _request_records(run, trials, calls)
+        records_by_run[run.run_id] = (trials, calls, events, evidence, requests)
+        all_ledger.extend(row.to_dict() for row in events)
+
+    old_runs = []
+    for index, run in enumerate(runs):
+        values = run.to_dict()
+        values.pop("run_id")
+        values.update(
+            resolved_model_id=run.requested_model_id,
+            expected_trial_ids=(),
+            status="planned",
+            attempts=0,
+            token_usage={},
+            latency_ms=0.0,
+            cost_usd=0.0,
+        )
+        legacy_catalog = json.loads(json.dumps(run.catalog_row))
+        legacy_catalog.pop("authenticated_user_model")
+        legacy_catalog.pop("authenticated_user_models_retrieval")
+        values["catalog_row"] = legacy_catalog
+        values["authority"] = derive_run_authority(
+            suite_bytes=DEFAULT_SUITE_REGISTRY.read_bytes(),
+            protocol_bytes=DEFAULT_PROTOCOL_REGISTRY.read_bytes(),
+            form_ids=form_ids,
+            dialect_id=run.dialect_id,
+            protocol_id=run.protocol_id,
+            execution_spec=execution_spec_identity(values),
+            catalog_retrieved_at=run.catalog_retrieved_at,
+            catalog_row=legacy_catalog,
+        ).to_dict()
+        old = RunManifest.plan(**values)
+        old_runs.append(
+            replace(
+                old,
+                expected_trial_ids=tuple(
+                    trial_id_for(old.run_id, form_id, old.dialect_id) for form_id in form_ids
+                ),
+                status="probed" if index == 0 else "planned",
+                attempts=1 if index == 0 else 0,
+            )
+        )
+    run_map = {old.run_id: new.run_id for old, new in zip(old_runs, runs, strict=True)}
     trial_map = {
-        trial_id_for(old_run_ids[run.run_id], form_id, run.dialect_id): trial_id
-        for run in runs
-        for form_id, trial_id in zip(form_ids, run.expected_trial_ids, strict=True)
+        old_trial: new_trial
+        for old, new in zip(old_runs, runs, strict=True)
+        for old_trial, new_trial in zip(old.expected_trial_ids, new.expected_trial_ids, strict=True)
+    }
+    predecessor_state = root / "predecessor-state"
+    predecessor_state.mkdir()
+    for old in old_runs:
+        run_dir = predecessor_state / old.run_id
+        run_dir.mkdir()
+        (run_dir / "run.json").write_text(json.dumps(old.to_dict()) + "\n")
+    active_old = old_runs[0]
+    active_new = runs[0]
+    new_trials, new_calls, _new_events, new_evidence, new_requests = records_by_run[
+        active_new.run_id
+    ]
+    old_trial_id = active_old.expected_trial_ids[0]
+    old_call_id = call_id_for(old_trial_id, 1)
+    old_evidence_first = AttemptEvidence.capture(
+        call_id=old_call_id,
+        trial_id=old_trial_id,
+        run_id=active_old.run_id,
+        attempt=1,
+        provider_evidence=new_evidence[0].provider_evidence,
+    )
+    old_evidence = [
+        old_evidence_first,
+        old_evidence_first.revise(new_evidence[0].provider_evidence),
+    ]
+    old_calls = []
+    for record in old_evidence:
+        row = new_calls[0].to_dict()
+        row.update(
+            call_id=old_call_id,
+            trial_id=old_trial_id,
+            run_id=active_old.run_id,
+            status="accounting_unknown",
+            evidence_sha256=record.evidence_sha256,
+        )
+        old_calls.append(row)
+    old_request = new_requests[0].to_dict()
+    old_request.update(call_id=old_call_id, trial_id=old_trial_id, run_id=active_old.run_id)
+    active_dir = predecessor_state / active_old.run_id
+    for name, rows in (
+        ("calls.jsonl", old_calls),
+        ("request-started.jsonl", [old_request]),
+        ("transcripts.jsonl", [row.to_dict() for row in old_evidence]),
+    ):
+        (active_dir / name).write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
+        )
+    predecessor_reservation = LedgerEvent(
+        event_type="reserved",
+        call_id=old_call_id,
+        trial_id=old_trial_id,
+        run_id=active_old.run_id,
+        cohort=active_old.cohort,
+        amount_usd=0.01,
+        at=old_calls[0]["started_at"],
+    )
+    (predecessor_state / "spend-ledger.jsonl").write_text(
+        json.dumps(predecessor_reservation.to_dict(), sort_keys=True) + "\n"
+    )
+    (predecessor_state / "cost-sheet.json").write_text("{}\n")
+    predecessor_release = {
+        "release_id": "v1.0.0-sample.1",
+        "status": "working",
+        "repository_commit": predecessor_commit,
+        "authority": predecessor_authority.to_dict(),
+        "expected_run_ids": [run.run_id for run in old_runs],
+    }
+    predecessor_release_bytes = (json.dumps(predecessor_release, indent=2) + "\n").encode()
+    from dbench.migration import _state_digest
+
+    predecessor_state_sha256 = _state_digest(predecessor_state)
+    active_attempt = {
+        "old_run_id": active_old.run_id,
+        "new_run_id": active_new.run_id,
+        "old_trial_id": old_trial_id,
+        "new_trial_id": new_trials[0].trial_id,
+        "old_call_id": old_call_id,
+        "new_call_id": new_calls[0].call_id,
+        "old_request_sha256": old_request["request_sha256"],
+        "new_request_sha256": new_requests[0].request_sha256,
+        "old_evidence_sha256": [row.evidence_sha256 for row in old_evidence],
+        "new_evidence_sha256": [
+            row.evidence_sha256 for row in new_evidence if row.call_id == new_calls[0].call_id
+        ],
+        "new_call_record_sha256": canonical_sha256(new_calls[0].to_dict()),
+        "provider_evidence_sha256": [
+            canonical_sha256(row.provider_evidence.to_dict()) for row in old_evidence
+        ],
+        "observed_cost_usd": new_calls[0].observed_cost_usd,
     }
     audit = {
         "schema_version": 1,
@@ -1567,25 +1710,23 @@ def sealed_reissue_source(tmp_path_factory):
         "authority": candidate_authority.to_dict(),
         "predecessor_authority_sha256": canonical_sha256(predecessor_authority.to_dict()),
         "authority_sha256": canonical_sha256(candidate_authority.to_dict()),
-        "predecessor_release_manifest_sha256": "1" * 64,
-        "predecessor_state_sha256": "2" * 64,
+        "predecessor_release_manifest_sha256": sha256(predecessor_release_bytes).hexdigest(),
+        "predecessor_state_sha256": predecessor_state_sha256,
         "predecessor_run_manifest_sha256": {
-            old_run_id: canonical_sha256({"run_id": old_run_id, "protocol": run.protocol_id})
-            for run, old_run_id in ((run, old_run_ids[run.run_id]) for run in runs)
+            run.run_id: canonical_sha256(run.to_dict()) for run in old_runs
         },
         "authenticated_catalog_sha256": canonical_sha256(runs[0].catalog_row),
-        "predecessor_call_record_sha256": ["3" * 64, "4" * 64],
+        "predecessor_call_record_sha256": [canonical_sha256(row) for row in old_calls],
         "requested_model_id": runs[0].requested_model_id,
         "resolved_model_id": runs[0].resolved_model_id,
         "endpoint": runs[0].endpoint,
-        "provider": runs[0].provider,
-        "run_id_map": {old: new for new, old in old_run_ids.items()},
+        "provider": "Exact Provider",
+        "run_id_map": run_map,
         "trial_id_map": trial_map,
         "attempts_retained": 1,
         "remaining_attempts": 19,
+        "active_attempt": active_attempt,
     }
-    source = root / "source"
-    state = root / "state"
     bundle = ReleaseBundle.create_working(
         source,
         release_id="v1.0.0-sample.1",
@@ -1618,11 +1759,9 @@ def sealed_reissue_source(tmp_path_factory):
         release_policy_validator=validate_sample_release,
         working_state_migrations=[audit],
     )
-    all_ledger = []
-    for index, run in enumerate(runs):
-        costs = tuple(cost_values[index * 5 : index * 5 + 5])
-        trials, calls, events, evidence = _sample_records(run, form_ids, costs=costs)
-        requests = _request_records(run, trials, calls)
+    state.mkdir()
+    for run in runs:
+        trials, calls, events, evidence, requests = records_by_run[run.run_id]
         bundle.admit_run(
             run,
             trials,
@@ -1643,10 +1782,15 @@ def sealed_reissue_source(tmp_path_factory):
             (run_dir / name).write_text(
                 "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
             )
-        all_ledger.extend(row.to_dict() for row in events)
+    (state / "model-identity-migration.json").write_text(json.dumps(audit, indent=2) + "\n")
     (state / "spend-ledger.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in all_ledger)
     )
+    backup = root / f"state.pre-canonical-model-{predecessor_state_sha256[:12]}"
+    backup.mkdir()
+    shutil.move(predecessor_state, backup / "state")
+    (backup / "migration-audit.json").write_text(json.dumps(audit, indent=2) + "\n")
+    (backup / "predecessor-release.json").write_bytes(predecessor_release_bytes)
     write_release_metrics(bundle.root, suite=load_suite(), runs=bundle.runs())
     build_site(bundle.publication(), bundle.root / "site")
     bundle.seal(repository_root=repository)
@@ -1654,15 +1798,57 @@ def sealed_reissue_source(tmp_path_factory):
     stale_download.unlink()
     sealed_manifest = json.loads((bundle.root / "release.json").read_text())
     sealed_manifest["files"].pop("site/downloads/request-started.jsonl")
+    downloads_path = bundle.root / "site" / "downloads.html"
+    downloads = downloads_path.read_text()
+    for old, new in (
+        ("request-started.jsonl", "request-intents.jsonl"),
+        ("full sealed distribution", "distribution"),
+        ("release.json", "manifest.json"),
+        (".tar.gz", ".tgz"),
+    ):
+        downloads = downloads.replace(old, new)
+    downloads_path.write_text(downloads)
+    sealed_manifest["files"]["site/downloads.html"] = {
+        "sha256": sha256(downloads_path.read_bytes()).hexdigest(),
+        "bytes": downloads_path.stat().st_size,
+    }
     (bundle.root / "release.json").write_text(json.dumps(sealed_manifest, indent=2) + "\n")
     archive = archive_release(source, root / "source.tar.gz")
-    return repository, source, state, archive
+    from dbench import release_policy
+    from dbench.reissue import _source_bundle_digest
+
+    source_manifest = json.loads((source / "release.json").read_text())
+    source_bundle_sha256, source_file_count, source_tree_entries = _source_bundle_digest(source)
+    original_contract = release_policy._SAMPLE_REISSUE_SOURCE_CONTRACT
+    release_policy._SAMPLE_REISSUE_SOURCE_CONTRACT = {
+        "source_release_id": source_manifest["release_id"],
+        "source_repository_commit": source_manifest["repository_commit"],
+        "source_release_manifest_sha256": sha256(
+            (source / "release.json").read_bytes()
+        ).hexdigest(),
+        "source_bundle_sha256": source_bundle_sha256,
+        "source_archive_sha256": sha256(archive.read_bytes()).hexdigest(),
+        "source_archive_bytes": archive.stat().st_size,
+        "source_file_count": source_file_count,
+        "source_tree_entries": source_tree_entries,
+        "migration_audit_sha256": canonical_sha256(audit),
+    }
+    try:
+        yield repository, source, state, archive
+    finally:
+        release_policy._SAMPLE_REISSUE_SOURCE_CONTRACT = original_contract
 
 
 def _copy_reissue_source(sealed_reissue_source, root: Path):
     repository, original_source, original_state, original_archive = sealed_reissue_source
     source = shutil.copytree(original_source, root / "source")
     state = shutil.copytree(original_state, root / "state")
+    backups = list(original_state.parent.glob(f"{original_state.name}.pre-canonical-model-*"))
+    assert len(backups) == 1
+    shutil.copytree(
+        backups[0],
+        root / backups[0].name.replace(original_state.name, state.name, 1),
+    )
     archive = shutil.copyfile(original_archive, root / "source.tar.gz")
     return repository, source, state, Path(archive)
 
@@ -1774,6 +1960,100 @@ def test_reissue_rejects_core_tamper_and_target_collisions(tmp_path, sealed_reis
             state_root=state,
             repository_root=repository,
         )
+
+
+@pytest.mark.parametrize("copy", ["state", "backup"])
+def test_reissue_requires_identical_state_and_backup_audits(tmp_path, sealed_reissue_source, copy):
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+    audit = json.loads((state / "model-identity-migration.json").read_text())
+    if copy == "state":
+        path = state / "model-identity-migration.json"
+    else:
+        backup = next(state.parent.glob(f"{state.name}.pre-canonical-model-*"))
+        path = backup / "migration-audit.json"
+    audit["remaining_attempts"] = 18
+    path.write_text(json.dumps(audit, indent=2) + "\n")
+    with pytest.raises(RuntimeError, match="migration audit"):
+        reissue_sealed_release(
+            source_root=source,
+            source_archive=archive,
+            target_root=tmp_path / "target",
+            state_root=state,
+            repository_root=repository,
+        )
+
+
+def test_reissue_publish_is_atomic_noreplace(tmp_path, sealed_reissue_source, monkeypatch):
+    from dbench import reissue
+
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+    target = tmp_path / "target"
+    rename = reissue.rename_path_noreplace_durable
+
+    def collide(stage, destination):
+        destination.mkdir()
+        rename(stage, destination)
+
+    monkeypatch.setattr(reissue, "rename_path_noreplace_durable", collide)
+    with pytest.raises(FileExistsError):
+        reissue_sealed_release(
+            source_root=source,
+            source_archive=archive,
+            target_root=target,
+            state_root=state,
+            repository_root=repository,
+        )
+    assert target.is_dir() and not any(target.iterdir())
+
+
+def test_reissue_origin_and_audit_remain_validation_invariants(tmp_path, sealed_reissue_source):
+    repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
+    target = tmp_path / "target"
+    reissue_sealed_release(
+        source_root=source,
+        source_archive=archive,
+        target_root=target,
+        state_root=state,
+        repository_root=repository,
+    )
+    release_path = target / "release.json"
+    original = json.loads(release_path.read_text())
+    removed = json.loads(json.dumps(original))
+    removed.pop("reissued_from")
+    release_path.write_text(json.dumps(removed, indent=2) + "\n")
+    with pytest.raises(RuntimeError, match="reissue provenance"):
+        ReleaseBundle.open(
+            target,
+            repository_root=repository,
+            evidence_projector=project_openrouter_evidence,
+            release_policy_validator=validate_sample_release,
+        ).validate()
+
+    forged = json.loads(json.dumps(original))
+    forged["working_state_migrations"][0]["remaining_attempts"] = 18
+    forged["origin"]["working_state_migrations_sha256"] = canonical_sha256(
+        forged["working_state_migrations"]
+    )
+    release_path.write_text(json.dumps(forged, indent=2) + "\n")
+    with pytest.raises(RuntimeError, match="migration provenance"):
+        ReleaseBundle.open(
+            target,
+            repository_root=repository,
+            evidence_projector=project_openrouter_evidence,
+            release_policy_validator=validate_sample_release,
+        ).validate()
+
+    forged = json.loads(json.dumps(original))
+    forged["reissued_from"]["source_archive_sha256"] = "0" * 64
+    forged["origin"]["reissued_from_sha256"] = canonical_sha256(forged["reissued_from"])
+    release_path.write_text(json.dumps(forged, indent=2) + "\n")
+    with pytest.raises(RuntimeError, match="migration provenance"):
+        ReleaseBundle.open(
+            target,
+            repository_root=repository,
+            evidence_projector=project_openrouter_evidence,
+            release_policy_validator=validate_sample_release,
+        ).validate()
 
 
 def test_reissue_cli_has_no_secret_or_executor_path(

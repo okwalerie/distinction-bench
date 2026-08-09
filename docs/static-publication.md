@@ -37,9 +37,14 @@ python -m dbench reissue-sealed-release \
   --state-root <complete-state-directory>
 ```
 
-this command authenticates the old checksums, archive, authority, evidence/accounting
-core, and embedded working-state migration audit; it then readmits the exact records
-through the normal admission boundary into a fresh working bundle. it performs no
-planning, execution, provider request, credential load, or network access. prepare,
-independent review, sealing, sidecar publication, and archiving remain separate normal
-steps.
+this command authenticates the old checksums, complete typed tree, archive, authority,
+and evidence/accounting core. its embedded migration audit must equal the current-state
+and deterministic predecessor-backup copies; predecessor release, state, run, call,
+map, and active-attempt bytes are reclosed before readmission. the fresh bundle's typed
+origin keeps the audit and source hashes mandatory through later validation and seal.
+the application policy also matches them to its checked-in source contract, rather
+than trusting manifest self-digests alone.
+publication uses an atomic no-replace rename, so a racing target is never clobbered.
+the command performs no planning, execution, provider request, credential load, or
+network access. prepare, independent review, sealing, sidecar publication, and
+archiving remain separate normal steps.

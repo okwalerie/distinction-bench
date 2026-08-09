@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 import os
 import tempfile
@@ -94,6 +96,45 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
 def replace_path_durable(source: Path, destination: Path) -> None:
     """Replace a path and fsync every distinct directory changed by the rename."""
     os.replace(source, destination)
+    _fsync_directory(source.parent)
+    if destination.parent != source.parent:
+        _fsync_directory(destination.parent)
+
+
+def rename_path_noreplace_durable(source: Path, destination: Path) -> None:
+    """Atomically publish one path without replacing any existing directory entry.
+
+    Release publication already depends on Linux ``flock`` and ``fsync`` semantics.
+    ``renameat2(RENAME_NOREPLACE)`` supplies the matching kernel-level no-clobber
+    guarantee; a userspace existence check followed by ``rename`` cannot.
+    """
+    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("atomic no-replace rename is unavailable on this host")
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_noreplace = 1
+    result = renameat2(
+        at_fdcwd,
+        os.fsencode(source),
+        at_fdcwd,
+        os.fsencode(destination),
+        rename_noreplace,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise FileExistsError(error, os.strerror(error), destination)
+        if error in {errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP}:
+            raise RuntimeError("atomic no-replace rename is unavailable on this filesystem")
+        raise OSError(error, os.strerror(error), destination)
     _fsync_directory(source.parent)
     if destination.parent != source.parent:
         _fsync_directory(destination.parent)

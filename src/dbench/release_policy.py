@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from typing import Any
+
 import pyarrow.parquet as pq
 
 from dbench.provider_evidence import validate_openrouter_run_policy
-from lofbench.release_bundle import ReleasePolicyContext
+from lofbench.authority import canonical_sha256
+from lofbench.release_bundle import (
+    ReleasePolicyContext,
+    ReleaseReissueProvenance,
+)
 
 _SITE_FILES = {
     "index.html",
@@ -57,6 +64,124 @@ _LEGACY_PUBLICATION_GAPS = {
     ("downloads.html", "release.json"),
     ("downloads.html", ".tar.gz"),
 }
+_MIGRATION_FIELDS = {
+    "schema_version",
+    "kind",
+    "identity_event_id",
+    "identity_event_authority",
+    "migrated_at",
+    "predecessor_repository_commit",
+    "repository_commit",
+    "predecessor_authority",
+    "authority",
+    "predecessor_authority_sha256",
+    "authority_sha256",
+    "predecessor_release_manifest_sha256",
+    "predecessor_state_sha256",
+    "predecessor_run_manifest_sha256",
+    "authenticated_catalog_sha256",
+    "predecessor_call_record_sha256",
+    "requested_model_id",
+    "resolved_model_id",
+    "endpoint",
+    "provider",
+    "run_id_map",
+    "trial_id_map",
+    "attempts_retained",
+    "remaining_attempts",
+    "active_attempt",
+}
+_SAMPLE_REISSUE_SOURCE_CONTRACT = {
+    "source_release_id": "v1.0.0-sample.1",
+    "source_repository_commit": "aa542e748000c05ab5dcf4f2cc48e02e3d976433",
+    "source_release_manifest_sha256": (
+        "26db305cc0df104ddd12bd9118c426263b062478bac8a33f054605a44e8b5333"
+    ),
+    "source_bundle_sha256": "a4b2fe1c97d6ff208006ba73f4a69ef929976a33b35984435187adf898473258",
+    "source_archive_sha256": "2b44f288eb73c9e88220f912b320243fbb5bfeac574ac7dbee45ba27ef6b4cb4",
+    "source_archive_bytes": 128_604_522,
+    "source_file_count": 7_298,
+    "source_tree_entries": 7_327,
+    "migration_audit_sha256": "aefb04b663fc93fa8d55a6db0f99af377e8b80288d532a284a810e12ba844974",
+}
+
+
+def _plain_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _plain_json(child) for key, child in value.items()}
+    if isinstance(value, tuple):
+        return [_plain_json(child) for child in value]
+    return value
+
+
+def _validate_reissued_sample(context: ReleasePolicyContext) -> None:
+    origin = context.manifest.get("origin")
+    if not isinstance(origin, Mapping) or origin.get("kind") != "reissue":
+        return
+    provenance_value = context.manifest.get("reissued_from")
+    migrations = context.manifest.get("working_state_migrations")
+    if not isinstance(provenance_value, Mapping) or not isinstance(migrations, Sequence):
+        raise RuntimeError("reissued sample lacks typed provenance or migration audit")
+    provenance = ReleaseReissueProvenance.from_dict(provenance_value)
+    if len(migrations) != 1 or not isinstance(migrations[0], Mapping):
+        raise RuntimeError("reissued sample must preserve one exact migration audit")
+    audit = migrations[0]
+    runs = list(context.runs)
+    trials = list(context.trials)
+    calls = list(context.calls)
+    run_ids = {run.run_id for run in runs} or set(context.manifest["expected_run_ids"])
+    trial_ids = {row["trial_id"] for row in trials}
+    calls_by_id = {row["call_id"]: row for row in calls}
+    active = audit.get("active_attempt")
+    provenance_contract = {
+        field: getattr(provenance, field)
+        for field in _SAMPLE_REISSUE_SOURCE_CONTRACT
+        if field != "migration_audit_sha256"
+    }
+    if (
+        provenance_contract
+        != {
+            field: value
+            for field, value in _SAMPLE_REISSUE_SOURCE_CONTRACT.items()
+            if field != "migration_audit_sha256"
+        }
+        or canonical_sha256(_plain_json(audit))
+        != _SAMPLE_REISSUE_SOURCE_CONTRACT["migration_audit_sha256"]
+        or set(audit) != _MIGRATION_FIELDS
+        or audit.get("schema_version") != 1
+        or audit.get("kind") != "openrouter-canonical-model-identity-v1"
+        or audit.get("attempts_retained") != 1
+        or audit.get("remaining_attempts") != 19
+        or not isinstance(audit.get("run_id_map"), Mapping)
+        or set(audit["run_id_map"].values()) != run_ids
+        or not isinstance(audit.get("trial_id_map"), Mapping)
+        or (trial_ids and set(audit["trial_id_map"].values()) != trial_ids)
+        or provenance.source_release_id != context.manifest["release_id"]
+        or provenance.source_repository_commit != audit.get("repository_commit")
+        or not isinstance(active, Mapping)
+        or active.get("new_run_id") not in run_ids
+        or (trial_ids and active.get("new_trial_id") not in trial_ids)
+    ):
+        raise RuntimeError("reissued sample migration provenance is inconsistent")
+    if runs and any(
+        run.requested_model_id != audit.get("requested_model_id")
+        or run.resolved_model_id != audit.get("resolved_model_id")
+        or run.endpoint != audit.get("endpoint")
+        or run.catalog_row["selected_endpoint"]["provider_name"] != audit.get("provider")
+        or canonical_sha256(run.catalog_row) != audit.get("authenticated_catalog_sha256")
+        for run in runs
+    ):
+        raise RuntimeError("reissued sample identity differs from its migration audit")
+    if calls:
+        call = calls_by_id.get(active.get("new_call_id"))
+        if (
+            call is None
+            or call["run_id"] != active.get("new_run_id")
+            or call["trial_id"] != active.get("new_trial_id")
+            or canonical_sha256(dict(call)) != active.get("new_call_record_sha256")
+            or call["observed_cost_usd"] != active.get("observed_cost_usd")
+        ):
+            raise RuntimeError("reissued sample active attempt differs from its migration audit")
 
 
 def _validate_sample_core(context: ReleasePolicyContext) -> None:
@@ -167,6 +292,7 @@ def validate_sample_release(context: ReleasePolicyContext) -> None:
     if not context.manifest.get("sample_contract"):
         return
     _validate_sample_core(context)
+    _validate_reissued_sample(context)
     if context.manifest["status"] != "sealed" and not context.sealing:
         return
     gaps = _site_gaps(context)
@@ -188,10 +314,5 @@ def validate_legacy_sample_reissue_source(context: ReleasePolicyContext) -> None
     if context.manifest["status"] != "sealed" or context.sealing:
         raise RuntimeError("legacy reissue source must be an already sealed sample")
     gaps = _site_gaps(context)
-    if not gaps or ("file", "downloads/request-started.jsonl") not in gaps:
-        raise RuntimeError("legacy reissue source is not the stale publication shape")
-    unexpected = gaps - _LEGACY_PUBLICATION_GAPS
-    if unexpected:
-        raise RuntimeError(
-            f"legacy reissue source has non-publication-policy gaps: {sorted(unexpected)}"
-        )
+    if gaps != _LEGACY_PUBLICATION_GAPS:
+        raise RuntimeError(f"legacy reissue source has the wrong stale shape: {sorted(gaps)}")
