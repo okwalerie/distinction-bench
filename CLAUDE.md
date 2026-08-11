@@ -24,10 +24,14 @@ uv run pytest tests/test_core.py::test_name  # Run single test
 uv run ruff check .        # Lint
 uv run ruff format .       # Format
 
-# Frozen suite and public release application (Ubuntu/Debian visual gate)
+# Non-authoritative local visual smoke tests (Ubuntu/Debian)
 sudo apt-get update && sudo apt-get install -y libcairo2 libpango-1.0-0
 uv sync --group dev --extra visual
-uv run python -m lofbench.suites --verify-only
+uv run pytest -m requires_visual_runtime
+
+# Frozen v1 hash authority: use the checked-in container/workflow, not host Cairo
+docker build -f .github/visual-runtime/Containerfile -t dbench-visual-authority .
+# Follow docs/visual-authority-runtime.md for preflight, 11,600-cell replay, and tests.
 uv run python -m dbench --help
 uv run pytest -q tests/test_runner.py tests/test_release_bundle.py tests/test_static_site.py
 ```

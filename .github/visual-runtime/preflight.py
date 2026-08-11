@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -12,6 +13,8 @@ from lofbench.renderers.runtime import visual_runtime_available
 EXPECTED_PACKAGES = {
     "fontconfig": "2.15.0-2.3",
     "fonts-dejavu-core": "2.37-8",
+    "git": "1:2.47.3-0+deb13u1",
+    "git-man": "1:2.47.3-0+deb13u1",
     "libcairo2:amd64": "1.18.4-1+b1",
     "libffi8:amd64": "3.4.8-2",
     "libgdk-pixbuf-2.0-0:amd64": "2.42.12+dfsg-4+deb13u1",
@@ -46,6 +49,7 @@ def _installed_packages() -> dict[str, str]:
 
 
 def main() -> None:
+    workspace_owner = Path("/workspace").stat().st_uid
     observed = {
         "debian": Path("/etc/debian_version").read_text().strip(),
         "python": platform.python_version(),
@@ -55,6 +59,7 @@ def main() -> None:
             ["fc-match", "--format=%{family}|%{file}", "sans-serif"],
             text=True,
         ),
+        "git": subprocess.check_output(["git", "--version"], text=True).strip(),
     }
     expected = {
         "debian": "13.5",
@@ -62,6 +67,7 @@ def main() -> None:
         "cairosvg": "2.9.0",
         "packages": EXPECTED_PACKAGES,
         "font": EXPECTED_FONT,
+        "git": "git version 2.47.3",
     }
     if observed != expected:
         raise SystemExit(
@@ -69,6 +75,11 @@ def main() -> None:
         )
     if not visual_runtime_available():
         raise SystemExit("visual authority imports are not usable")
+    if os.geteuid() == 0 or os.geteuid() != workspace_owner:
+        raise SystemExit(
+            "visual authority must run as the non-root checkout owner: "
+            f"process={os.geteuid()} checkout={workspace_owner}"
+        )
     print("visual authority runtime matches frozen v1")
 
 

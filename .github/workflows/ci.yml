@@ -25,29 +25,43 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: build frozen visual authority runtime
         run: docker build --file .github/visual-runtime/Containerfile --tag dbench-visual-authority .
       - name: preflight visual authority runtime
         run: >-
           docker run --rm
+          --network none
+          --user "$(stat -c %u "$GITHUB_WORKSPACE"):$(stat -c %g "$GITHUB_WORKSPACE")"
           --volume "$GITHUB_WORKSPACE:/workspace:ro"
           --workdir /workspace
+          --env HOME=/tmp
           --env PYTHONPATH=/workspace/src
+          --tmpfs /tmp:rw,nosuid,nodev
           dbench-visual-authority
           python .github/visual-runtime/preflight.py
       - name: verify all 11,600 frozen cells
         run: >-
           docker run --rm
+          --network none
+          --user "$(stat -c %u "$GITHUB_WORKSPACE"):$(stat -c %g "$GITHUB_WORKSPACE")"
           --volume "$GITHUB_WORKSPACE:/workspace:ro"
           --workdir /workspace
+          --env HOME=/tmp
           --env PYTHONPATH=/workspace/src
+          --tmpfs /tmp:rw,nosuid,nodev
           dbench-visual-authority
           python -m lofbench.suites --verify-only
-      - name: run suite in visual authority runtime
+      - name: run visual-dependent tests in authority runtime
         run: >-
           docker run --rm
+          --network none
+          --user "$(stat -c %u "$GITHUB_WORKSPACE"):$(stat -c %g "$GITHUB_WORKSPACE")"
           --volume "$GITHUB_WORKSPACE:/workspace:ro"
           --workdir /workspace
+          --env HOME=/tmp
           --env PYTHONPATH=/workspace/src
+          --tmpfs /tmp:rw,nosuid,nodev
           dbench-visual-authority
-          pytest -q -p no:cacheprovider
+          pytest -q -p no:cacheprovider -m requires_visual_runtime

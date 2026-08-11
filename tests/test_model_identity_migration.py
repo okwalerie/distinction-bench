@@ -659,6 +659,7 @@ def test_current_head_cannot_reopen_the_consumed_bounded_repair_lineage(tmp_path
             "src/dbench/reissue.py",
             "src/dbench/release_policy.py",
             "src/lofbench/release_bundle.py",
+            "src/lofbench/renderers/runtime.py",
         }
     )
     head = git("rev-parse", "HEAD")

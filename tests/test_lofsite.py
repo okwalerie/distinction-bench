@@ -98,6 +98,7 @@ class TestValidateFormInput:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_visual_runtime
 class TestRenderAllDialects:
     def test_covers_every_registered_renderer(self):
         from lofbench.renderers import list_renderers

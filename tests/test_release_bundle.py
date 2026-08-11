@@ -1882,6 +1882,7 @@ def _copy_reissue_source(sealed_reissue_source, root: Path):
     return repository, source, state, Path(archive)
 
 
+@pytest.mark.requires_visual_runtime
 def test_reissue_accepts_only_stale_site_and_preserves_exact_core(tmp_path, sealed_reissue_source):
     repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
     with pytest.raises(RuntimeError, match="reissue origin"):
@@ -1922,6 +1923,7 @@ def test_reissue_accepts_only_stale_site_and_preserves_exact_core(tmp_path, seal
     assert math.fsum(row["observed_cost_usd"] for row in calls) == 0.069506875
 
 
+@pytest.mark.requires_visual_runtime
 @pytest.mark.parametrize("mutation", ["drop", "swap"])
 def test_reissue_rejects_dropped_or_tampered_migration_audit(
     tmp_path, sealed_reissue_source, mutation
@@ -1948,6 +1950,7 @@ def test_reissue_rejects_dropped_or_tampered_migration_audit(
     assert not target.exists()
 
 
+@pytest.mark.requires_visual_runtime
 def test_reissue_rejects_core_tamper_and_target_collisions(tmp_path, sealed_reissue_source):
     repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
     with (source / "calls.parquet").open("ab") as handle:
@@ -1991,6 +1994,7 @@ def test_reissue_rejects_core_tamper_and_target_collisions(tmp_path, sealed_reis
         )
 
 
+@pytest.mark.requires_visual_runtime
 @pytest.mark.parametrize("copy", ["state", "backup"])
 def test_reissue_requires_identical_state_and_backup_audits(tmp_path, sealed_reissue_source, copy):
     repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
@@ -2012,6 +2016,7 @@ def test_reissue_requires_identical_state_and_backup_audits(tmp_path, sealed_rei
         )
 
 
+@pytest.mark.requires_visual_runtime
 def test_reissue_publish_is_atomic_noreplace(tmp_path, sealed_reissue_source, monkeypatch):
     from dbench import reissue
 
@@ -2035,6 +2040,7 @@ def test_reissue_publish_is_atomic_noreplace(tmp_path, sealed_reissue_source, mo
     assert target.is_dir() and not any(target.iterdir())
 
 
+@pytest.mark.requires_visual_runtime
 def test_reissue_origin_and_audit_remain_validation_invariants(tmp_path, sealed_reissue_source):
     repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
     target = tmp_path / "target"
@@ -2085,6 +2091,7 @@ def test_reissue_origin_and_audit_remain_validation_invariants(tmp_path, sealed_
         ).validate()
 
 
+@pytest.mark.requires_visual_runtime
 def test_reissue_cannot_downgrade_known_lineage_to_fresh(
     tmp_path, sealed_reissue_source, monkeypatch
 ):
@@ -2124,6 +2131,7 @@ def test_reissue_cannot_downgrade_known_lineage_to_fresh(
         cli.main(["prepare", "--release", str(target)])
 
 
+@pytest.mark.requires_visual_runtime
 def test_reissue_cli_has_no_secret_or_executor_path(
     tmp_path, sealed_reissue_source, monkeypatch, capsys
 ):

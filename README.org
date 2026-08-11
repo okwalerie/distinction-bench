@@ -7,14 +7,20 @@ This repository contains the Distinction Benchmark and the Laws of Form benchmar
 uv sync --group dev
 #+end_src
 
-the full frozen-suite verification also needs the visual extra and native cairo.
-on ubuntu/debian:
+for non-authoritative local visual development on ubuntu/debian:
 
 #+begin_src bash
 sudo apt-get update && sudo apt-get install -y libcairo2 libpango-1.0-0
 uv sync --group dev --extra visual
-uv run python -m lofbench.suites --verify-only
+uv run pytest -m requires_visual_runtime
 #+end_src
+
+local cairo/pango packages are useful for smoke tests, but their png bytes are
+platform-dependent and are *not* the frozen hash authority. authoritative v1
+verification builds =.github/visual-runtime/Containerfile= and runs the preflight,
+11,600-cell replay, and marked visual tests exactly as specified in
+=.github/workflows/ci.yml=. see =docs/visual-authority-runtime.md= for the pinned
+runtime and local reproduction commands.
 
 ** Usage
 #+begin_src python

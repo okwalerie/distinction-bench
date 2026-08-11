@@ -27,6 +27,8 @@ RUN printf '%s\n' \
       ca-certificates \
       fontconfig=2.15.0-2.3 \
       fonts-dejavu-core=2.37-8 \
+      git=1:2.47.3-0+deb13u1 \
+      git-man=1:2.47.3-0+deb13u1 \
       libcairo2=1.18.4-1+b1 \
       libffi8=3.4.8-2 \
       libgdk-pixbuf-2.0-0=2.42.12+dfsg-4+deb13u1 \
