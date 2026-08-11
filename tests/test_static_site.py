@@ -71,6 +71,19 @@ def test_static_site_exposes_suite_protocol_atlas_and_local_human_pilot(working)
     index = (bundle.root / "site" / "index.html").read_text()
     assert "400</div><div>frozen abstract forms" in index
     assert "29</div><div>documented dialects" in index
+    atlas = (bundle.root / "site" / "atlas.html").read_text()
+    exemplar_form_id = bundle.publication().suite.form_sets["probe"][1]
+    for dialect_id in bundle.publication().suite.specs:
+        marker = f'data-dialect-exemplar="{dialect_id}"'
+        assert marker in index
+        assert marker in atlas
+    assert index.count("data-dialect-exemplar=") == 29
+    assert atlas.count("data-dialect-exemplar=") == 29
+    exemplar_label = f"same frozen form · <code>{exemplar_form_id}</code>"
+    assert index.count(exemplar_label) == 29
+    assert atlas.count(exemplar_label) == 29
+    assert "<img loading=lazy" in index
+    assert "<pre>" in index
     forms = (bundle.root / "site" / "forms.html").read_text()
     assert "system prompt" in forms
     assert "every form and its set membership" in forms

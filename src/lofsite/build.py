@@ -46,7 +46,8 @@ place-items:center;background:#fff;border:1px solid var(--line);padding:1rem}
 .stimulus img{max-width:100%;max-height:18rem}.tabs button{padding:.5rem 1rem;margin-right:.3rem}
 [hidden]{display:none!important}.notice{border-left:.35rem solid #c08900;padding:.7rem 1rem;
 background:#fff8df}code{font-size:.88em}.answer button{padding:.7rem 1rem;margin:.2rem}
-.dialect-cells details{margin:.5rem 0}
+.dialect-cells details{margin:.5rem 0}.exemplar .stimulus{min-height:9rem;max-height:18rem;
+overflow:auto}.exemplar h3{margin-bottom:.25rem}
 footer{margin-top:4rem;border-top:1px solid var(--line);color:var(--muted)}
 """
 
@@ -124,6 +125,7 @@ def _overview(
         f"<div class=card><div class=metric>{number}</div><div>{_e(label)}</div></div>"
         for number, label in metrics
     )
+    exemplars = _dialect_exemplar_cards(suite)
     caveat = (
         "this is a protocol smoke test, not a benchmark result or model ranking."
         if publication.sample_contract
@@ -139,6 +141,10 @@ def _overview(
         "<p>competence and representational invariance are reported separately. a model can be "
         "consistently wrong; that does not make it competent. plain and treated dialect effects "
         "are paired only within an archetype.</p>"
+        "<h2>every dialect, one frozen form</h2>"
+        "<p>the same medium probe form is rendered once in each documented dialect; open a card "
+        "for its reading rule, provenance, limitations, and all 400 frozen cells.</p>"
+        f"<section class=grid>{exemplars}</section>"
     )
 
 
@@ -201,14 +207,17 @@ def _forms(suite: LoadedSuite, protocols: dict[str, ProtocolSpec]) -> str:
     )
 
 
-def _cell_markup(cell: dict[str, Any], *, prefix: str = "") -> str:
+def _stimulus_markup(cell: dict[str, Any], *, prefix: str = "") -> str:
     if cell["modality"] != "text":
-        stimulus = (
+        return (
             f'<img loading=lazy src="{prefix}assets/{_e(cell["asset_path"])}" '
             f'alt="frozen stimulus {_e(cell["abstract_form_id"])}">'
         )
-    else:
-        stimulus = f"<pre>{_e(cell['model_payload'])}</pre>"
+    return f"<pre>{_e(cell['model_payload'])}</pre>"
+
+
+def _cell_markup(cell: dict[str, Any], *, prefix: str = "") -> str:
+    stimulus = _stimulus_markup(cell, prefix=prefix)
     return (
         f"<details><summary><code>{_e(cell['abstract_form_id'])}</code></summary>"
         f"<div class=stimulus>{stimulus}</div><p class=muted>sha256 "
@@ -217,16 +226,43 @@ def _cell_markup(cell: dict[str, Any], *, prefix: str = "") -> str:
     )
 
 
+def _dialect_exemplar_cards(suite: LoadedSuite) -> str:
+    exemplar_form_id = suite.form_sets["probe"][1]
+    cells = {
+        cell["dialect_id"]: cell
+        for cell in suite.cells
+        if cell["abstract_form_id"] == exemplar_form_id
+    }
+    if set(cells) != set(suite.specs):
+        raise RuntimeError("dialect exemplars do not cover the frozen registry")
+    return "".join(
+        '<article class="card exemplar" '
+        f'data-dialect-exemplar="{_e(dialect_id)}">'
+        f"<h3>{_e(spec.label)}</h3><p><code>{_e(dialect_id)}</code></p>"
+        f"<div class=stimulus>{_stimulus_markup(cells[dialect_id])}</div>"
+        f"<p class=muted>same frozen form · <code>{_e(exemplar_form_id)}</code><br>"
+        f"{_e(spec.modality)} · {_e(spec.family)} · {_e(spec.archetype)}</p>"
+        f'<a href="dialects/{_e(dialect_id)}.html">reading rule + all frozen cells</a>'
+        "</article>"
+        for dialect_id, spec in sorted(suite.specs.items())
+    )
+
+
 def _atlas(out: Path, suite: LoadedSuite) -> str:
     cells_by_dialect: dict[str, list[dict[str, Any]]] = {}
     for cell in suite.cells:
         cells_by_dialect.setdefault(cell["dialect_id"], []).append(cell)
     cards = []
+    exemplar_form_id = suite.form_sets["probe"][1]
     for dialect_id, spec in suite.specs.items():
         cells = cells_by_dialect[dialect_id]
+        exemplar = next(cell for cell in cells if cell["abstract_form_id"] == exemplar_form_id)
         cards.append(
-            "<article class=card>"
+            '<article class="card exemplar" '
+            f'data-dialect-exemplar="{_e(dialect_id)}">'
             f"<h3>{_e(spec.label)}</h3><p><code>{_e(dialect_id)}</code></p>"
+            f"<div class=stimulus>{_stimulus_markup(exemplar)}</div>"
+            f"<p class=muted>same frozen form · <code>{_e(exemplar_form_id)}</code></p>"
             f"<p>{_e(spec.description)}</p><p class=muted>{_e(spec.modality)} · "
             f"{_e(spec.family)} · {_e(spec.archetype)} · {len(cells)} cells</p>"
             f'<a href="dialects/{_e(dialect_id)}.html">inspect every frozen cell</a></article>'
