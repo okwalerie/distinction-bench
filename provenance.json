@@ -1,6 +1,6 @@
 {
   "release_id": "v1.0.0-sample.1",
-  "sealed_manifest_sha256": "83e8271d51b8ee6baabdefe62ac6ffe89bd5c7e30fd036a0b2f153419aa5e14b",
-  "renderer_commit": "f869fc2f24e593b80fd0e7fcd29637b3771257e4",
-  "build_timestamp": "2026-08-11T13:37:10Z"
+  "sealed_manifest_sha256": "971565a1e5f56ea772de0e7182a676fbea26fabdb75bfeb9bb59fb625343cef8",
+  "renderer_commit": "67f8105b0484218eb20ef65beb3bb71a350cd8a7",
+  "build_timestamp": "2026-08-11T17:26:14.850842Z"
 }
