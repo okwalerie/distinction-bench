@@ -1,0 +1,182 @@
+* Acer
+
+Acer maintains the his own Introductory Undergraduate Mathematics Benchmark
+
+The Introductory Undergraduate Mathematics Benchmark (IUMB) is a set of currently 16 questions (to prevent oversaturation, we currently hold the latest of the problems private, but may choose to make them public in the future) designed to evaluate the performance of frontier LLMs across a wide range of mathematics problems at the undergraduate level. It is intended to fairly comprehensively demonstrate mathematical competence at the first and second-year level of average undergraduate mathematics university courses. We avoid testing models on highly computational subject areas, such as calculus, which are highly susceptible to CAS systems, as we believe allowing tool call usage of LLMs to such systems trivialises most such problems. Similarly to FrontierMath, our problems do not test proof-writing ability; our benchmark tests the ability of models at finding explicit values, counterexamples, and constructions to various problems which can be automatically validated or semantically compared to a provided expert answer, where we use Gemini 2.5 Pro as the evaluator model and, in such cases, always human-verify its grading. However, unlike FrontierMath, we also further disallow all tool usage, such as code execution or internet searching as to simulate the standard constraints of undergraduate problem sheets. The total score is the sum of scores for each of the 16 questions, then averaged across three runs of all the questions.
+
+
+** Val
+beep!
+I got a really interesting eval benchmark that I'm just testing out with a notebook atm
+It's with the simplest math you can think of too :p
+attachment
+www.markability.net/
+
+This is a pretty good intro to it, but the short of it is attached image
+I've been talking about it with @sameQCU which is quite validating :)
+
+Basically it's from a 50 year old book called Laws of Form that was largely ignored by the mathematical community as "just a notation for boolean algebra", but it actually has some very interesting and nice qualities that I believe make it a great benchmark for structure generalization across many different forms of media
+
+** Acer
+I can't really tell what the task is lol
+
+** Val
+www.markability.net/arthur.htm
+
+The basic task I'm starting out with atm: 
+Apply the two axioms successively until this entire expression evaluates to either `O` or `void`
+** Acer
+oh ok I've understood now
+
+** Val
+so, after applying the top rule on that double circle:
+<example: reduction steps>
+
+** Acer
+oh interesting that's different to how I did it lol
+equivalent though obv
+but yeah I understand
+** Val
+So, this is a task that humans can learn in seconds and apply consistently no matter the complexity of the form
+👍
+
+like so:
+<example: complex concentric circle example>
+
+** Acer
+pretty nice
+seems more like a visual test than a maths one tho
+
+** Val
+
+This is a topic I've interrogated LLMs for the last couple years on, and they just don't seem to quite get it easily
+** Acer
+including Gemini 3 Pro?
+
+** Val
+Gemini 3 is the strongest of the big 3, but my last batch of 500 (100 over 5 difficulty levels) showed rapidly decreasing performance
+9:40 PM
+9:40 PM
+👍
+Right now I'm just finishing up a modification to the system prompt to support the model performance as much as possible while collecting intermediate steps
+
+And admittedly models are known for struggling with deeply nested parens and exact counting
+
+But even with over-tokenized representations during the development of my puzzle game that uses a system similar to this, it makes very weird errors
+github.com/weavermarquez/house-of-bao/blob/main/evals/eval-notebook.org
+9:42 PM
+9:42 PM
+current version, no results blocks unless you go in Raw view
+
+Anyways, I'm most curious about some of the decisions you made in assessing your benchmark? Big one is how much support do you give models when assessing, e.g. through system prompt / thinking / few-shot examples?
+
+#+begin_example
+Loaded 1488 results from 2025-12-10T19:21:43.528751
+
+=== FULL RESULTS ===
+
+=== Accuracy by Model ===
+gpt-5.1: 65.2% final answer, 24.4% trace accuracy
+claude-opus-4-5-20251101: 59.0% final answer, 24.6% trace accuracy
+gemini-3-pro-preview: 77.8% final answer, 48.9% trace accuracy
+
+=== Accuracy by Difficulty ===
+
+gpt-5.1:
+  1. easy: 87.0% (87/100)
+  2. medium: 69.4% (68/98)
+  3. hard: 61.7% (58/94)
+  4. lunatic: 52.1% (50/96)
+  5. extra: 55.0% (55/100)
+
+claude-opus-4-5-20251101:
+  1. easy: 94.0% (94/100)
+  2. medium: 52.0% (52/100)
+  3. hard: 43.0% (43/100)
+  4. lunatic: 51.0% (51/100)
+  5. extra: 55.0% (55/100)
+
+gemini-3-pro-preview:
+  1. easy: 99.0% (99/100)
+  2. medium: 83.0% (83/100)
+  3. hard: 62.0% (62/100)
+  4. lunatic: 78.0% (78/100)
+  5. extra: 67.0% (67/100)
+9:43 PM
+9:43 PM
+I gotta retry this one because I forgot to remove the low max_token for opus and set temp=1 for gpt 5-1 >_>
+9:46 PM
+9:46 PM
+** Acer
+nicee this is a cool test I like it!
+
+** Val
+9:46 PM
+9:46 PM
+Oh we're just getting started ;)
+
+** Acer
+
+I don't give them any support, I just give them the maths problem and ask them to solve it and check its answer
+the models aren't allowed any tool-calling either
+9:48 PM
+
+** Val:
+<lots of examples like the ones I sent to SQCU>
+
+** Acer
+wow very ARC-AGI pilled
+
+** Val:
+I think so too
+this is kind of like the ur-arc-agi
+house.valeriekim.ca/
+even made a puzzle game out of an extension to this
+It's like an abacus but algebra and can express k-12 math, up to trigonometry and derivative calculus
+
+** Acer
+this is cool 
+idk if you know the VPCT benchmark run by @ChaseBrowe32432 but I was talking to him about your benchmarks and he would be very interested in discussing things with you since you're both doing hard for AI, easy for humans stuff
+
+** Rest of conversation
+
+ooh, hell yeah!
+Also, I got telegram
+there's a AI Research & Engineering Furries chat
+if you're curious :p
+
+I'd love to learn more from you about autoformalization and all
+9:55 PM
+9:55 PM
+oh wtf that's based lol 
+I'd be interested in joining lol
+9:55 PM
+9:55 PM
+I think this system deserves some love with autoformalization
+t.me/+NUPaCOugWb9hN2Q0
+It's not too busy but I like that it exists
+9:56 PM
+9:56 PM
+joined :3 glad to know that's a thing lol
+funnily enough I see some moots in there hah
+9:57 PM
+I gotta tell you right now you just gotta apply
+You're good enough
+10:00 PM
+10:00 PM
+hah well funny thing is I've basically been offered a job by Harmonic, Axiom and Logic Intelligence
+but Axiom is probably the one I'd go with 
+but gonna have a zoom meeting later in the week to discuss things
+10:02 PM
+10:02 PM
+daaaaaaamnnn!
+10:02 PM
+10:02 PM
+Carina Hong, the CEO of Axiom, has been a long time twitter moot lmao and we DM semi-frequently. After I solved an Erdos problem she was like itching to get me to join lol
+10:02 PM
+10:02 PM
+Edited
+but yeah nothing set in stone currently we'll see lol
+10:03 PM
+10:03 PM
+

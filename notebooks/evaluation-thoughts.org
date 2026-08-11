@@ -85,3 +85,271 @@ Logic defined in House of Bao's axioms, but I haven't quite done Evaluations, on
 This is an iconic
 *** BF Calculus
 An extension to the Calculus of Indications; modifies an axiom to cancel in four nests, rather than two.
+
+* Fermi Ballpark Calculations 
+
+** Let's do a fermi-style ballpark estimate of the many ways to represent this system.
+
+Combinatorial Dimensions of Structure Representation
+
+When representing an abstract structure (e.g. a hierarchy or graph), there are many dimensions along which we can vary its form without changing the underlying content. Below we present two lists: first, a comprehensive set of lossless representational perturbations (variations that preserve all information), and second, a set of minorly lossy perturbations (variations that slightly degrade or omit some information while mostly preserving the structure). We draw on concepts from data visualization (e.g. visual variables) and notation theory to enumerate these dimensions.
+
+Lossless Representational Perturbation Dimensions
+
+Notation/Syntax Style: The same structured data can be encoded in different syntaxes or dialects without loss. For example, a hierarchical tree can be written with parentheses/bracket notation (like Lisp S-expressions or JSON/XML tags), with indentation-based blocks (like YAML or outline text), or as path expressions (e.g. “root/child/grandchild” format). These are purely representational changes – the underlying relationships remain identical
+stackoverflow.com
+. (Examples: Lisp-style nested parentheses, XML/HTML tag enclosure, JSON curly-brace syntax, YAML indentation, file-system path strings, etc.) Each of these formats preserves the full structure and can be converted into one another without information loss.
+
+Layout Topology (Spatial Arrangement): In graphical form, one can vary how the structure is arranged in space. Node-link diagrams (drawing nodes connected by lines), enclosure/treemap diagrams (nesting elements inside each other), layered or indented layouts (like tree outlines), radial layouts (circles or starburst arrangements), mind-maps (centered node with branches), etc., all depict the same relationships with different spatial organization
+hci.stanford.edu
+hci.stanford.edu
+. For instance, a hierarchy might be drawn top-down as a classic tree, or radially with the root in the center, or as a treemap with nested boxes – all contain the same parent-child links. Re-arranging or flipping the layout (horizontal vs vertical, or ordering of siblings) does not remove any nodes or edges, so it’s lossless. The structure can even be represented in 3D space or metaphorical space (e.g. a “room” or landscape metaphor) without losing information, as long as all connections are present (though 3D may require interaction to view everything).
+
+Visual Styling Variables: Graphical representations offer many visual channels that can be adjusted without altering the data. These include the classic visual variables identified by Jacques Bertin – position (where elements are placed), size (of nodes or text), shape (circles, squares, icons), color hue (red, blue, etc.), value (light/dark intensity), orientation (rotation of symbols), and texture/pattern
+axismaps.com
+. For example, one can change the color scheme of a chart, or use squares instead of circles for nodes, or use dashed vs. solid lines for links, without changing the underlying structure. Such stylistic tweaks are lossless: they don’t remove or add nodes/relations, they only alter appearance. Additional visual parameters like saturation (color intensity), transparency, or label font can also vary. As long as these changes are purely aesthetic or redundant encodings, the representation still contains the full original information.
+
+Character Set and Encoding (Textual Graphics): When using text-based representations (like ASCII art or other plaintext formats), one can vary the character set or drawing style without losing information. For example, an ASCII vs. Unicode drawing of a box tree – using plain +, -| characters versus using Unicode box-drawing characters – conveys the same structure. You might use different line-drawing characters or connectors (--> vs. → arrows) to represent links. In a grid-based text diagram, you can switch between using outlines vs. filled characters (stroke vs fill) to depict shapes (e.g. an outlined box vs. a block of # characters forming a filled box) and still preserve the structure. The choice of monospaced font or character width, or using bold/underline ASCII art, also falls here. These variations alter the look but not the underlying adjacency of text symbols, so the structural information (which characters connect to which) remains intact.
+
+Ordering and Orientation: Many structured representations have components whose order or orientation can be changed freely if order is not semantically significant. For instance, the order of keys in a JSON/XML object can be permuted (since it’s typically unordered) without loss of data – it’s just a different presentation. Similarly, one can mirror or rotate a diagram (flip left-right or top-bottom) and it will depict the same connections. A list could be presented left-to-right or top-to-bottom. As long as all elements are present and their relationships unchanged, these transformations are reversible. Even sorting or grouping elements differently in a visual layout (e.g. arranging children by name vs by size) is a lossless change in presentation (assuming the sorting criterion is external to the core structure).
+
+Data Serialization Format: Closely related to notation, this refers to the formatting rules and encodings used to serialize the structure. One can represent the same abstract graph or tree in JSON, XML, YAML, Lisp S-expression, CSV (for tables), etc., or even binary formats – all without losing information
+stackoverflow.com
+. For example, a graph might be serialized as a list of adjacency pairs, or as an edge list, or as a matrix – these are different encodings of the same data. As long as the format is expressive enough to capture all aspects (and one includes all the data), the conversion from one format to another is lossless. Even whitespace and punctuation variations (pretty-printed with newlines vs. one-liner, using commas vs. line breaks) fall in this category – they don’t change the meaning, only how the data is packaged for human or machine reading.
+
+Metaphorical or Semantic Styling: This dimension involves what symbols or metaphors we use to represent elements, while keeping one-to-one correspondence with the data. For example, a network structure could be depicted abstractly as circles and lines, or using a metaphor like cities connected by roads, or rooms connected by doors (“room” dialect) – the nodes and links remain the same, only now the nodes might be drawn as little house icons or labeled as room names. As long as each abstract element is represented by a unique concrete object, this is essentially a styling choice. Using realistic icons vs. abstract shapes, or pictograms vs. text labels, can all be done without losing the underlying relationships (though they may add interpretive flavor, they don’t remove data). This also includes language localization: labeling the nodes in different languages or scripts (character set changes) is lossless with respect to structure (the meaning of labels changes language, but the structural role of each node is unchanged).
+
+(Combining the above dimensions gives a sense of the explosion of possibilities. For instance, one could choose one of 9 base diagram “dialects” (parentheses, indented, node-link tree, radial, etc.), then pick a color scheme, a set of shapes, an orientation, a text encoding, etc. If each dimension has a handful of options, the total number of distinct renderings of the same data easily reaches into the thousands – purely from representational variance.)
+
+Minorly Lossy (Noisy) Perturbation Dimensions
+
+Reduced Visual Fidelity (Resolution/Crispness): These variations slightly degrade the precision or clarity of the representation, potentially losing minor details. For example, rasterizing a vector diagram at lower resolution or adding blur (reducing crispness) will make small or dense parts harder to distinguish
+axismaps.com
+. The overall structure is still visible, but fine-grained information (like very small distinctions or exact positions) might be lost. Similarly, using a very coarse ASCII-art grid for a complex graph could omit fine layout distinctions. These are lossy in that you cannot perfectly recover the original exact appearance or coordinates, but the major connections and structure remain mostly perceivable.
+
+Color and Depth Reduction: Changing a rich visual encoding to a simpler one can lose some informational cues. For instance, converting a color-coded diagram to grayscale (or a limited palette) removes the hue information – different categories that were distinguished by color might become ambiguous in grayscale if not differentiated by another means. This is a minor loss if color was only a redundant channel, but if color carried unique meaning, that meaning is partially lost. Another example is reducing color saturation or value differences, making it harder to tell elements apart (faint colors, low contrast). In a similar vein, transparency effects or removing layering depth can cause overlaps to become harder to interpret (e.g. if overlapping nodes were distinguishable by transparency, making everything opaque could hide some elements behind others). The structure is still there, but with a noisier presentation that may obscure some relationships.
+
+Simplified Symbology: Using fewer or more generic symbols when originally there were distinct ones can introduce a small information loss. For example, if a diagram originally used different shapes or icons to encode different types of nodes (say, triangles for servers, circles for clients in a network graph) and one switches to using all circles, one loses that type distinction. The graph connectivity is unchanged, but a viewer can no longer tell node types apart from the picture alone – that semantic detail is lost. Likewise, replacing text labels with simple IDs or abbreviations (e.g. showing just “A, B, C” instead of full names) loses some descriptive information. Even in text, using a limited character set when a richer one was available (e.g. replacing a unique Unicode symbol with a generic *) can drop nuance. These perturbations collapse some channels of information (merging categories or omitting labels), but the overall structure (which nodes connect where) is still mostly inferable.
+
+Aggregation and Pruning: Minor forms of data reduction fall here. One might truncate or round values (losing exact numerical detail but keeping rough magnitude), or aggregate very fine sub-structures into an overview. For example, in a deep tree, one could hide or summarize the lowest-level leaves (e.g. “… and 5 more nodes”) – this loses the presence of individual leaves but preserves higher-level structure. Or in a graph with many parallel edges or nodes, one might combine some into a single bundle for simplicity. These are lossy because specific elements are omitted or merged, but they aim to only remove redundant or tiny details, keeping the main structure recognizable. Another example: showing a partial view of a structure (like zooming into a region of a graph) is lossy globally (you don’t see the whole), but locally the structure in view is intact. Minor cropping of less important parts, or dropping annotations like tooltips or units, also falls in this category. The goal is that the viewer still gets the gist of the structure, with only minor information loss that might be acceptable for readability.
+
+Approximate Geometry or Jitter: This involves small random or systematic deviations that don’t fully preserve exact relationships. For instance, adding a slight noise/jitter to node positions (for visual effect or to avoid exact overlaps) might change exact distances or alignments. If the precise geometric distances were meaningful (say, in a scaled diagram), this is a minor loss of accuracy. Similarly, using a coarser grid alignment or snapping positions to an approximate grid can distort relative positions. In textual terms, this could be like slightly misspelling a long label or using a rougher textual layout – the content is still mostly understandable, but with tiny errors. Another example: if the structure is a continuous curve or shape and we approximate it with a series of straight line segments (a polygonal approximation), we lose the smoothness detail. These perturbations introduce noise or reduce precision, which might not prevent understanding the structure but means you couldn’t exactly recover the original quantitative details.
+
+Semantic Simplification: This is a less visual, more meaning-level perturbation – for completeness. It involves simplifying or altering the descriptive content in a way that slightly blurs meaning. For example, using a more generic term in labels (calling something “Item 5” instead of “User Database 5”) loses the specific semantic insight (it’s now just a generic item). Translating text to another language approximately or using synonyms might lose subtle connotations. Using a high-level schematic instead of domain-specific icons (e.g. representing different computer components all with the same “box” icon) can hide domain meaning. While the structural relationships (which item is linked to which) remain, some understanding of what each node or connection represents is degraded. This is a “lossy” change in that the original richness of meaning isn’t fully recoverable from the new representation, though the abstract connections are preserved.
+
+Each of the above dimensions (and sub-dimensions) can contribute to the combinatorial explosion of representation variants. By mixing and matching choices across graphical, textual, and syntactic channels, one can generate a huge number of representational forms for the same underlying data. For a rough Fermi estimate, imagine choosing one of ~9 base dialects (e.g. paren notation, indented text, node-link tree, radial map, etc.), then varying a handful of style parameters (3–5 options for color schemes, symbol shapes, character sets, layout orientation, etc.) – the total combinations could easily reach on the order of 10^3–10^5 possibilities. This highlights the richness of representational design space: from purely cosmetic changes to format shifts to minor lossy compressions, there are innumerable ways to portray a given structure while retaining its essence.
+
+Sources:
+
+Bertin’s visual variables (position, size, shape, value, color hue, orientation, texture) and later extensions like saturation and resolution
+axismaps.com
+axismaps.com
+. These define many graphical styling dimensions.
+
+Jeff Heer (Stanford CS448B) on tree visualization forms – indentation outlines, node-link diagrams, enclosure (treemap) diagrams, radial layouts, etc., as alternative lossless hierarchy representations
+hci.stanford.edu
+hci.stanford.edu
+.
+
+Discussion of textual tree representations (JSON, YAML, XML, etc.) vs graphical: multiple notations can represent the same structure without information loss
+stackoverflow.com
+.
+
+** Can you actually lay out the specific number estimates you're using?
+yep. here are the actual fermi knobs + the arithmetic i was implicitly handwaving.
+
+i’ll do 3 tiers:
+
+“toy conservative” (few dims)
+
+“still conservative but more real” (my earlier vibe)
+
+“aggressive but plausible” (if you allow lots of styling granularity)
+
+0) what we’re counting
+
+fixed underlying structure (same abstract form/content). we only count distinct representations.
+
+assumption (fermi-style): treat dimensions as roughly independent and multiply option counts. (not true irl; plenty of correlations. but that’s the point of ballparking.)
+
+1) toy conservative (basically: dialect × a few viz channels)
+
+assumptions (option counts):
+
+dialect family: 9 (your list)
+
+orientation/flip: 4 (upright, rotate 90°, mirror x, mirror y)
+
+charset: 3 (ascii, unicode box-drawing, emoji-ish glyph set)
+
+palette: 10 (10 distinct categorical palettes / themes)
+
+node mark shape: 5 (circle/square/triangle/hex/icon)
+
+product:
+
+9 × 4 = 36
+
+36 × 3 = 108
+
+108 × 10 = 1080
+
+1080 × 5 = 5400 lossless variants
+
+already thousands, with basically nothing.
+
+2) “still conservative but more real” lossless estimate (~2e9)
+
+assumptions (option counts):
+
+dialect: 9
+
+layout family within dialect: 4
+(e.g. for graphs: force-directed / layered / circular / matrix; for trees: top-down / radial / icicle / treemap, etc.)
+
+orientation / flip: 4
+
+sibling / edge ordering style: 6
+(original, reversed, degree-sorted, label-sorted, bfs-ish, dfs-ish)
+
+serialization syntax: 6
+(json, sexp, xml-ish tags, yaml-ish indent, edge list, adjacency list)
+
+character set / glyph set: 3
+
+font choice (monospace / serif / sans / “code” variants etc.): 8
+
+label placement style: 4
+(inline, tooltip-only, offset, on-node)
+
+node shape: 5
+
+edge style: 4
+(straight, orthogonal, curved, bundled)
+
+color palette/theme: 10
+
+stroke width levels: 4
+
+spacing/density preset: 5
+
+multiply stepwise:
+
+9 × 4 = 36
+
+36 × 4 = 144
+
+144 × 6 = 864
+
+864 × 6 = 5184
+
+5184 × 3 = 15,552
+
+15,552 × 8 = 124,416
+
+124,416 × 4 = 497,664
+
+497,664 × 5 = 2,488,320
+
+2,488,320 × 4 = 9,953,280
+
+9,953,280 × 10 = 99,532,800
+
+99,532,800 × 4 = 398,131,200
+
+398,131,200 × 5 = 1,990,656,000 (≈ 2.0×10^9) lossless variants
+
+so: with pretty modest discretization, you’re already at ~2 billion “same structure, different skin / encoding.”
+
+3) aggressive-but-plausible lossless (~4.7e10)
+
+if you let some channels have more granularity:
+
+assumptions:
+
+dialect 9
+
+layout family 6
+
+orientation 4
+
+ordering 24 (a bunch of deterministic orderings)
+
+node shape/icon set 10
+
+palette/theme 50
+
+edge style 10
+
+spacing/density 10
+
+font 30
+
+serialization 6
+
+product:
+
+9×6=54
+
+54×4=216
+
+216×24=5184
+
+5184×10=51,840
+
+51,840×50=2,592,000
+
+2,592,000×10=25,920,000
+
+25,920,000×10=259,200,000
+
+259,200,000×30=7,776,000,000
+
+7,776,000,000×6 = 46,656,000,000 (≈ 4.7×10^10) lossless variants
+
+4) add “minorly lossy” knobs (multiplicative blow-up)
+
+take the “more real” lossless base (1.99×10^9) and multiply by a few mild degradation levels:
+
+assumptions (lossy):
+
+blur level 5
+
+raster resolution 4
+
+jitter amplitude 5
+
+partial occlusion/cropping 3
+
+compression artifacts 4
+
+grayscale toggle 2
+
+lossy multiplier: 5×4×5×3×4×2
+
+5×4=20
+
+20×5=100
+
+100×3=300
+
+300×4=1200
+
+1200×2=2400
+
+so:
+
+1,990,656,000 × 2400 = 4,777,574,400,000 (≈ 4.8×10^12) variants with mild noise
+
+caveats (bc reality is a spiteful little gremlin)
+
+many dims aren’t independent (e.g. some dialects don’t support some layout families)
+
+“distinct” is observer-dependent (two palettes might be functionally identical)
+
+if you count continuous parameters (exact coordinates, exact kerning), it goes to infinity; fermi only works if you discretize.
+
+if you want, next we can formalize a “dimension schema” for your eval generator: each dimension gets (a) allowed values, (b) compatibility constraints, (c) whether it’s lossless vs lossy, and (d) a “distance” metric so you can control how adversarial the perturbation is.
+
+** Bitter Lesson pilled... Very bitter lesson pilled. This makes it even more compatible with use as training data. Unlike all the other methods I've seen, Distinction Bench / Lofbench leverages computation in order to facilitate recognition of distinctions. Other methods, even when 'scalable', seem to only leverage scale insofar as they generate /complex problems that require chains of reasoning/, but not a type of perception for 'distinction' necessary to identify and generate such structure in arbitrary things.
+

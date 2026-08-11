@@ -51,7 +51,7 @@ the boundary. For example, in a plane space a circle draws a distinction.
 
 The value of a call made again is the value of the call.
 That is to say, for any name, to recall is to call.
-Example: []() simplifies to []
+Example: ()() simplifies to []
 
 ### Axiom 2. The law of crossing
 
@@ -65,16 +65,16 @@ Example: [()] simplifies to nothing
 2. Convert the original expression to its canonical mixed-bracket [()]{{}} representation.
   It must match the original in its foundational structure.
 3. Apply axioms iteratively until no more reductions are possible
-4. Determine if each reduces to marked (structure remains) or unmarked (void)
+4. Determine if each reduces to marked or unmarked.
 
 After working through ALL expressions, provide your final answers in this exact JSON format:
 
 ```json
-{
-  "E1": {"canonical": "([])", "result": "unmarked"},
-  "E2": {"canonical": "(){}", "result": "marked"},
+{{
+  "E1": {{"canonical": "[[]][[[()]]]([])", "result": "unmarked"}},
+  "E2": {{"canonical": "()[]()[]()", "result": "marked"}},
   ...
-}
+}}
 ```
 """
 

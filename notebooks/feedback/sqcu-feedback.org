@@ -1,0 +1,350 @@
+
+
+** Val:
+I'd love to ask for your thoughts on where I should go with this research direction because tbqh this excites me so much and I think I actually got something I can continue to pursue and use to learn and contribute to modern ML proper
+11:34 PM
+
+<research statement for poseidon>
+
+the basic idea is that LoF + family are interesting formalisms to benchmark with that is at the edge of training distribution; the simplest formal system that can be taught to humans in seconds but seems to feature significant difficulties for LLMs to perform with rudimentary 0-shot testing? (90% accuracy tanks to 30% with increasing depth and length and even "correct" categorizations often include incorrect reasoning traces)
+Pretty rough and incredibly basic atm, and I'm still worrying or doubting myself on whether or not this is an interesting avenue of research (or... subject to use as means of interpretability studies?)
+github.com/weavermarquez/house-of-bao/blob/main/evals/eval-notebook.org
+12:12 AM
+
+** SQCU
+Okay I shall
+Last few days I have been literally. Literally. Blowing off ml to try to play fonv again and it didn't stick
+Last night I got a vllm style masking based complex batch size or complex sequence tensor shape attention kernel working
+And was running models through distillation training (make k sampling steps match j<k sampling steps) from very early in random init
+3:30 PM
+サメQCU
+** SQCU
+re: https://github.com/weavermarquez/house-of-bao/blob/main/evals/eval-notebook.org
+
+
+sqcu.dev/texts/items/bigcount.html
+#+begin_quote
+consider this term rewriting rule, it's as simple as can be:
+
+when i clap my hands two times (👏👏.), the terms separated by the '👏:' operator go from left to right.
+
+(don't worry about problems like striding and overlap, the '.' denotes a sequence breaking pause.)
+
+here's an example:
+
+great big very 👏: small.
+"a great big very problem appears for us."
+=> 👏👏.
+=> small 👏: small.
+"a small problem appears for us."
+
+the astute reader will notice that 👏-rewriting is so brutally simple that it does not have scoping rules. if you hit that clap rewriter, your terms are CLAPPED. there is no room for piddling about here.
+
+okay now here we go:
+
+width👏:letter1👏:m. height👏:letter2👏:n.
+"a matrix has width 43123 and height 3."
+=>👏👏.
+=>
+letter1👏:m👏:m. letter2👏:n👏:n.
+"a matrix has letter1 43123 and letter2 3."
+=> 👏👏.
+=> 
+m👏:m👏:m. n👏:n👏:n.
+"a matrix has m 43123 and n 2."
+
+now that we have established a formal bridge between ensembles of letters, ensembles of letters but the ensemble is different, and singular letters as used in the garish and incompetent notation of the elder clowns, we have learned a deep and powerful lesson.
+
+emojis are really funny. no, uh.
+term rewriting systems are really basic. no, uh.
+people who use notations they do not like are disavowing and abnegating the literal tools of their formal systems, or perhaps expressing a preference for less rigor and more confusion.
+
+oorrr...
+
+👏AND :.👏:  🪤  .
+👏AND : 👏: 📦.
+AND 👏: {}.
+👏👏.
+👏👏.
+
+1. what's an algorithm lol
+1.1 like is algorithm when you're 'counting', 
+and you move an abacus bead at the same time you move your finger over a group of items?
+|🔴⭕️⭕️⭕️|, 👉🦎🦎🦎;
+COUNTPARTIAL;
+|👉🔴⭕️⭕️⭕️|, 👉🦎🦎🦎;
+|⭕️👉🔴⭕️⭕️|, 🦎👉🦎🦎;
+COUNTDONE:
+|⭕️🔴⭕️⭕️|, 🦎👉🦎🦎.
+
+🦎🦎🦎
+🦎🦎🦎🦎
+🦎🦎🦎🦎🦎
+
+🌨
+
+🦎🦎🦎 ->bigcount->🌨
+🦎🦎🦎🦎 ->bigcount->🌨
+🦎🦎🦎🦎🦎 ->bigcount->🌨
+
+🌨 ->bigcount-> 🦎🦎🦎
+🌨 ->bigcount-> 🦎🦎🦎🦎
+🌨 ->bigcount-> 🦎🦎🦎🦎🦎
+
+3.3.6 in fact it's so simple that you might miss it even with 300 years of economics textbooks!
+3.3.7.1 INVARIANT:BCOUNT:{🦎 ->bigcount->🌨} -> {🦎🦎🦎 -> 🌨 }.
+3.3.7.1 VARIANT:BCOUNT:{🦎 ->bigcount->🌨} -> {{ -> 🌨 } {🦎 -> 🌨 } {🦎🦎 -> 🌨 }}.
+
+3.3.7.4 INVARIANT:BCOUNT:{🌨 ->bigcount->🦎} -> {🌨 -> 🦎🦎🦎 }.
+3.3.7.5 VARIANT:BCOUNT:{🌨 ->bigcount->🦎} -> {{🌨 ->  } {🌨 -> 🦎 } {🌨 -> 🦎🦎 }}.
+
+3.3.8 what is philosophically interesting (about defining stochasticity after rigorously defining counting) about BCOUNT is that BCOUNT has predictable behavior! you know that a bcount of any number of lizards which produced {🌨🌨🌨&🦎} has concrete limits for...
+
+
+#+end_quote
+
+4:53 PM
+one thing that i think is worth thinkn bout here is whether enclosure and containment problems can or should be measured through text token outputs *alone*. the *alone* part is key here: we should be really critical of ways to measure formalisms where we elect to use notations where randomly fuzzing the last k characters in a 1024 long string causes extreme oscillations in the parsed value of the entire output. this basically puts weird pressures on any kind of generator or parser, either of which could have soft errors, such that every single bit of output has cross interactions with every other bit of input... all the time... with no exceptions?
+4:55 PM
+4:55 PM
+👍
+i think that this 'representation of representation' (what an annoying torque or twist to use that phrase) is fraught. it is also arbitrary and i'm not sure we should take it seriously.
+
+why should little perturbations produce extremely spiky changes in the parsing of our 'A contains B, B contains zilch, C contains an A and an A and an A'? in this sense we might prefer to render all of our containment rules as a minimum of an 8x8 grid of ascii characters *such that* the symbol A can literally form a blobby ring shape wrapping around the literal symbol B. now if we have fuzzing of the boundaries of our A-enclosure, the extra spatial dimension means that we can still sensibly parse the A-contains-B as one of many enclosure-relation-equivariant projections of the terse symbolicization of that A-contains-B position.
+5:00 PM
+5:00 PM
+
+** Val:
+I agree
+
+I'm just using the ASCII version as most convenient for my get-something-measured-asap v1 notebook
+
+But given the range of visual dialects and simplicity of containment there's actually a very very large space of representation rules that are semantically invariant
+
+I'll have to send u a screenshot when I get back on my lappy
+5:03 PM
+5:03 PM
+
+** SQCU:
+a dangerous distraction for me, the diffusion scripts im messing with right now were actually specified to try to implement image -> graph and graph -> image in-context-learning remappings
+this is a problem class which is actually identical to 'how to retexture or remodel 3d assets to follow new constraints'
+5:03 PM
+
+oh yeah anyways what was i saying? aight. so the problem structure you're pointing at w/ the spencer brown axioms seems like a better (better than what? well, any other idea i've seen so far!) starting point for making didactic or teaching datasets for ML models to give them more exposure to term rewriting and formal systems which are geared towards making new operators. from my exposure to bourbaki, i gotta say, bourbaki *sucks*. it's primitive and its confusing and if you try to memorize it you'll lose mental capabilities faster than you gain them, with the 'prize' at the end of bourbaki being that you remember a bunch of silly idioms about squares and diamonds. if you'd even understood the metaphors in bourbaki, you would have started writing a better term rewriting system *formally equivalent* to bourbaki but more expressive and compact, and grounded your alternate idiom in reductions to and from bourbaki or an abstract term rewriting interlanguage which makes demonstrating functional equivalence faster.
+5:24 PM
+5:24 PM
+🥰
+its also worth asking, i think, whether anyone has actually started the project of making an arc-agi for symbolic or tokenizable topics. mister arc-agi himself couldn't think of any so he was forced to retreat to higher dimensional representations, which is very funny if we think about it tbqh.
+5
+(im writing this while looking at like, consequences 7-9 of laws of form)
+5:26
+
+** Val:
+<examples: Roadmap for generating spatial dialects: paths, blocks, parens, enclosures, rtees, graphs, centered maps, rooms>
+<examples: concentric circles>
+<examples: Bad Apple!! but it's YouTube subtitles>
+<examples: Bad Apple!! but it's not there when you pause>
+❤
+<examples: Bad Apple!! but it's magic eye>
+generated from tricorder.formform.dev/
+
+
+I think the visual dialects and extremely simple nature of the concept (distinction / difference) makes it amenable to many many variations
+
+it doesn't even have to be monochromatic, there's no reason not to perturb the representation of an eval to, say, have rainbow gradients if "containment is the only thing that matters"
+#Walerie
+5:29 PM
+5:29 PM
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚪⚪⚪⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚫⚫⚫⚫⚫
+⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫⚫
+⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+
+
+
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚫🥰🥰🥰⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫🥰⚫⚫⚫🥰⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫🥰⚫⚫⚫🥰⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫🥰⚫⚫⚫🥰⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫🥰⚫⚫⚫🥰⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚪⚪🥰⚪🥰⚪🥰⚪🥰🥰⚪⚪⚫⚫⚫⚫⚫
+⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫⚫
+⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚪⚪⚪⚪⚪⚪⚫⚪⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚪⚫⚫⚪⚫⚫⚪⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚪⚫⚫⚪⚫⚫⚪⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚪⚪⚪⚪⚪⚪⚫⚪⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫⚫⚫⚫⚫⚫⚪⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪⚫
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+
+
+
+⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫⚫
+⚫⚫⚫⚫⚫⚪…
+5:32 PM
+attachment
+i also believe there are many possible highly adversarial examples; LoF is expressable through any self-similar structure I believe
+attachment
+<example: sierpinski triangle>
+<example: hackenbush branches>
+
+
+** SQCU:
+hmmm... thinking that one of the big problems with formal systems is that the people who wrote em up usually got caught in the problem of deciding what's worth expressing or encoding with their symbolics. usually they try to encode something like 'their own formal system' and 'all of the propositions and terms needed for their formal system', then sort of like, peter out and forget what to do next
+one of the basic backstops for avoiding becoming underconstrained or confused is to make a roguelike parser and deserializer ('serialize' in an abstract sense, returning non-flat data structures anyone knows how to handle is equivalent), 3d model parser and deserializer, etc.
+5:42 PM
+5:42 PM
+
+in a certain sense we probably discover the expressivity and use-value of a formal system when we find we can do compact representations of a poem and also a doom level within the symbolic register, and find ourselves making edits to the poem and the doom level alike using both the new symbolic dual and the 'flat' (again, in an abstract sense) structures it pairs with. weirdly i think this is one of those odd situations where the option of making language models (and similar programs) makes formalism easier and better since you aren't tasking yourself with making a generator that covers the range of your representational scheme at the same time you're putting the scheme together
+
+** Val:
+
+All the examples I've shown so far are on the "most abstract" scale of abstraction too, I was thinking that there should be many examples with much higher visual fidelity in which it would be useful and important for models to be capable of distinction, like with these wooden rings
+
+<example: kindergarteners being taught laws of form with concentric wooden rings>
+www.youtube.com/watch?v=aXLSNfPqArs
+
+re: hmmm... thinking that one of the big problems in formal systems.....
+axiomatics, yeah --- "we want to formalize a system in which ab != ba because reasons, so we need so and so axioms"
+
+what's notable about LoF is that it emerged from an investigation into the nature of sign systems and the nature of the observer
+
+distinction is at the heart of all concepts because one must distinguish in order to label and name, to assign a value, to draw a boundary
+and distinction is self-referential
+
+<example: the Room Dialect>
+<example: the Path Dialect>
+room dialect and path dialect provide /experiential/ encodings, and it has intrigued me very much
+
+I can send you PDFs of Iconic Arithmetic vols 1-3 if you'd like
+LoF is interpretable as boolean algebra;
+but it is also its own thing too
+
+James Algebra ~ constructible numbers
+but also rhymes with linear combinators
+
+IIRC there exist several other extensions to LoF like BF Calculus which maps to modal logic
+
+and equations of the second order map to paraconsistent logic
+Each their own thing still
+and because the axioms are so simple, they're still trivially easy to extend and switch it up --- that'd keep the models on their toes
+
+re: its also worth asking, i think, whether anyone has actually started the project of making an arc-agi for symbolic or tokenizable topics. mis
+I do think it is quite funny as well
+I was thinking for a while that this is the ur-arc-agi and surely someone must have mentioned it to him
+
+It seems very possibly not!!
+
+Just submitted my research statement to an independent AI safety lab
+
+Tbqh I feel like I might have something gold here but I don't have the knowledge to tell
+
+** SQCU
+ganbarre! oh btw i found myself actually using topological / enclosure reasoning while solving a programming problem with gemini 3 today
+
+like legit i wasable to say 'hey this config parser is doing something at the wrong enclosure level, please rewrite so that this config file is sensibly parseable' and. it. just. worked.
+so the things you want to do with your testing and measurement framework are really appropriate questions for rl environment design, benchmark design, and problem corpora which modern models *can learn*. the part where models are eager to use these tools and methods is really exciting -- there are lots of research programs that would have been abstract philosophy 5 years ago but are now 'wacky subject matter expert engineer' stuff today!
+
+re: I do think it is quite funny as well
+
+I was thinking for a while that this is the ur-arc-agi and surely someone must have mentioned it to hi
+bruh. email the guy! he might like the analogies and resources
+
+arxiv.org/pdf/2507.02598 hmmm u might like this too
+
+** SQCU
+https://x.com/i/status/1999359548918817031
+
+Behold, the donuts are solvable
+
+Grok summary:
+#+begin_example
+@sameQCU 's post showcases experimental results from custom diffusion models, where larger variants (512 hidden dimensions) outperform smaller ones in reconstructing shapes like donuts and checkerboards from noisy latents via image-to-image denoising, bypassing text prompts.
+Accompanying visuals display side-by-side comparisons of ground truth images, noisy inputs, and model reconstructions, revealing enhanced recovery of textures and edges, particularly for high-frequency patterns like checkerboards across resolutions from 32x32 to 64x64.
+This work builds on latent diffusion principles, empirically probing noise schedule impacts on spatial correlations—echoing findings in papers like "Denoising Diffusion Probabilistic Models" (Ho et al., 2020)—to inform scalable architecture searches in generative AI.
+#+end_example
+
+** Val
+
+<screenshots of the combinatoric explosion. TLDR: trillions of representative variations for any given form>
+That's a lot of combinations, and that's just for a specific form =(()(()))=
+
+** SQCU
+not gonna run of dataset examples any time soon with combinatorics like that
+
+** Val
+My brother brought up the idea of patenting this and I realized that oh shit, if I applied and were getting an offer through this, Anthropic would 100% require me to take it down and keep it secret 
+
+Anthropic has heavy heavy NDAs 
+
+Idk how to feel about that
+
+Honestly just given the scale I imagine this would also be a source of a family of useful synthetic training datasets in addition to evals
+
+And idk if I am comfortable with having that be a trade secret?
+
+** SQCU
+patents broadly are fake and you could never really prove someone did or didnt use a similar internal eval suite or get training gradients off of it or the opposite of it and so on
+but yes everything is NDAed and you will not get to work on public projects once you're yoinked by a research lab
+that's why i've been livepublishing code at reflex speed and trying to leak as much of my motivations and results as possible up until whatever point in time i'm forced to stop doing that
+
+* <2026-01-16 Fri>
+sqcu: right now i'm trying to stew together some EASY things for BABY policies, like, what is uhhh sounding like uhhh one of the densest and most baroque policy modeling environments ever. to me, this is all about curriculum learning: the simplest problem is one where you can have simple situations, simple symbolic representations of them, and simple normative statements resulting from the symbolics, but where each individual step of this simple inference chain can still be done wrong. ideally you can make any part of this chain of inferences harder, and can vary the complexity of any of the chunks in both training and evaluation
+
+walerie: This is giving HEAVY Objective Information Theory / Sextuple Information Model vibes from Xu Jianfeng
+Very obscure but notable created by the head honcho of the largest informatization effort in the world, China's entire judicial system digital transformation
+The tuple winograd model, I mean
+I think a big part of what is making this difficult is the fact that like, it's really fucking hard to think about what even this formalism of distinction even means if you're trying to unformalize it 
+AFAIK the distinction of LoF is a formalization of the behaviourt of distinction at large but like, I've been long puzzled on how I would translate a natural language statement into a LoF expression that didn't go through the Boolean logic translation first
+One thing that I think is notable and important is that Laws of Form is about the notion of distinction as *perfect* continence, *perfect* containment. As if we presupposed there was a perfect continence. But all concepts sublimate or are troubled upon deep enough investigation. Only mathematical concepts are such, and as Lou Kauffman says often, "mathematics and LoF is about how a distinction would be like, if there WERE (presupposing) a distinction."
+
+sqcu: clopus is also really struggling here haha [image A: example 2]
+sqcu: i think that the clopus interpretation of perfect continence is the simple (textual? correct?) ontological reading of perfect continence as 'perfectly contains' or 'let's just reject as an ontological primitive mereologies of partial containment as first order symbols or first order distinguishing marks we use while constructing our system of rewriting rules'. like, if you wanted a leaky mereology, you can build a leaky mereology, but it would be something you construct as a hors-texte to spencer brown's legible + clarified algebra
+7:03 PM
+
+walerie: The most straightforward plain language interpretation of the mark from LoF came from The Markable Mark http://markability.net
+
+sqcu: re: markability; yeah i think this is a good auxiliary for laws of form, which i think is a genuinely confusing text if you're not reading it in the context of 'responses to wittgenstein + responses to computer science'
+
+[Image B: because we *arent* spencer-brown]
+to me, i think the most confusing thing about laws of form is that spencer immediately tells you 'psssst you can build a computer with this symbolically and it'll be really easy to describe', but the secondary sources seem to get caught in redescribing the theorems you need to *get to computers* and time-series or stateful logics. this topic is *fiendish* and definitely challenging for me, and i have to write the most contorted stuff to even claude it out, e.g. attachment selection
+
+[Image C: Example 7]
+ah here's a great one from clopus. sharing a link to the problem solving process if you're curious: claude.ai/share/c994ec26-0664-45d8-81ba-7ea1e0bb6248 
+some of the suggestions from claude opus genuinely feel on the level of adventure game puzzles (quality sign)
+
+walerie: 👀
+walerie: I was told that it was very category theory-pilled.! I suppose it is, although without any of the language shappings of category theory. I wonder if it might help to use language that is more attached to conventional mathematics. Like, for example, any arithmetic LoF expression is a tree, and any algebraic LoF expression can be described as a semilattice
+And for equations of the second order, i.e., self-referential ones w reentry, unsure.
+I'm not sure how to take George Spencer Brown's word that the idea of reentry necessarily results in indeterminacy in the case of f= ((f a) b)  where a, b = unmarked
+
+It seems there's been a recent paper about how it just is never the case. And that only the sequential iteration reading is sensible, and never the infinite reading.
+
+sqcu: hmmm... thank goodness i'm not motivated by any claims i'm trying to yoke to the equivalency of meaning of term rewriting results with some kind of physical or informational system whose behavior i'm trying to predict!
+from my perspective the spencer term rules are like, really convenient notation for describing puzzles with extreme sensitivity to variations
+
+It is a nice benefit for sure, fairly ergonomic way of transcribing and simplifying
+
+(like, the desired application here is to demonstrate the didactic teaching of a mapping from a situation, a list of rules, and a question to a scratch space which uses the rules to try to answer the question, where supplying differnet rules would lead to different answers.) that the spencer brown symbolic systems are *really good* at iterating candidate puzzles which satisfy this goal is a really interesting demonstration of a property of the axiomatic system which sort of veers off into topics not normally bound to philosophy of logic
+
+walerie: It is a nice benefit for sure, fairly ergonomic way of transcribing and simplifying
+
+sqcu: with huge benefits for the maximum complexity of a problem you can try to present in ~512 'tokens'!

@@ -1,0 +1,54 @@
+# The frozen v1 PNGs were rendered on amd64 Debian 13.5. Keep this job on
+# that exact userspace: typography and antialiasing are authority inputs.
+FROM --platform=linux/amd64 docker.io/library/python@sha256:78b39ef14d8e2b4d71f8dc304f1328c37df95fe0ef99477c2ae6bd3d03784553 AS python
+FROM --platform=linux/amd64 ghcr.io/astral-sh/uv@sha256:663211e7509e89ff2172cc3ca098afb4ac63028dd065d2b047e4251127a7d47a AS uv
+FROM --platform=linux/amd64 docker.io/library/debian@sha256:a617c1cdde36a7e0194b2f07dff669e1753c03c3205356b94f9f350b0f9a57d1
+
+ENV LANG=C.UTF-8 \
+    PATH=/opt/project/.venv/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_MANAGED_PYTHON=1
+
+# Copy the exact CPython patch release and installer by immutable image
+# manifest, while retaining Debian 13.5 as the final native userspace.
+COPY --from=python /usr/local /usr/local
+COPY --from=uv /uv /uvx /bin/
+
+# The timestamped Debian archive makes the complete dependency solution
+# immutable. Exact raster/font packages are repeated here as an audit aid.
+RUN printf '%s\n' \
+      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260706T000000Z trixie main' \
+      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260706T000000Z trixie-security main' \
+      > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Check-Valid-Until=false update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      fontconfig=2.15.0-2.3 \
+      fonts-dejavu-core=2.37-8 \
+      git=1:2.47.3-0+deb13u1 \
+      git-man=1:2.47.3-0+deb13u1 \
+      libcairo2=1.18.4-1+b1 \
+      libffi8=3.4.8-2 \
+      libgdk-pixbuf-2.0-0=2.42.12+dfsg-4+deb13u1 \
+      libpango-1.0-0=1.56.3-1 \
+      libpangocairo-1.0-0=1.56.3-1 \
+      libbz2-1.0=1.0.8-6 \
+      libdb5.3t64=5.3.28+dfsg2-9 \
+      libgdbm-compat4t64=1.24-2 \
+      libgdbm6t64=1.24-2 \
+      liblzma5=5.8.1-1 \
+      libncursesw6=6.5+20250216-2 \
+      libreadline8t64=8.2-6 \
+      libsqlite3-0=3.46.1-7+deb13u1 \
+      libssl3t64=3.5.6-1~deb13u2 \
+      libuuid1=2.41-5 \
+      zlib1g=1:1.3.dfsg+really1.3.1-1+b1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/project
+COPY pyproject.toml uv.lock README.org ./
+RUN uv sync --frozen --group dev --extra visual --extra site --no-install-project
+
+WORKDIR /workspace

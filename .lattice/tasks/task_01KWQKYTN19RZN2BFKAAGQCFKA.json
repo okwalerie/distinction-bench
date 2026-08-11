@@ -1,0 +1,53 @@
+{
+  "assigned_to": "agent:claire-impl-db2",
+  "branch_links": [
+    {
+      "branch": "feat/DB-2-text-dialects-phase-a",
+      "linked_at": "2026-07-05T00:58:49Z",
+      "linked_by": "agent:claire-impl-db2",
+      "repo": null
+    },
+    {
+      "branch": "feat/DB-2-text-dialects-phase-b",
+      "linked_at": "2026-07-05T01:46:32Z",
+      "linked_by": "agent:claire-impl-db2b",
+      "repo": null
+    }
+  ],
+  "comment_count": 11,
+  "complexity": "medium",
+  "created_at": "2026-07-04T22:28:33Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Read .lattice/notes/design-decisions-2026-07-04.md first. It binds this task.\n\nAdd new text dialects as FormRenderer subclasses registered in renderers/__init__.py. The parens family already has canonical, multi-bracket and mismatched-bracket variants. Sexpr starts its own 'pattern' family.\n\nScope:\n- text archetypes for families from the taxonomy that have natural text forms: indentation or tree notation, word brackets, plain-English containment prose\n- a handful of novel dialects built on self-similar structures from mathematics or nature (for example L-systems or nested clause embedding); propose candidates in the plan and justify them\n- every dialect encodes containment only; distractor features (like bracket mismatch) are welcome but the containment structure must stay isomorphic to the source form\n\nEach renderer must be deterministic under a seed, round-trip or otherwise machine-verify structure preservation, and have tests like tests/test_renderers.py. Design renderers as archetype generators that the DB-4 variation pipeline can wrap; read the DB-4 description before designing.",
+  "done_at": "2026-07-05T02:39:50Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWQXFW1ZR4SAQ7GJQR7BFYPY",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KWR0FNJYNSYKB9TDEAM1K0WM",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQKYTN19RZN2BFKAAGQCFKA",
+  "last_event_id": "ev_01KWR2AZ26ZBVY7EXNQ46NJH8H",
+  "last_status_changed_at": "2026-07-05T02:39:50Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 1,
+  "schema_version": 1,
+  "short_id": "DB-2",
+  "status": "done",
+  "tags": [
+    "dialects",
+    "renderers"
+  ],
+  "title": "Text dialect families: archetypes plus novel self-similar dialects",
+  "type": "task",
+  "updated_at": "2026-07-05T02:39:50Z",
+  "urgency": null
+}

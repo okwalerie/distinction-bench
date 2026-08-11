@@ -1,0 +1,152 @@
+#+title: Scratch buffer
+
+** Fetch Batch Results
+#+begin_src python
+from lofbench.eval import fetch_batch_results
+results = fetch_batch_results(
+    composite_cases,
+    CompositeTask,
+    models=CFG.models,
+    batch_log="batch_log.jsonl",
+)
+with open("results.json", "w") as f:
+    json.dump(results, f, indent=2)
+print(f"Saved {len(results)} results")
+#+end_src
+
+
+
+(( (()) () (() (()) (()))) ((()) (()()()) (()) ))
+
+
+((()((()(())(()))(()(())()()())))) ((((()(()))())))
+
+
+( (()) (()) )
+
+🟨🟨🟨🟨🟨🟨🟨🟨
+🟨🟨🟨🟨🟨🟨🟨🟨
+🟨🟨🟨🟨🟨🟨🟨🟨
+🟨🟨🟩🟨🟨🟪🟪🟨
+🟨🟨🟩🟩🟨🟪🟪🟨
+🟨🟨🟦🟩🟨🟦🟦🟨
+🟨🟨🟦🟦🟨🟦🟦🟨
+🟨🟥🟥🟥🟥🟥🟥🟨
+#brushninja
+
+🟨🟨🟨🟨🟨🟨🟨🟨
+🟨🟨🟨🟨🟨🟨🟨🟨
+🟨🟨🟨🟨🟨🟨🟨🟨
+🟨🟨🟩🟨🟨🟪🟪🟨
+🟨🟨🟩🟩🟨🟪🟪🟨
+🟨🟨🟦🟦🟨🟦🟦🟨
+🟥🟨🟦🟦🟨🟦🟦🟨
+🟥🟨🟥🟥🟥🟥🟥🟨
+
+
+(())
+
+: ( ( (() (())) ( (()) () (()) ) ) ())
+
+: ( ( ()  ( (()) (()) ) ) () )
+
+(mark (mark (mark) (mark (mark (mark)) (mark (mark)))) (mark))
+
+
+
+(( () () () ) (( () () () ) ( (() ()) )) )
+
+
+ ()
+ 
+ (
+   (
+     ( ()()() )
+     ( () )
+     
+   )
+   ( () () )
+   ( () () () )
+ )
+ () =>
+
+ () ( ( ( () ) ( () ) ) ( () ) ( () ) ) () [I1]
+
+- json :: easy
+- s-expression :: easy, but oh man, devilish!
+- mixed brackets :: easy; stack approach?
+- SVGs of circles / rectangles? :: ohhh man, devilish.
+
+
+
+The following may be quite difficult.
+- emoji grid / blocks :: may be difficult, but I really want this.
+- ascii bounding box :: 
+- unicode bounding box ::
+
+
+* Examples
+Parentheses (current):
+- () = marked
+- (()) = void (unmarked)
+- ()() = marked
+
+JSON:
+- [{"mark": []}]  // ()
+- [{"mark": [{"mark": []}]}]  // (())
+- [{"mark": []}, {"mark": []}]]  // ()()
+
+S-Expression:
+- (one)  ; ()
+- (mark (mark))  ; (())
+- (mark) (mark)  ; ()()
+
+DEVILISH.
+- We will need to eventually add a variant where =mark= is changed to random words, maybe even confounded with famous lisp functions like =map= and =reduce=.
+- However, we will have to be clear that this is an s-exp. I think we should probably add a variable that clarifies what type of input this is so that similar formats do not get confused with each other. We also need to emphasize that distinction is the ONLY relevant relation here.
+
+Mixed brackets:
+- ()  // depth 1
+- ([])  // depth 2
+- ([()])  // depth 3
+This makes depth visually clearer!
+
+
+Emoji/ASCII/Unicode visual ones:
+- The fact that they are harder to generate/parse consistently is exactly why we need to test them.
+- I believe we would need to limit these to the lower difficulty expressions.
+- emoji buckets :: 8x8 grid can hold a max of 4 nested containers with one vertical line left over. It would be difficult to identify what the background is supposed to be.
+- ascii bounding box / blocks / buckets :: gemini and opus is kinda scary good at this
+
+
+Emoji blocks (visual):
+- ⬛  // () - a single marked state
+- ⬛⬜⬛  // (()) - nested, cancels to void
+- ⬛ ⬛  // ()() - two adjacent, condenses to one
+Hmm, this is tricky to represent correctly...
+
+ASCII box:
+  ┌─┐
+  └─┘  // ()
+
+  ┌───┐
+  │┌─┐│
+  │└─┘│
+  └───┘  // (())
+
+
+{"mark": []}
+
+
+(mark) (mark)
+(mark (mark))
+
+** https://github.com/jkitchin/ox-ipynb
+
+- =README.md= with:
+  - 10-line overview
+  - how to run one eval command
+  - one result table / plot
+  - what it measures / doesn’t measure
+
+

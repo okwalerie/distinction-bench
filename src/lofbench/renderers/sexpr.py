@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from lofbench.core import string_to_form
 
-from .base import FormRenderer, RenderedForm
-
+from .base import FormRenderer, RenderedForm, merge_config_kwargs
 
 # Preset configurations for different language styles
 PRESETS: dict[str, dict[str, str]] = {
@@ -109,17 +108,18 @@ class SExprRenderer(FormRenderer):
             **kwargs: Override config values (e.g., preset="lisp", symbol="mark").
         """
         self.config = config or SExprConfig()
-
-        for key, value in kwargs.items():
-            if hasattr(self.config, key):
-                setattr(self.config, key, value)
+        merge_config_kwargs(self.config, kwargs)
 
         # Resolve preset and overrides
         preset_config = PRESETS.get(self.config.preset, PRESETS["default"])
         self._symbol = self.config.symbol or preset_config["symbol"]
         self._open = self.config.open if self.config.open is not None else preset_config["open"]
         self._close = self.config.close if self.config.close is not None else preset_config["close"]
-        self._separator = self.config.separator if self.config.separator is not None else preset_config["separator"]
+        self._separator = (
+            self.config.separator
+            if self.config.separator is not None
+            else preset_config["separator"]
+        )
 
     @property
     def name(self) -> str:

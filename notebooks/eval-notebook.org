@@ -3,6 +3,42 @@
 #+author: Valerie Kim
 #+property: header-args:python :session lof :results output :python "../.venv/bin/python"
 
+* TODO Try replacing "canonicalize"
+https://chatgpt.com/c/6941d0dd-5758-8332-bc76-665c01c28fea
+
+yeah, that tracks. “canonicalize” is semantically booby-trapped: models hear “simplify to normal form,” not “emit a faithful working parse.” so treat that metric as contaminated unless you make the task unmistakably about lossless transcription.
+
+what to do instead (pick 1–2, don’t overengineer):
+
+rename the subtask to something like “lossless normalization” or “transliteration”. avoid “canonical,” “simplify,” “reduce,” “minimal,” “normal form,” etc. those are siren words.
+
+make the output reversible by construction:
+
+option a (best): require a bracket-pair list: pairs = [[i,j], ...] over character indices (0-based) + length. that’s pure parsing, zero “minimal form” ambiguity.
+
+option b: require a json ast with explicit node boundaries, then you score by reconstructing the original abstract tree.
+
+option c (simpler): “rewrite the input using ONLY '(' and ')' while preserving exact nesting; DO NOT perform any reductions.” then score by comparing the induced tree.
+
+hard-spec the contract in the prompt with a “DO NOT” wall:
+
+“do not reduce, simplify, evaluate, or compute marked/unmarked.”
+
+“if you output a reduced form, it will be scored as incorrect even if it’s true.”
+
+include 1 tiny example where reduction would change it, and show the correct “transliteration” output staying non-reduced.
+
+split into two fields so you can still get your final answer:
+
+parse: (lossless normalization)
+
+result: (final reduced form)
+then you can separately measure “parse ok?” vs “execute ok given parse?”
+
+also: the fact models keep “helpfully” reducing when asked to transcribe is itself a spicy micro-finding about instruction-following / task framing. but yeah, don’t hang your main conclusions on that canonicalization number unless you swap the task to something mechanically unambiguous (pairs/ast).
+
+if you paste your current canonicalization prompt block, i can rewrite it into a minimal ambiguity “lossless normalization” spec that won’t accidentally invite reduction.
+
 * Introduction
 
 This notebook evaluates whether Large Language Models can correctly simplify

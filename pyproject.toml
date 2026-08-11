@@ -4,31 +4,46 @@ version = "0.1.0"
 description = "Laws of Form benchmark toolkit"
 readme = {file = "README.org", content-type = "text/plain"}
 license = "MIT"
+authors = [{name = "Distinction Benchmark contributors"}]
+keywords = ["evaluation", "laws-of-form", "llm", "representation-invariance"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.75.0",
     "google-genai>=1.55.0",
     "inspect-ai>=0.3.154",
     "matplotlib>=3.10.8",
-    "openai>=2.11.0",
+    "openai>=2.45.0",
     "pandas>=2.3.3",
     "pyarrow>=22.0.0",
 ]
+
+[project.urls]
+Homepage = "https://distinction.valeriekim.ca"
+Repository = "https://github.com/okwalerie/distinction-bench"
+Documentation = "https://distinction.valeriekim.ca"
+Issues = "https://github.com/okwalerie/distinction-bench/issues"
 
 [project.optional-dependencies]
 eval = [
     "anthropic>=0.75.0",
     "google-genai>=1.55.0",
-    "openai>=2.11.0",
+    "openai>=2.45.0",
     "python-dotenv>=1.0.0",
-]
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.8",
 ]
 analysis = [
     "pandas>=2.0",
     "pyarrow>=14.0",
+]
+site = [
+    "python-fasthtml>=0.14.4",
+]
+visual = [
+    "cairosvg==2.9.0",
 ]
 
 [build-system]
@@ -36,10 +51,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/lofbench"]
+packages = ["src/lofbench", "src/lofsite", "src/dbench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "requires_visual_runtime: needs both the cairosvg optional package and native cairo",
+]
 
 [tool.ruff]
 target-version = "py311"
@@ -52,4 +70,5 @@ select = ["E", "F", "I", "UP"]
 dev = [
     "playwright>=1.57.0",
     "pytest>=9.0.2",
+    "ruff>=0.8",
 ]

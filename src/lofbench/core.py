@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import random
 
 # =============================================================================
@@ -141,8 +140,8 @@ def simplify_string(s: str) -> tuple[str, list[tuple[str, str, str]]]:
     return final if final else "void", steps
 
 
-def canonical_string(s: str) -> str:
-    """Get the canonical (simplified) form of a string.
+def normal_form_string(s: str) -> str:
+    """Get the normal form of a ground-form string.
 
     Returns either "()" or "void".
     """
@@ -150,15 +149,25 @@ def canonical_string(s: str) -> str:
     return result
 
 
-def evaluate(s: str) -> str:
-    """Evaluate a form to 'marked' or 'unmarked'.
+def normal_value(s: str) -> str:
+    """Evaluate a ground form to ``marked`` or ``unmarked``.
 
     Returns:
         'marked' if the form simplifies to ()
         'unmarked' if the form simplifies to void
     """
-    result = canonical_string(s)
+    result = normal_form_string(s)
     return "marked" if result == "()" else "unmarked"
+
+
+def canonical_string(s: str) -> str:
+    """Historical alias for :func:`normal_form_string` used by pilot-v0 logs."""
+    return normal_form_string(s)
+
+
+def evaluate(s: str) -> str:
+    """Historical alias for :func:`normal_value` used by pilot-v0 code."""
+    return normal_value(s)
 
 
 # =============================================================================
@@ -193,9 +202,6 @@ def generate_form_string(
 
     def build(remaining_min: int, remaining_max: int) -> str:
         if remaining_max <= 0 or marks_used[0] >= max_marks:
-            if marks_used[0] < max_marks and rng.random() > 0.5:
-                marks_used[0] += 1
-                return "()"
             return ""
 
         if remaining_min > 0:

@@ -1,0 +1,100 @@
+#+title: Failure Examples
+
+* V0
+But here's an example from a "true" result where the model guess into becoming right:
+
+#+begin_example
+#### 2.1 Simplify `((( )))`
+
+`((( )))` is three nested pairs: `(((( ))))` is actually:
+
+- Innermost: `()`  
+- Next: `(())` \u2192 by I2 \u2192 void  
+- So `((()))` becomes `(void)` \u2192 `()`  
+- Then `(((())))` is one more layer: `(())` again \u2192 void
+
+So:
+- `((( )))` \u2192 `(((())))` \u2192 void
+#+end_example
+
+See the error? The model suddenly hallucinated "three nested pairs ((( )))" -> "((((  ))))" -> "void". 
+
+
+Additionally a common failure mode I see in "false" results:
+#+begin_example
+### Step 1: Simplify each inner `(())` using I2 (Order)
+
+Axiom I2: `(()) = void`
+
+So each `(())` becomes `void`:
+
+3. `( (()) (()) ) \u2192 ( void void )`
+
+But `void` is just \"nothing,\" so `( void void )` is the same as having two adjacent marks inside the outer pair:
+
+4. `( void void ) = ( () () )`
+#+end_example
+
+Catch that? It mistook the idea that =void void= is the same as having two adjacent marks: =() ()=.
+
+Another common failure mode I see is also comes from transcribing =void= -> =(void)=. Sometimes this leads to mistakes like believing that =void void= -> =(void) (void)=.
+
+#+begin_example
+"Start with the expression:
+
+1. Expression:  
+   `()(())`
+
+2. Focus on the right part `(())`.  
+   By Axiom I2 (Order):  
+   `(()) = void`
+
+3. Substitute back into the expression:  
+   `()(()) = ()(void)`
+
+4. In Laws of Form, concatenation with void contributes nothing, so:  
+   `()(void) = ()`
+
+So the expression simplifies to a single mark.
+
+FINAL: ()""
+#+end_example
+
+In this case, the derivation was largely correct, although notationally =(void)= is highly sus.
+
+In these examples, even if the final answer was correct, the /reasoning is incorrect/. Do I try to catch incorrect intermediate results? How do I classify this? I was thinking that this should be considered a "false positive".
+
+* V1.1
+
+http://127.0.0.1:7575/#/logs/2025-12-16T00-26-03%2B00-00_composite-lof-task_cdqvjYE5bHa9MzbbSoLB2d.eval/samples/sample/comp_009/1/
+
+Sonnet 4.5 made these mistakes:
+
+#+begin_quote
+E4: ((()(())))
+Parsing the structure: ( ( () (()) ) )
+
+Inner () = marked
+Inner (()) = nothing (law of crossing)
+Becomes: ( ( () nothing ) ) = ( ( () ) )
+Which is ((()))
+(()) = nothing (law of crossing)
+Reduces to unmarked (void)
+#+end_quote
+
+
+#+begin_quote
+E3: ((()(())))(())
+Working on each part:
+
+Right side: (()) = nothing (law of crossing)
+Left side inner: (()) = nothing (law of crossing)
+Left side becomes: ((()(nothing))) = ((()))
+(()) = nothing (law of crossing)
+Overall: nothing adjacent to nothing = nothing
+
+#+end_quote
+
+Ground truth of both these examples is marked, not unmarked.
+In both examples, Sonnet made the mistake of /jumping ahead/ from =( ( ( ) ) )=, a triple nested marking, and applying the law of crossing to eliminate it entirely, instead of only the inside portion. 
+

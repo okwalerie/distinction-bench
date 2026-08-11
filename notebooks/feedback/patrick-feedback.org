@@ -1,0 +1,11 @@
+#+title: Patrick Feedback
+IRL conversation. I gave my pitch.
+
+** Patrick:
+I really like this. I recommend looking up Polytrees; and Frrobenius Algebras are also highly relevant here.
+
+Distinction bench has the potential for [...] polytrees have an underlying directed graph as a tree [...] you could use it to encode test cases where the order of solutions is not unknown; but once some progress is made, it would reveal yet another problem set, whereby it then has to intuit a higher-order metric of understandability from information that was gained in the prior set about the right direction to take. Showing a polytree but much of the operable steps are not present until some aspect of it is solved.
+
+** Val summary:
+
+Because LoF also encodes boolean logic and NOR, Patrick was warning that after the perception capability was saturated in most typical applications, models would either find data connecting the Forms to logic and simply run logical circuits on the string rep. Thus he was recommending frobenius calculus and polytrees for a LoF with variables in a way that enables polytree based encodings. The way I thought about it is that we would have to introduce variables that would prevent certain Forms from being fully reduced until bound.

@@ -252,6 +252,17 @@ for expr in expressions:
     print(f"  {expr:15} → {result.rendered}")
 #+end_src
 
+#+RESULTS:
+: 
+: === Noisy Bracket Rendering ===
+: (Random bracket substitution)
+: 
+:   ()              → []
+:   (())            → (⟨⟩)
+:   ()()            → <><>
+:   ((())())        → <{[]}{}>
+:   (())(())        → 「[]」「[]」
+
 ** Mismatched Brackets
 
 #+begin_src python
@@ -266,6 +277,7 @@ expressions = [
     "(())",
     "()()",
     "((())())",
+    "(())(())",
 ]
 
 print("\n=== Mismatched Bracket Mode ===")
@@ -286,6 +298,7 @@ for expr in expressions:
 :   (())            → [〈⟩]
 :   ()()            → (〉「」
 :   ((())())        → 〈〈(}}〈」〉
+:   (())(())        → <{)〉[『〉]
 
 ** Nested List Rendering
 

@@ -1,0 +1,557 @@
+"""Application-owned projections of raw provider evidence."""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Any
+
+from lofbench.provider_evidence import (
+    AttemptProjection,
+    ProviderEvidenceEnvelope,
+    ProviderEvidenceSource,
+)
+
+OPENROUTER_CHAT_SOURCE = "openrouter.chat-completion.response.v1"
+OPENROUTER_GENERATION_SOURCE = "openrouter.generation.response.v1"
+AGENT_CLI_SOURCE = "agent-cli.process.v1"
+
+_ERROR_FINISH_REASONS = frozenset(
+    {"cancelled", "canceled", "error", "failed", "length", "content_filter"}
+)
+
+
+def _elapsed(source: ProviderEvidenceSource) -> float:
+    try:
+        started = datetime.fromisoformat(source.request_started_at)
+        finished = datetime.fromisoformat(source.response_finished_at)
+        elapsed = (finished - started).total_seconds() * 1000
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("invalid_source_timing") from exc
+    if not math.isfinite(elapsed) or elapsed < 0:
+        raise ValueError("invalid_source_timing")
+    return elapsed
+
+
+def _safe_elapsed(source: ProviderEvidenceSource | None) -> float:
+    if source is None:
+        return 0.0
+    try:
+        return _elapsed(source)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _object(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"invalid_{label}")
+    return value
+
+
+def _text(value: Any, label: str, *, allow_empty: bool = False) -> str:
+    if not isinstance(value, str) or (not allow_empty and not value):
+        raise ValueError(f"invalid_{label}")
+    return value
+
+
+def _tokens(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"invalid_{label}")
+    return value
+
+
+def _error_name(value: Any, fallback: str) -> str:
+    if not isinstance(value, dict):
+        return fallback
+    metadata = value.get("metadata")
+    candidates = (
+        metadata.get("error_type") if isinstance(metadata, dict) else None,
+        value.get("error_type"),
+        value.get("type"),
+        value.get("code"),
+    )
+    return next(
+        (
+            str(candidate)
+            for candidate in candidates
+            if isinstance(candidate, (str, int)) and not isinstance(candidate, bool)
+        ),
+        fallback,
+    )
+
+
+def _openrouter_request_id(
+    chat: Mapping[str, Any],
+    source: ProviderEvidenceSource,
+) -> str:
+    body_id = chat.get("id")
+    if body_id is not None:
+        body_id = _text(body_id, "request_id")
+    header_ids = [value for name, value in source.response_headers if name == "x-generation-id"]
+    if len(set(header_ids)) > 1:
+        raise ValueError("contradictory_generation_id_headers")
+    header_id = header_ids[0] if header_ids else None
+    if body_id is not None and header_id is not None and body_id != header_id:
+        raise ValueError("contradictory_chat_request_id")
+    return _text(body_id or header_id, "request_id")
+
+
+def _number(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"invalid_{label}")
+    result = float(value)
+    if not math.isfinite(result) or result < 0:
+        raise ValueError(f"invalid_{label}")
+    return result
+
+
+def _best_effort_chat(
+    source: ProviderEvidenceSource | None,
+) -> tuple[str, str, str, int, int, int]:
+    try:
+        chat = _object(source.payload() if source else None, "chat")
+        choices = chat.get("choices")
+        choice = _object(choices[0], "choice") if isinstance(choices, list) and choices else {}
+        message = choice.get("message") if isinstance(choice, dict) else {}
+        message = message if isinstance(message, dict) else {}
+        usage = chat.get("usage") if isinstance(chat.get("usage"), dict) else {}
+        details = (
+            usage.get("completion_tokens_details")
+            if isinstance(usage.get("completion_tokens_details"), dict)
+            else {}
+        )
+        return (
+            message.get("content") if isinstance(message.get("content"), str) else "",
+            chat.get("id") if isinstance(chat.get("id"), str) else "",
+            (
+                chat.get("model", "").removeprefix("openrouter/")
+                if isinstance(chat.get("model"), str)
+                else ""
+            ),
+            usage.get("prompt_tokens")
+            if isinstance(usage.get("prompt_tokens"), int)
+            and not isinstance(usage.get("prompt_tokens"), bool)
+            and usage["prompt_tokens"] >= 0
+            else 0,
+            usage.get("completion_tokens")
+            if isinstance(usage.get("completion_tokens"), int)
+            and not isinstance(usage.get("completion_tokens"), bool)
+            and usage["completion_tokens"] >= 0
+            else 0,
+            details.get("reasoning_tokens")
+            if isinstance(details.get("reasoning_tokens"), int)
+            and not isinstance(details.get("reasoning_tokens"), bool)
+            and details["reasoning_tokens"] >= 0
+            else 0,
+        )
+    except (TypeError, ValueError, IndexError):
+        return "", "", "", 0, 0, 0
+
+
+def _openrouter_unknown(
+    envelope: ProviderEvidenceEnvelope,
+    run: Mapping[str, Any],
+    error_type: str,
+) -> AttemptProjection:
+    chat = next(
+        (source for source in envelope.sources if source.label == OPENROUTER_CHAT_SOURCE),
+        None,
+    )
+    response, request_id, model, prompt, completion, reasoning = _best_effort_chat(chat)
+    source = chat or (envelope.sources[0] if envelope.sources else None)
+    started = (
+        source.request_started_at
+        if source is not None and isinstance(source.request_started_at, str)
+        else ""
+    )
+    finished = (
+        source.response_finished_at
+        if source is not None and isinstance(source.response_finished_at, str)
+        else ""
+    )
+    latency = _safe_elapsed(source)
+    endpoint = run.get("endpoint") if isinstance(run.get("endpoint"), str) else ""
+    return AttemptProjection(
+        status="accounting_unknown",
+        started_at=started,
+        finished_at=finished,
+        response_text=response,
+        provider_request_id=request_id,
+        resolved_model_id=model,
+        provider="openrouter",
+        endpoint=endpoint,
+        input_tokens=prompt,
+        output_tokens=completion,
+        reasoning_tokens=reasoning,
+        observed_cost_usd=0.0,
+        latency_ms=latency,
+        provider_latency_ms=0.0,
+        error_type=error_type,
+    )
+
+
+def _project_openrouter(
+    envelope: ProviderEvidenceEnvelope,
+    run: Mapping[str, Any],
+) -> AttemptProjection:
+    if envelope.schema_version != 2 or envelope.adapter_id != "openrouter-direct-v2":
+        raise ValueError("unsupported_openrouter_evidence")
+    chat_sources = [source for source in envelope.sources if source.label == OPENROUTER_CHAT_SOURCE]
+    if len(chat_sources) != 1:
+        raise ValueError("missing_unique_chat_exchange")
+    chat_source = chat_sources[0]
+    if chat_source.transport_error:
+        raise ValueError(f"chat_{chat_source.transport_error}")
+    if chat_source.http_status is None:
+        raise ValueError("missing_chat_http_status")
+    chat = _object(chat_source.payload(), "chat_json")
+    chat_error = chat.get("error")
+    chat_failed = not 200 <= chat_source.http_status < 300 or chat_error not in (None, "", False)
+    chat_error_name = _error_name(chat_error, f"http_{chat_source.http_status}")
+    request_id = _openrouter_request_id(chat, chat_source)
+    chat_model = chat.get("model")
+    if chat_model is not None:
+        chat_model = _text(chat_model, "chat_model").removeprefix("openrouter/")
+    if chat_model is not None and chat_model != run.get("requested_model_id"):
+        raise ValueError("contradictory_requested_model")
+    if chat_model is None and not chat_failed:
+        raise ValueError("missing_chat_model")
+    chat_provider = chat.get("provider")
+    if chat_provider is not None:
+        chat_provider = _text(chat_provider, "chat_provider")
+
+    finish_reason: str | None = None
+    choice_error: Any = None
+    response_text = ""
+    choices = chat.get("choices")
+    if choices is not None:
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise ValueError("missing_unique_choice")
+        choice = _object(choices[0], "choice")
+        choice_error = choice.get("error")
+        finish_reason = _text(choice.get("finish_reason"), "chat_finish_reason")
+        message = _object(choice.get("message"), "message")
+        response_text = _text(message.get("content"), "completion", allow_empty=True)
+    elif not chat_failed:
+        raise ValueError("missing_unique_choice")
+
+    chat_usage: tuple[int, int, int] | None = None
+    usage = chat.get("usage")
+    if usage is not None:
+        usage = _object(usage, "chat_usage")
+        details = _object(usage.get("completion_tokens_details") or {}, "completion_details")
+        chat_usage = (
+            _tokens(usage.get("prompt_tokens"), "chat_prompt_tokens"),
+            _tokens(usage.get("completion_tokens"), "chat_completion_tokens"),
+            _tokens(details.get("reasoning_tokens", 0), "chat_reasoning_tokens"),
+        )
+    elif not chat_failed:
+        raise ValueError("missing_chat_usage")
+
+    generation_sources = sorted(
+        (source for source in envelope.sources if source.label == OPENROUTER_GENERATION_SOURCE),
+        key=lambda source: source.sequence,
+    )
+    generation_source = next(
+        (
+            source
+            for source in reversed(generation_sources)
+            if not source.transport_error
+            and source.http_status is not None
+            and 200 <= source.http_status < 300
+            and isinstance(source.payload(), dict)
+            and isinstance(source.payload().get("data"), dict)
+        ),
+        None,
+    )
+    if generation_source is None:
+        raise ValueError("missing_generation_accounting")
+    wrapper = _object(generation_source.payload(), "generation_wrapper")
+    wrapper_error = wrapper.get("error")
+    generation = _object(wrapper.get("data"), "generation")
+    if generation.get("id") != request_id:
+        raise ValueError("contradictory_request_id")
+    generation_model = generation.get("model") or generation.get("model_id")
+    model = _text(generation_model, "generation_model").removeprefix("openrouter/")
+    provider_name = _text(generation.get("provider_name"), "provider_name")
+    if chat_provider is not None and chat_provider != provider_name:
+        raise ValueError("contradictory_provider")
+    catalog = _object(run.get("catalog_row"), "catalog")
+    selected = _object(catalog.get("selected_endpoint"), "selected_endpoint")
+    if model != run.get("resolved_model_id"):
+        raise ValueError("contradictory_planned_model")
+    if provider_name != selected.get("provider_name"):
+        raise ValueError("contradictory_planned_provider")
+    endpoint = _text(selected.get("tag"), "endpoint_tag")
+    if endpoint != run.get("endpoint"):
+        raise ValueError("contradictory_planned_endpoint")
+    generation_input = _tokens(generation.get("native_tokens_prompt"), "generation_prompt_tokens")
+    generation_output = _tokens(
+        generation.get("native_tokens_completion"), "generation_completion_tokens"
+    )
+    generation_reasoning = _tokens(
+        generation.get("native_tokens_reasoning", 0), "generation_reasoning_tokens"
+    )
+    generation_usage = (generation_input, generation_output, generation_reasoning)
+    if chat_usage is not None and generation_usage != chat_usage:
+        raise ValueError("contradictory_token_usage")
+    cost = _number(generation.get("total_cost"), "generation_cost")
+    chat_cost = usage.get("cost") if isinstance(usage, dict) else None
+    if chat_cost is not None and not math.isclose(
+        _number(chat_cost, "chat_cost"), cost, rel_tol=0, abs_tol=1e-9
+    ):
+        raise ValueError("contradictory_cost")
+    provider_latency = _number(generation.get("latency"), "provider_latency")
+    measured_latency = _elapsed(chat_source)
+    latency_tolerance = max(1000.0, measured_latency * 0.25)
+    if provider_latency > measured_latency + latency_tolerance:
+        raise ValueError("contradictory_latency")
+    generation_finish = _text(generation.get("finish_reason"), "generation_finish_reason")
+    if finish_reason is not None and generation_finish != finish_reason:
+        raise ValueError("contradictory_finish_reason")
+    cancelled = generation.get("cancelled", False)
+    if not isinstance(cancelled, bool):
+        raise ValueError("invalid_cancelled")
+    provider_error = (
+        chat_failed
+        or cancelled
+        or finish_reason in _ERROR_FINISH_REASONS
+        or generation_finish in _ERROR_FINISH_REASONS
+        or choice_error not in (None, "", False)
+        or wrapper_error not in (None, "", False)
+        or generation.get("error") not in (None, "", False)
+    )
+    if finish_reason is not None and finish_reason != "stop" and not provider_error:
+        provider_error = True
+    generation_error = generation.get("error")
+    choice_error_name = _error_name(choice_error, "choice_error")
+    generation_error_name = _error_name(generation_error, "generation_error")
+    wrapper_error_name = _error_name(wrapper_error, "generation_wrapper_error")
+    return AttemptProjection(
+        status="provider_error" if provider_error else "complete",
+        started_at=chat_source.request_started_at,
+        finished_at=chat_source.response_finished_at,
+        response_text=response_text,
+        provider_request_id=request_id,
+        resolved_model_id=model,
+        provider="openrouter",
+        endpoint=endpoint,
+        input_tokens=generation_input,
+        output_tokens=generation_output,
+        reasoning_tokens=generation_reasoning,
+        observed_cost_usd=cost,
+        latency_ms=measured_latency,
+        provider_latency_ms=provider_latency,
+        error_type=(
+            f"provider_{chat_error_name}"
+            if chat_failed
+            else "provider_cancelled"
+            if cancelled
+            else f"provider_{choice_error_name}"
+            if choice_error not in (None, "", False)
+            else f"provider_{wrapper_error_name}"
+            if wrapper_error not in (None, "", False)
+            else f"provider_{generation_error_name}"
+            if generation_error not in (None, "", False)
+            else f"provider_finish_{finish_reason}"
+            if provider_error
+            else ""
+        ),
+    )
+
+
+def project_openrouter_evidence(
+    envelope: ProviderEvidenceEnvelope,
+    run: Mapping[str, Any],
+) -> AttemptProjection:
+    """Total OpenRouter projection: malformed evidence fails closed, never raises."""
+    try:
+        canonical = ProviderEvidenceEnvelope.from_dict(envelope.to_dict())
+        return _project_openrouter(canonical, run)
+    except Exception as exc:  # total projection is the persistence boundary
+        return _openrouter_unknown(envelope, run, str(exc) or type(exc).__name__)
+
+
+def project_agent_cli_evidence(
+    envelope: ProviderEvidenceEnvelope,
+    run: Mapping[str, Any],
+) -> AttemptProjection:
+    """Total projection for exact subscription-cli process evidence."""
+    provider = run.get("provider") if isinstance(run.get("provider"), str) else ""
+    endpoint = run.get("endpoint") if isinstance(run.get("endpoint"), str) else ""
+    try:
+        envelope = ProviderEvidenceEnvelope.from_dict(envelope.to_dict())
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        return AttemptProjection(
+            status="transport_error",
+            started_at="",
+            finished_at="",
+            response_text="",
+            provider_request_id="",
+            resolved_model_id="",
+            provider=provider,
+            endpoint=endpoint,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            observed_cost_usd=0.0,
+            latency_ms=0.0,
+            provider_latency_ms=0.0,
+            error_type=str(exc) or type(exc).__name__,
+        )
+    source = next(
+        (source for source in envelope.sources if source.label == AGENT_CLI_SOURCE),
+        None,
+    )
+    if source is None:
+        return AttemptProjection(
+            status="transport_error",
+            started_at="",
+            finished_at="",
+            response_text="",
+            provider_request_id="",
+            resolved_model_id="",
+            provider=provider,
+            endpoint=endpoint,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            observed_cost_usd=0.0,
+            latency_ms=0.0,
+            provider_latency_ms=0.0,
+            error_type="missing_process_evidence",
+        )
+    try:
+        process = _object(source.payload(), "process")
+        returncode = process.get("returncode")
+        if isinstance(returncode, bool) or not isinstance(returncode, int):
+            raise ValueError("invalid_returncode")
+        command = _text(process.get("command"), "command")
+        process_error = process.get("process_error", "")
+        if not isinstance(process_error, str):
+            raise ValueError("invalid_process_error")
+        return AttemptProjection(
+            status="complete" if returncode == 0 else "transport_error",
+            started_at=source.request_started_at,
+            finished_at=source.response_finished_at,
+            response_text=_text(process.get("output_text", ""), "output", allow_empty=True),
+            provider_request_id=_text(
+                process.get("request_id", ""), "request_id", allow_empty=True
+            ),
+            resolved_model_id=(
+                _text(process.get("resolved_model_id"), "model") if returncode == 0 else ""
+            ),
+            provider=command,
+            endpoint=command,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            observed_cost_usd=0.0,
+            latency_ms=_safe_elapsed(source),
+            provider_latency_ms=0.0,
+            error_type=("" if returncode == 0 else process_error or f"{command}_exit_{returncode}"),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return AttemptProjection(
+            status="transport_error",
+            started_at=source.request_started_at,
+            finished_at=source.response_finished_at,
+            response_text="",
+            provider_request_id="",
+            resolved_model_id="",
+            provider=provider,
+            endpoint=endpoint,
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            observed_cost_usd=0.0,
+            latency_ms=_safe_elapsed(source),
+            provider_latency_ms=0.0,
+            error_type=str(exc) or type(exc).__name__,
+        )
+
+
+def projector_for_run(run: Mapping[str, Any]):
+    surface = run.get("execution_surface")
+    if surface == "direct_api":
+        return project_openrouter_evidence
+    if surface in {"codex_cli", "claude_cli"}:
+        return project_agent_cli_evidence
+    raise RuntimeError(f"unsupported execution surface {surface!r}")
+
+
+def project_provider_evidence(
+    envelope: ProviderEvidenceEnvelope,
+    run: Mapping[str, Any],
+) -> AttemptProjection:
+    """Dispatch one retained envelope through its application-owned projector."""
+    if envelope.adapter_id == "openrouter-direct-v2":
+        return project_openrouter_evidence(envelope, run)
+    if envelope.adapter_id == "agent-cli-v2":
+        return project_agent_cli_evidence(envelope, run)
+    return _openrouter_unknown(envelope, run, "unsupported_provider_evidence_adapter")
+
+
+def validate_openrouter_run_policy(run: Mapping[str, Any]) -> None:
+    """Validate exact authenticated routing/catalog proof in the adapter layer."""
+    routing = _object(run.get("routing_policy"), "routing_policy")
+    privacy = _object(run.get("privacy_policy"), "privacy_policy")
+    generation = _object(run.get("generation"), "generation_policy")
+    catalog = _object(run.get("catalog_row"), "provider_catalog")
+    selected = _object(catalog.get("selected_endpoint"), "selected_endpoint")
+    zdr_selected = _object(catalog.get("zdr_selected_endpoint"), "zdr_endpoint")
+    user_model = _object(catalog.get("authenticated_user_model"), "authenticated_user_model")
+    user_retrieval = _object(
+        catalog.get("authenticated_user_models_retrieval"),
+        "authenticated_user_models_retrieval",
+    )
+    endpoint_identity = (
+        run.get("requested_model_id"),
+        selected.get("tag"),
+        selected.get("provider_name"),
+    )
+    retrieval_sha256 = user_retrieval.get("raw_body_sha256")
+    retrieval_bytes = user_retrieval.get("raw_body_bytes")
+    if (
+        routing.get("order") != [run.get("endpoint")]
+        or routing.get("allow_fallbacks") is not False
+        or routing.get("data_collection") != "deny"
+        or routing.get("zdr") is not True
+        or privacy.get("data_collection") != "deny"
+        or privacy.get("zdr") is not True
+        or privacy.get("authenticated_zdr_catalog") is not True
+        or generation.get("max_retries") != 0
+        or catalog.get("authenticated") is not True
+        or user_model.get("id") != run.get("requested_model_id")
+        or user_model.get("canonical_slug") != run.get("resolved_model_id")
+        or not isinstance(run.get("resolved_model_id"), str)
+        or not run.get("resolved_model_id")
+        or user_retrieval.get("label") != "openrouter.catalog.response.v1"
+        or user_retrieval.get("request_method") != "GET"
+        or user_retrieval.get("request_url") != "https://openrouter.ai/api/v1/models/user"
+        or not isinstance(user_retrieval.get("http_status"), int)
+        or not 200 <= user_retrieval["http_status"] < 300
+        or user_retrieval.get("text_decoding") != "utf-8"
+        or user_retrieval.get("json_parse_outcome") != "parsed"
+        or not isinstance(retrieval_sha256, str)
+        or len(retrieval_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in retrieval_sha256)
+        or isinstance(retrieval_bytes, bool)
+        or not isinstance(retrieval_bytes, int)
+        or retrieval_bytes <= 0
+        or endpoint_identity
+        != (
+            selected.get("model_id"),
+            selected.get("tag"),
+            selected.get("provider_name"),
+        )
+        or endpoint_identity
+        != (
+            zdr_selected.get("model_id"),
+            zdr_selected.get("tag"),
+            zdr_selected.get("provider_name"),
+        )
+        or selected.get("pricing") != zdr_selected.get("pricing")
+    ):
+        raise RuntimeError("run lacks exact authenticated ZDR routing proof")

@@ -1,0 +1,29 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 1,
+  "complexity": "medium",
+  "created_at": "2026-07-05T04:02:11Z",
+  "created_by": "agent:claire-orchestrator",
+  "custom_fields": {},
+  "description": "Discovered by the DB-8 implementer's dry runs. The frozen suite (suites/v1.json, 120 forms by 29 dialects, payload hashes, rerun gate) has no eval-time consumer. single_lof_task and composite_lof_task generate forms live from a seed, so a run today produces different forms than the frozen table (verified: live lof_001 differs from suite v1's lof_001) and stamps suite_version adhoc. Until fixed, every run is pilot-grade and the headline sensitivity score cannot claim suite v1.\n\nScope: add a suite parameter to the tasks (for example -T suite=v1 -T dialect=parens.noisy-v1) that loads the frozen id-to-form table and the named dialect spec through the suite loader (threading suite_version into DialectSpec, which already exists in src/lofbench/suites.py), verifies payload hashes before any model call (the rerun gate), and stamps true suite provenance into sample metadata. The dataset factory path must use the frozen forms, not the generator. Also decide and record the flagship core subset (a fixed form_id list per docs/measurement-design.md section 7) inside the suite file, which the DB-8 release skill needs.\n\nThe bench-release skill (DB-8) hard-refuses v1 releases until this lands.",
+  "done_at": null,
+  "evidence_refs": [],
+  "id": "task_01KWR71QNPFPE5KA4Y34GKZH84",
+  "last_event_id": "ev_01KZH2BXJ4QC5GSAV3JNFVGFRK",
+  "last_status_changed_at": "2026-07-05T04:02:11Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-10",
+  "status": "backlog",
+  "tags": [
+    "pipeline",
+    "measurement"
+  ],
+  "title": "Suite-driven evaluation: make inspect tasks consume suites/v1.json",
+  "type": "task",
+  "updated_at": "2026-08-08T16:12:46Z",
+  "urgency": null
+}

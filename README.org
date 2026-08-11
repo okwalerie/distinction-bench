@@ -4,8 +4,23 @@ This repository contains the Distinction Benchmark and the Laws of Form benchmar
 
 ** Installation
 #+begin_src bash
-uv sync
+uv sync --group dev
 #+end_src
+
+for non-authoritative local visual development on ubuntu/debian:
+
+#+begin_src bash
+sudo apt-get update && sudo apt-get install -y libcairo2 libpango-1.0-0
+uv sync --group dev --extra visual
+uv run pytest -m requires_visual_runtime
+#+end_src
+
+local cairo/pango packages are useful for smoke tests, but their png bytes are
+platform-dependent and are *not* the frozen hash authority. authoritative v1
+verification builds =.github/visual-runtime/Containerfile= and runs the preflight,
+11,600-cell replay, and marked visual tests exactly as specified in
+=.github/workflows/ci.yml=. see =docs/visual-authority-runtime.md= for the pinned
+runtime and local reproduction commands.
 
 ** Usage
 #+begin_src python
@@ -25,32 +40,14 @@ print(canonical_string("()()"))  # "()"
 
 ** Running Evaluations
 
-This benchmark uses [[https://inspect.aisi.org.uk/][inspect-ai]] for model evaluation.
+Public runs use the release operator, which plans against the packaged frozen suite,
+persists provider evidence before accounting, and is dry by default.
 
 #+begin_src bash
-# Run single expression task (10 samples)
-uv run inspect eval src/lofbench/tasks/single.py --model anthropic/claude-sonnet-4-20250514 -T n=10
-
-# Run composite task (multiple expressions per sample)
-uv run inspect eval src/lofbench/tasks/composite.py --model openai/gpt-4o -T n_groups=20
-
-# Use noisy bracket substitution
-uv run inspect eval src/lofbench/tasks/single.py --model anthropic/claude-sonnet-4-5-20251101 -T renderer=noisy_parens
-
-# View results in browser
-uv run inspect view
+uv run python -m dbench --help
 #+end_src
 
-*** Task Parameters
-
-| Parameter     | Task      | Description                          | Default |
-|---------------+-----------+--------------------------------------+---------|
-| =n=           | single    | Number of test cases                 |     100 |
-| =n_groups=    | composite | Number of expression groups          |     100 |
-| =group_size=  | composite | Expressions per group                |       8 |
-| =seed=        | both      | Random seed for reproducibility      |    2025 |
-| =renderer=    | both      | Renderer name (canonical, noisy_parens) | canonical |
-| =render_seed= | both      | Seed for renderer randomness         |    None |
+Do not invoke Inspect directly for public release data.
 
 ** Laws of Form
 
@@ -60,4 +57,3 @@ Spencer-Brown's Laws of Form defines a minimal calculus with two axioms:
 - *I2 (Crossing)*: =(()) → void= — Nested mark cancels to void (aka, not represented)
 
 Every expression reduces to either =()= (marked) or =void= (unmarked).
-

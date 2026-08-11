@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from lofbench.core import string_to_form
 
-from .base import FormRenderer, RenderedForm
+from .base import FormRenderer, RenderedForm, merge_config_kwargs
 
 
 @dataclass
@@ -43,10 +43,7 @@ class NestedListRenderer(FormRenderer):
             **kwargs: Override config values (e.g., spacing=True).
         """
         self.config = config or NestedListConfig()
-
-        for key, value in kwargs.items():
-            if hasattr(self.config, key):
-                setattr(self.config, key, value)
+        merge_config_kwargs(self.config, kwargs)
 
     @property
     def name(self) -> str:

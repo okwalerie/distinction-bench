@@ -6,6 +6,8 @@ from .lof_scorer import (
     lof_composite_scorer,
     lof_single_scorer,
     normalize_to_parens,
+    parse_protocol_answer,
+    public_protocol_scorer,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "extract_single_answer",
     "extract_composite_answer",
     "normalize_to_parens",
+    "parse_protocol_answer",
+    "public_protocol_scorer",
 ]

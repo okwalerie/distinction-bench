@@ -18,6 +18,23 @@ class RenderedForm:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+def merge_config_kwargs(config: Any, kwargs: dict[str, Any]) -> None:
+    """Apply CLI-style kwargs overrides onto a renderer's config object.
+
+    Shared by the five legacy renderers (``canonical``, ``noisy_parens``,
+    ``sexpr``, ``nested_list``, ``svg_circle``), replacing their five
+    copy-pasted ``for key, value in kwargs.items(): if hasattr(...): ...``
+    loops -- the plan's M5 "shared config-merge helper on the base" item.
+    Silently ignores a kwarg that does not name an existing config
+    attribute (matching the loops' prior behaviour exactly), so an
+    ``inspect eval -T`` typo is not a new hard failure introduced by this
+    refactor.
+    """
+    for key, value in kwargs.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
+
+
 class FormRenderer(ABC):
     """Abstract base class for form renderers.
 

@@ -1,0 +1,32 @@
+{
+  "assigned_to": null,
+  "branch_links": [],
+  "comment_count": 2,
+  "complexity": null,
+  "created_at": "2026-07-05T01:56:00Z",
+  "created_by": "agent:claire-impl-db3",
+  "custom_fields": {},
+  "description": null,
+  "done_at": "2026-07-05T03:49:47Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWR6B1A3J44J65B1YZ44VXNX",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQZTP3GCXP6TGBDE47KAADW",
+  "last_event_id": "ev_01KWR6B1HF2BWA2JMMT0PX34YD",
+  "last_status_changed_at": "2026-07-05T03:49:47Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-9",
+  "status": "done",
+  "tags": null,
+  "title": "lofsite sandbox fan-out breaks on spatial dialects before DB-4 M5's emit() lands",
+  "type": "task",
+  "updated_at": "2026-07-05T03:49:47Z",
+  "urgency": null
+}

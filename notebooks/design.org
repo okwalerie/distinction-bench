@@ -1,0 +1,109 @@
+#+title: Distinction Bench Design Notes
+#+date: <2025-12-15 Sun>
+#+author: Valerie Kim
+
+* Renderer Architecture Discussion
+
+** Problem: Current Config-Per-Renderer Doesn't Scale
+
+Current approach:
+- =CanonicalRenderer(spacing=True)=
+- =NoisyParensRenderer(mismatched=True)=
+
+Issues:
+1. Independent variables don't compose (can't do =noisy_parens + spacing=)
+2. 9+ dialects × N modifiers = combinatorial explosion
+3. Future Penrose integration needs structure/style separation
+
+** Representation Dialects (Roadmap)
+
+Spatial dialects for visual reasoning evaluation:
+1. parens (current) - text: =(())()=
+2. paths - visual paths/curves
+3. blocks - nested rectangles
+4. enclosures - nested circles/shapes
+5. trees - tree diagrams
+6. graphs - node/edge graphs
+7. centered maps - radial layouts
+8. rooms - spatial containment
+
+** Architectural Options Considered
+
+*** Option A: Pipeline with Transform Chain
+
+#+begin_src
+form → Dialect.to_intermediate(form) → [Transform1, Transform2, ...] → output
+#+end_src
+
+- Each dialect converts form to intermediate repr
+- Transforms modify the intermediate repr
+- Final render produces output (text/image)
+
+*** Option B: Penrose-Inspired (Domain/Substance/Style)
+
+#+begin_src
+Domain:    LoF calculus (already in core.py)
+Substance: Specific form instance + dialect choice
+Style:     Composable styling rules (spacing, noise, colors)
+#+end_src
+
+- Clean separation, proven in Penrose
+- Style rules can be combined declaratively
+- Natural fit for constraint-solving renderers
+
+*** Option C: Component Registry
+
+#+begin_src python
+RenderSpec(
+    dialect="parens",
+    modifiers=["spacing", "bracket_noise"],
+    modifier_config={"bracket_noise": {"mismatched": True}}
+)
+#+end_src
+
+- Explicit composition
+- Easy to serialize for CLI
+
+** Current Thinking: N-ary Tree as Canonical Intermediate
+
+The most computationally tractable canonical representation is the n-ary tree.
+This already exists in =core.py= as nested lists.
+
+#+begin_src
+Form string → N-ary tree → Dialect transform → Modifiers → Output
+"(())()"   → [[[]], []]  → layout/tokenize   → spacing   → SVG/text
+#+end_src
+
+Intermediate representations by dialect family:
+- Text dialects: =TokenStream= (list of tokens with depth/position)
+- Visual dialects: =LayoutTree= (nodes with x, y, width, height)
+
+** Open Questions
+
+1. How to handle dialect-specific vs universal modifiers?
+2. Should we use constraint-based intermediate for visual dialects?
+3. inspect-ai image handling: base64 inline or temp files?
+4. How does Penrose fit in? Domain/Substance/Style separation?
+
+** References
+
+- Penrose: https://penrose.cs.cmu.edu/
+- Laws of Form: Spencer-Brown (1969)
+- inspect-ai: https://inspect.aisi.org.uk/
+
+* Implementation Status
+
+** Completed (2025-12-15)
+
+- [X] Migrate to inspect-ai framework
+- [X] Renderer system with =canonical= and =noisy_parens=
+- [X] Config kwargs support (=-T mismatched=true=, =-T spacing=true=)
+- [X] Uniform difficulty distribution with =DIFFICULTY_CONFIGS=
+- [X] Task-level metadata for difficulty info
+
+** Next Steps (TBD)
+
+- [ ] Decide on architecture for multi-dialect system
+- [ ] Implement first image-based dialect (svg_blocks?)
+- [ ] Refactor text renderers to use =TokenStream= intermediate
+

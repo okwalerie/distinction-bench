@@ -1,0 +1,101 @@
+#+title: Measurement
+
+
+* Thoughts: At what % performance is a benchmark considered "saturated"? I believe this 
+benchmark should be quite strict, but having a gradual increase does help with 
+readability. How about we model this out? Ultimately this benchmark, by measuring 
+the ability to perceive and work with a simple formal system across many different 
+dialects, is probing for the simplest form of *general abstraction*, and not 
+pattern matching. What basic equation is most appropriate? I believe logs or some 
+connection to information should be present in here, possibly. At capability X=0 
+(random guessing), rating Y should be 0 or close to 0. As capability X approaches 
+99 or 100, rating Y should be close to 100. To quote Sayama on his textbook of 
+modeling complex systems; 
+When you create a model of a complex system, you typically need to think about the 
+following:
+
+1. What are the key questions you want to address?
+
+
+2. To answer those key questions, at what scale should you describe the behaviors 
+of the system’s components? These components will be the “microscopic” components 
+of the system, and you will define dynamical rules for their behaviors.
+
+
+3. How is the system structured? This includes what those microscopic components 
+are, and how they will be interacting with each other.
+
+
+4. What are the possible states of the system? This means describing what kind of 
+dynamical states each component can take.
+
+
+5. How does the state of the system change over time? This includes defining the 
+dynamical rules by which the components’ states will change over time via their 
+mutual interaction, as well as defining how the interactions among the components 
+will change over time.A good model is simple, valid, and robust.
+ I believe this capability for general abstraction is a necesssary (though possibly
+ not sufficient) quality for general intelligence. Failure on unseen dialects (that
+ are considered to be self-evident for humans) should be diagnostic of brittle 
+pattern matching and thus ultimately fail. Hmmm.. 
+
+* ● This is a deep question. Let me work through it systematically using Sayama's framework.
+
+  Key question: Can the model abstract over surface syntax to apply formal rules consistently?
+
+  Microscopic component: Per-item binary classification (marked/unmarked)
+
+  System structure: n items × k epochs × m dialects
+
+  States: Correct/incorrect per item
+
+  Dynamics: How does capability translate to observed performance?
+
+  ---
+  Information-theoretic rating:
+
+  For binary classification with accuracy p, the mutual information between true label Y and prediction Ŷ is:
+
+  I(Y;Ŷ) = 1 - H_binary(error_rate)
+         = 1 - H(1-p)
+         = 1 + p·log₂(p) + (1-p)·log₂(1-p)
+
+  This gives us a natural rating:
+
+  Rating = 100 × (1 - H_binary(1-p))
+
+  | Per-item p | H(error) | Rating | Interpretation         |
+  |------------|----------|--------|------------------------|
+  | 50%        | 1.000    | 0      | Random, 0 bits learned |
+  | 60%        | 0.971    | 2.9    | Barely above noise     |
+  | 70%        | 0.881    | 11.9   | Weak signal            |
+  | 80%        | 0.722    | 27.8   | Some capability        |
+  | 90%        | 0.469    | 53.1   | Moderate               |
+  | 95%        | 0.286    | 71.4   | Good                   |
+  | 99%        | 0.081    | 91.9   | Strong                 |
+  | 99.9%      | 0.011    | 98.9   | Near-human             |
+  | 100%       | 0.000    | 100    | Perfect                |
+
+  Properties:
+  - 0 at random (50%), 100 at perfect
+  - Log-based, connected to information
+  - Emphasizes the "last mile" - going from 99% to 99.9% is harder than 70% to 80%
+  - Interpretable: "% of maximum information extracted"
+
+  ---
+  For the benchmark specifically:
+
+  The composite all_correct with epochs tests consistency of abstraction. A model that pattern-matches will:
+  - Succeed on familiar dialects
+  - Fail on unfamiliar dialects
+  - Show high variance across epochs
+
+  We could report:
+  1. Raw per-item accuracy (diagnostic)
+  2. Information Rating (primary, 0-100 scale above)
+  3. Dialect consistency (variance across renderer types)
+
+  A model failing on "self-evident" unseen dialects (e.g., ⟨⟩ instead of ()) would show high rating on canonical but low on noisy_parens - diagnostic of brittle pattern matching.
+
+  Does this framing resonate with what you're thinking about general abstraction?
+

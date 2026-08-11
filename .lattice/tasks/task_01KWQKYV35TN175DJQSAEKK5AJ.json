@@ -1,0 +1,68 @@
+{
+  "assigned_to": "agent:claire-impl-db4",
+  "branch_links": [
+    {
+      "branch": "feat/DB-4-pipeline-m1-m2",
+      "linked_at": "2026-07-05T00:58:48Z",
+      "linked_by": "agent:claire-impl-db4",
+      "repo": null
+    },
+    {
+      "branch": "feat/DB-4-pipeline-m3-m5",
+      "linked_at": "2026-07-05T01:45:55Z",
+      "linked_by": "agent:claire-impl-db4b",
+      "repo": null
+    }
+  ],
+  "comment_count": 15,
+  "complexity": "medium",
+  "created_at": "2026-07-04T22:28:33Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Read .lattice/notes/design-decisions-2026-07-04.md first. It binds this task. This task is load-bearing: DB-2 and DB-3 build on it.\n\nDesign the two-layer rendering architecture:\n1. Archetype generators produce the most-abstracted rendering of a form in each dialect family.\n2. Variation injectors compose on top: layout jitter, symbol substitution, whitespace noise, style changes, distractor content. Endless variations per family come from injection, not from new renderers.\n\nRequirements:\n- the existing registry keeps working: inspect task parameters like -T renderer=... still resolve, and a composed pipeline is expressible there (spec string or config dict \u2014 decide and justify)\n- same seed plus same spec always gives identical output\n- RenderedForm.metadata records the ordered chain of archetype and injectors with per-stage config, so analysis can attribute effects\n- containment structure is preserved at every stage and asserted between stages\n- the existing 5 renderers keep working unmodified or behind a thin adapter\n- the design must serve both text and image outputs",
+  "done_at": "2026-07-05T03:49:46Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWQTJBE5YD8VFQTFDJ1EHEZG",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KWQXED8SFDY5HM5R7JVJZ5QT",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KWR0GYBBC5AJF5M3ZM9FC1HB",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KWR5Z7GQATF9CNBKVVRG1WEN",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KWR63Y49EMHPTNXZ7Z1E3VBG",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQKYV35TN175DJQSAEKK5AJ",
+  "last_event_id": "ev_01KWR6AZY7QNKDES9B6BT2WP2X",
+  "last_status_changed_at": "2026-07-05T03:49:46Z",
+  "priority": "high",
+  "relationships_out": [],
+  "reopened_count": 2,
+  "schema_version": 1,
+  "short_id": "DB-4",
+  "status": "done",
+  "tags": [
+    "dialects",
+    "architecture"
+  ],
+  "title": "Two-layer rendering architecture: family archetypes plus variation injectors",
+  "type": "task",
+  "updated_at": "2026-07-05T03:49:46Z",
+  "urgency": null
+}

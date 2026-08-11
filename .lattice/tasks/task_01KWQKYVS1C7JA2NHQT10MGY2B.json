@@ -1,0 +1,42 @@
+{
+  "assigned_to": "agent:claire-impl-db7",
+  "branch_links": [
+    {
+      "branch": "spike/DB-7-measurement-doc",
+      "linked_at": "2026-07-05T01:00:53Z",
+      "linked_by": "agent:claire-impl-db7",
+      "repo": null
+    }
+  ],
+  "comment_count": 5,
+  "complexity": "low",
+  "created_at": "2026-07-04T22:28:34Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Read .lattice/notes/design-decisions-2026-07-04.md first. It binds this task.\n\nWrite the measurement design doc the release skill (DB-8) and every run follows. Cover:\n\n- the headline metric: per-model sensitivity score, defined as the paired accuracy drop against the canonical dialect over the frozen suite\n- paired design: same forms through every dialect, within-item comparison, McNemar tests, bootstrap confidence intervals over items\n- suite freezing: suite v1 fixes dialects, forms and seeds; scores always report per suite version\n- sampling: one sample per (form, dialect, model); document the retirement of the old k=3, 4-expressions-per-sample, all-pass design and why scores break across that change\n- sample size: confidence interval maths and a power argument for the paired design; concrete n per cell\n- model grid, 4 tiers: cheap closed (full suite), 2 to 3 flagships (frozen core), open-weight via OpenRouter, reasoning-toggle pairs\n- a worked budget sheet showing a full release run within 100 US dollars, stretch 150, using batch APIs at half price and gating visual dialects to cheap multimodal models first\n- open questions section: prompt anchoring (parens examples in the system prompt; mixed brackets like [()] outperform (()); notation-neutral prompts make models default to parens) as a candidate ablation\n\nGround cost numbers in observed token usage from logs/ and notebooks/data-history, not guesses. Reconcile with notebooks/measurement.org. Put the doc where DB-8 can cite it (suggest docs/).",
+  "done_at": "2026-07-05T01:14:50Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWQXF6R1S3Z8FWYZYBS5MDHB",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQKYVS1C7JA2NHQT10MGY2B",
+  "last_event_id": "ev_01KWQXFAP6WXR295PN426CHF3H",
+  "last_status_changed_at": "2026-07-05T01:14:50Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-7",
+  "status": "done",
+  "tags": [
+    "methodology",
+    "docs"
+  ],
+  "title": "Measurement design doc: sensitivity score, frozen suite v1, budget sheet",
+  "type": "spike",
+  "updated_at": "2026-07-05T01:14:50Z",
+  "urgency": null
+}

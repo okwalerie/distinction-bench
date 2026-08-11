@@ -1,0 +1,229 @@
+{
+  "assigned_to": "agent:codex-root",
+  "branch_links": [
+    {
+      "branch": "feat/public-v1-release",
+      "linked_at": "2026-08-08T15:18:11Z",
+      "linked_by": "agent:codex-root",
+      "repo": null
+    }
+  ],
+  "comment_count": 74,
+  "complexity": null,
+  "created_at": "2026-08-08T15:18:11Z",
+  "created_by": "agent:codex-root",
+  "custom_fields": {},
+  "description": null,
+  "done_at": null,
+  "evidence_refs": [
+    {
+      "id": "ev_01KZH4C7KD3P229HYTT6T8SJYB",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZH6RZGGR5WG58NEXTS0NYPJ",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZH8TWFVZ5Q0QQX41W8B15K4",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHAG8MN3XV1KVVKFT62M6XE",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHD2KCS0N6MHCW1JHJJ90HA",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHGKGHRFYNJ97QT9NJ3ABME",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHKZ0S8T9XFBA4DYN8NK178",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHQ09SFRXEYKPVMFE8AHE8N",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHRWA2VW17EC9A5Y56FA3C4",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHTMTK55MJHW0H9NMQH21EB",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHTQWFFC6HEF2V37NAS82KE",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZHZR7TDT9ZE1NHVPWZMRXC2",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJ28A489CWBTWVRMXYXSS4M",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJ3N1AZD10JW6435DKG5KFT",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJ5K7GT5S9JWY6NFPZERW9Y",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJ7FF2HAYDXY6AB2DT9MDN4",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJ8G32XGJR26BT7JZFKFTSX",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJ9DFVBGEABRQ0SNW8WBEAF",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJAW5W0YWG5GCEMZ41B5BV0",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJD23Z8P5V0ETYZ21G3T1EQ",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJFHXH5E7GRV864CCRXZ4KJ",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJJ3CSAGANQAAS5Z8NHY96X",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJJVGKMTTCJGF3XYFV9DKWH",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZJKNBBRX3AEHYJKS2GZY7Q5",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZR7VQHPT4VP8A2NWFPZ4BSP",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZR83XXD4M1D1YYHCD0GYBBQ",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRAHYW7B46QV3MVA1ZTG8ZV",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRE7Y0VYM9VHRD7DQSARKFC",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRE7Y5RVEJY9DN3NE8J2NP0",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRFNYD993MPXS6EQJ9J19RQ",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRFNYHHBQ8RMHB7C4EGVEG2",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRGBMYWAY62D3NZB360SJ1V",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRGBN4135SD36FHD6GRAVSB",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRGZYBTSMKRMBYJD2K0D1Q2",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRH3AYMFYMXNP6459GXH2VT",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRNKMB8TXSXAN873X8S2XR8",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRR6H2Q295KN2ZNGGY9M9ZE",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRRKXMSVNWQ8D6EVYR230HA",
+      "role": "review",
+      "source_type": "comment"
+    },
+    {
+      "id": "ev_01KZRS50CRNXYH528NEVQ20WM8",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KZGZ7YTE0GCWF9E29XZVJP17",
+  "last_event_id": "ev_01KZRWKAGB71JKQYQ1XQZEDTCF",
+  "last_status_changed_at": "2026-08-11T17:05:53Z",
+  "priority": "medium",
+  "relationships_out": [],
+  "reopened_count": 31,
+  "schema_version": 1,
+  "short_id": "DB-14",
+  "status": "review",
+  "tags": null,
+  "title": "ship the public v1 benchmark, gallery, and model sweep",
+  "type": "task",
+  "updated_at": "2026-08-11T17:05:53Z",
+  "urgency": null
+}

@@ -1,0 +1,55 @@
+** Val
+You're literally interpret ability pilled
+
+I wrote a pretty good research statement this week In fact it's been a revelatory week for me in preparing it
+But idk if it is woke or broke
+I need more perspectives and you're legitimately a professional AI interpretability researcher
+
+Could I ask for your thoughts, reactions, musings, suspicions about it?
+
+<pasted research statement>
+<pasted visual examples>
+1. The axioms
+2. A quick reduction example
+3. A map of visual dialects
+4. Visual perturbation examples
+5. Proof its learnable by kindergardeners
+6. Detailed view of more unusual 'experiential' room/path dialects
+
+This is kinda like the simplest but broadest eval; a basic measure for true semantic generalization
+
+** Nicky
+> 1. Systematically generate LoF variants across modalities (text, diagrams, code, images) to map where internal computation is format-stable vs where it collapses under benign encoding changes.
+   
+yeah seems like a pretty good idea ngl, seems like a good evaluation.
+
+> 2. Use probing/activation-patching to characterize what latent procedures models actually run on these tasks — do they have a stable circuit or are they pattern-matching?
+
+worth trying, idk I suspect it will kinda hard to get anything too interesting here in a short amount of time. I think interp in general is probably at the state where you could get some evidence but would be hard to that much definitively. Maybe recent SPD method can get some results, but in general I think interp is still kind of stuck at "i think it works this way -> try to probe if it works this way -> get some result (sometimes false positive)" so you could maybe train a probe for "LLM can see double boundary that can be cleared vs not" or similar but idk.
+
+> 3. Test whether standard monitors detect when models switch from rule-following to heuristic shortcuts. This is directly relevant to encoded reasoning detection.
+
+also worth trying, i guess still think it will be kinda hard to do in practice but might get some simple things.
+
+> 4. Evaluate lower bounds on structured steganography. If a model cannot preserve a bit of logical truth across benign format shifts, this establishes lower bounds on its capacity to maintain robust steganographic recordings.
+
+not completely sure how you plan to test this. I think LoF between different formats might show some evidence but idk whether would be completely conclusive / generalisable
+
+> 5. Experiment with self-play dialect generation. LoF is self-evidential; rules are inducible from visual examples alone, no verbal spec needed. I want to investigate whether models can learn to communicate encoded reasoning through novel, RL-generated LoF dialects that may appear opaque to human observers but contain valid logical reductions. This directly probes whether models can develop hidden channels under optimization pressure.
+
+seems worth trying, RL is really annoying to do well in general, but depending on how you set it up could get some interesting results but also could just get a lot of headache with things not generalising or whatever idk. worth thinking about but probably further down the line
+
+6. Extend to known LoF variants and symbolic morphisms (BF calculus ~ modal logic, uForm/iForm ~ paraconsistent logic) to check generalization across axiomatic families.
+
+Idk enough about these to comment, testing generalisation seems good in general though
+
+overall I like the idea though, seems worth doing
+** Val
+
+thank you! I need to write up a blog post about this today, so that is the goal
+I think there is something really profound and valuable here
+12m
+
+** Nicky
+yeah, potentially interested in collaborating if you need any help
+

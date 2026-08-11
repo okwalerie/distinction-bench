@@ -1,0 +1,57 @@
+{
+  "assigned_to": "agent:claire-impl-db8",
+  "branch_links": [
+    {
+      "branch": "feat/DB-8-release-skill",
+      "linked_at": "2026-07-05T04:01:18Z",
+      "linked_by": "agent:claire-impl-db8",
+      "repo": null
+    }
+  ],
+  "comment_count": 2,
+  "complexity": "medium",
+  "created_at": "2026-07-04T22:28:34Z",
+  "created_by": "human:valerie",
+  "custom_fields": {},
+  "description": "Read .lattice/notes/design-decisions-2026-07-04.md first. It binds this task.\n\nReleases are manual and happen when a new model ships. A person approves each run because runs cost money.\n\nWrite a Claude Code skill (SKILL.md in this repo) that walks the operator through:\n1. Confirm the new model's id, provider and reasoning-toggle options.\n2. Produce the cost sheet from the measurement doc (DB-7) and get approval before spending.\n3. Run the evaluation grid with batch APIs.\n4. Run the data pipeline (DB-5).\n5. Rebuild and redeploy the site (DB-6).\n6. Compare results with earlier suite-version runs as a sanity check.\n7. Draft the release writeup for Valerie's external platform: what the new model did, surprises, one or two transcript exhibits.\n\nDepends on DB-5 and DB-7.",
+  "done_at": "2026-07-05T04:10:54Z",
+  "evidence_refs": [
+    {
+      "id": "ev_01KWR7HJQ3R2KP9AKWQDF068Q5",
+      "role": "review",
+      "source_type": "comment"
+    }
+  ],
+  "id": "task_01KWQKYW057NWY5H7PP5TJK5CP",
+  "last_event_id": "ev_01KWR7HPYJVRQE1NCPGE1GBJPE",
+  "last_status_changed_at": "2026-07-05T04:10:54Z",
+  "priority": "low",
+  "relationships_out": [
+    {
+      "created_at": "2026-07-04T22:28:41Z",
+      "created_by": "human:valerie",
+      "note": null,
+      "target_task_id": "task_01KWQKYVADQNEXNR6HSBPEVFBV",
+      "type": "depends_on"
+    },
+    {
+      "created_at": "2026-07-04T22:28:41Z",
+      "created_by": "human:valerie",
+      "note": null,
+      "target_task_id": "task_01KWQKYVS1C7JA2NHQT10MGY2B",
+      "type": "depends_on"
+    }
+  ],
+  "reopened_count": 0,
+  "schema_version": 1,
+  "short_id": "DB-8",
+  "status": "done",
+  "tags": [
+    "automation",
+    "skill"
+  ],
+  "title": "Release-cadence skill: new-model-drop to refreshed charts",
+  "type": "task",
+  "updated_at": "2026-07-05T04:10:54Z",
+  "urgency": null
+}

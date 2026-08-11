@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from .base import FormRenderer, RenderedForm
+from .base import FormRenderer, RenderedForm, merge_config_kwargs
 
 
 @dataclass
@@ -35,11 +35,7 @@ class CanonicalRenderer(FormRenderer):
             **kwargs: Override config values (e.g., spacing=True).
         """
         self.config = config or CanonicalConfig()
-
-        # kwargs override config values
-        for key, value in kwargs.items():
-            if hasattr(self.config, key):
-                setattr(self.config, key, value)
+        merge_config_kwargs(self.config, kwargs)
 
     @property
     def name(self) -> str:
