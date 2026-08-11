@@ -208,7 +208,16 @@ def _sample_publication(publication):
                 "dialect_accuracy": f'{{"enclosure.plain-v1": {competence}}}',
             }
         )
-    return replace(populated, profiles=tuple(reversed(profiles))), private_values
+    return replace(
+        populated,
+        sample_contract={
+            "protocol_ids": [value[0] for value in values],
+            "dialect_id": "enclosure.plain-v1",
+            "execution_surface": "direct_api",
+            "trials_per_run": 5,
+        },
+        profiles=tuple(reversed(profiles)),
+    ), private_values
 
 
 class _AccessibilityParser(HTMLParser):
@@ -348,7 +357,8 @@ def test_populated_results_render_only_comprehensible_aggregates(site_publicatio
     build_site(publication, output)
     runs = (output / "runs.html").read_text()
     for marker in (
-        "four-protocol by five-form smoke test",
+        "aggregate scope",
+        "1 resolved model, 1 protocol, 5 observations across 1 profile",
         "how these rows are derived",
         "competence + invariance profiles",
         "aggregate resource use",
@@ -362,6 +372,17 @@ def test_populated_results_render_only_comprehensible_aggregates(site_publicatio
         "0.0125",
     ):
         assert marker in runs
+    presentation = (output / "presentation.html").read_text()
+    index = (output / "index.html").read_text()
+    for page in (index, runs, presentation):
+        assert "one model" not in page
+        assert "one spatial dialect" not in page
+        assert "four protocols" not in page
+        assert "five observations per protocol" not in page
+        assert "the two reduce protocols observed the same result" not in page
+        assert "the two transcription protocols observed the same result" not in page
+    assert "aggregate presentation" in presentation
+    assert "sample presentation" not in presentation
     for private in private_values:
         assert private not in runs
     for marker in (
@@ -391,6 +412,20 @@ def test_populated_results_render_only_comprehensible_aggregates(site_publicatio
         if value is not None
     }
     assert aggregate_values.isdisjoint(private_values)
+
+
+def test_non_sample_populated_profiles_use_only_generic_scope(site_publication, tmp_path: Path):
+    publication, _private_values = _populated_publication(site_publication)
+    publication = replace(publication, sample_contract=None)
+    output = tmp_path / "non-sample"
+    build_site(publication, output)
+    for name in ("index.html", "runs.html", "presentation.html"):
+        page = (output / name).read_text()
+        assert "aggregate scope" in page
+        assert "sample outcome" not in page
+        assert "sample presentation" not in page
+        assert "smoke test" not in page
+        assert "observed the same result" not in page
 
 
 def test_sample_charts_are_aggregate_only_accessible_and_presentation_ready(
@@ -423,8 +458,19 @@ def test_sample_charts_are_aggregate_only_accessible_and_presentation_ready(
         assert "exact outcome values" in page
         assert "exact validity and correctness values" in page
         assert "exact resource values" in page
-        assert "one model, one spatial dialect" in page
+        assert "1 model, 1 spatial dialect, 4 protocols, and n=5 per protocol" in page
         assert "cannot estimate dialect sensitivity, invariance, or controlled effects" in page
+        for exact_value in (
+            "16.6447748",
+            "16.5961298",
+            "17.079903199999997",
+            "17.1427474",
+        ):
+            assert f"<td>{exact_value}</td>" in page
+        for exact_value in ("12", "176", "118.8"):
+            assert f"<td>{exact_value}</td>" in page
+        assert "<td>16.645</td>" not in page
+        assert "<td>118.800</td>" not in page
         offsets = [
             page.index(protocol)
             for protocol in (
@@ -446,6 +492,9 @@ def test_sample_charts_are_aggregate_only_accessible_and_presentation_ready(
     assert "<canvas" not in presentation
     assert "<script" not in presentation
     assert "connect-src 'none'" in presentation
+    assert "sample presentation" in presentation
+    assert "the two reduce protocols observed the same result" in presentation
+    assert "the two transcription protocols observed the same result" in presentation
     assert all(private not in index + results + presentation for private in private_values)
 
 
@@ -458,6 +507,36 @@ def test_empty_profiles_share_an_honest_chart_state(site_publication):
         assert 'role="img"' not in page
         assert ">nan<" not in page.lower()
         assert "nan%" not in page.lower()
+        assert "sample outcome" not in page
+        assert "sample presentation" not in page
+        assert "smoke test" not in page
+        assert "observed the same result" not in page
+
+
+def test_empty_profiles_do_not_activate_sample_copy_from_contract(site_publication, tmp_path: Path):
+    publication = replace(
+        site_publication,
+        sample_contract={
+            "protocol_ids": [
+                "reduce-infer-v1",
+                "reduce-taught-v1",
+                "transcribe-infer-v1",
+                "transcribe-taught-v1",
+            ],
+            "dialect_id": "enclosure.plain-v1",
+            "execution_surface": "direct_api",
+            "trials_per_run": 5,
+        },
+    )
+    output = tmp_path / "empty-with-contract"
+    build_site(publication, output)
+    for name in ("index.html", "runs.html", "presentation.html"):
+        page = (output / name).read_text()
+        assert "no admitted aggregate profiles; charts are not available" in page
+        assert "sample outcome" not in page
+        assert "sample presentation" not in page
+        assert "smoke test" not in page
+        assert "observed the same result" not in page
 
 
 @pytest.mark.parametrize(

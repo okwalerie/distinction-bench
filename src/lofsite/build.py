@@ -9,7 +9,7 @@ import re
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
@@ -237,16 +237,51 @@ class _ChartProfile:
     validity: float
     observed_trials: int
     expected_trials: int
-    mean_latency_seconds: float
+    mean_latency_seconds: Decimal
     input_tokens: int
     output_tokens: int
     cost_usd: Decimal
 
     @property
-    def output_tokens_per_observation(self) -> float | None:
+    def output_tokens_per_observation(self) -> Decimal | None:
         if self.observed_trials == 0:
             return None
-        return self.output_tokens / self.observed_trials
+        return _decimal_divide(Decimal(self.output_tokens), Decimal(self.observed_trials))
+
+
+@dataclass(frozen=True)
+class _ChartScope:
+    model_count: int
+    protocol_count: int
+    profile_count: int
+    observation_count: int
+    sample_n: int | None = None
+    sample_dialect_modality: str | None = None
+
+    @property
+    def is_matching_sample(self) -> bool:
+        return self.sample_n is not None and self.sample_dialect_modality is not None
+
+
+def _decimal_divide(numerator: Decimal, denominator: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = 50
+        context.rounding = ROUND_HALF_EVEN
+        return numerator / denominator
+
+
+def _decimal_multiply(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = 50
+        context.rounding = ROUND_HALF_EVEN
+        return left * right
+
+
+def _decimal_sum(values: list[Decimal]) -> Decimal:
+    with localcontext() as context:
+        context.prec = 50
+        context.rounding = ROUND_HALF_EVEN
+        return sum(values, Decimal("0"))
 
 
 def _chart_text(row: Mapping[str, Any], field: str) -> str:
@@ -278,6 +313,12 @@ def _chart_count(row: Mapping[str, Any], field: str) -> int:
     return value
 
 
+def _chart_decimal(row: Mapping[str, Any], field: str) -> Decimal:
+    value = row.get(field)
+    parsed = _chart_number(row, field)
+    return Decimal("0") if parsed == 0 else Decimal(str(value))
+
+
 def _chart_projection(rows: tuple[Mapping[str, Any], ...]) -> tuple[_ChartProfile, ...]:
     projected = []
     for row in rows:
@@ -286,7 +327,6 @@ def _chart_projection(rows: tuple[Mapping[str, Any], ...]) -> tuple[_ChartProfil
         _chart_count(row, "reasoning_tokens")
         if observed > expected:
             raise RuntimeError("published profile has observed_trials above expected_trials")
-        cost = _chart_number(row, "cost_usd")
         projected.append(
             _ChartProfile(
                 execution_surface=_chart_text(row, "execution_surface"),
@@ -297,10 +337,12 @@ def _chart_projection(rows: tuple[Mapping[str, Any], ...]) -> tuple[_ChartProfil
                 validity=1 - _chart_number(row, "invalid_output_rate", maximum=1),
                 observed_trials=observed,
                 expected_trials=expected,
-                mean_latency_seconds=_chart_number(row, "mean_latency_ms") / 1_000,
+                mean_latency_seconds=_decimal_divide(
+                    _chart_decimal(row, "mean_latency_ms"), Decimal("1000")
+                ),
                 input_tokens=_chart_count(row, "input_tokens"),
                 output_tokens=_chart_count(row, "output_tokens"),
-                cost_usd=Decimal(str(cost)),
+                cost_usd=_chart_decimal(row, "cost_usd"),
             )
         )
     return tuple(
@@ -316,12 +358,66 @@ def _chart_projection(rows: tuple[Mapping[str, Any], ...]) -> tuple[_ChartProfil
     )
 
 
+def _chart_scope(
+    publication: PublicationView,
+    profiles: tuple[_ChartProfile, ...],
+) -> _ChartScope:
+    models = {profile.resolved_model_id for profile in profiles}
+    protocols = [profile.protocol_id for profile in profiles]
+    scope = _ChartScope(
+        model_count=len(models),
+        protocol_count=len(set(protocols)),
+        profile_count=len(profiles),
+        observation_count=sum(profile.observed_trials for profile in profiles),
+    )
+    contract = publication.sample_contract
+    if not isinstance(contract, Mapping) or not profiles:
+        return scope
+    contract_protocols = contract.get("protocol_ids")
+    sample_n = contract.get("trials_per_run")
+    dialect_id = contract.get("dialect_id")
+    execution_surface = contract.get("execution_surface")
+    dialect = publication.suite.specs.get(dialect_id) if isinstance(dialect_id, str) else None
+    if (
+        not isinstance(contract_protocols, list)
+        or not contract_protocols
+        or any(not isinstance(value, str) or not value for value in contract_protocols)
+        or isinstance(sample_n, bool)
+        or not isinstance(sample_n, int)
+        or sample_n <= 0
+        or dialect is None
+        or not isinstance(execution_surface, str)
+        or not execution_surface
+        or len(models) != 1
+        or len(contract_protocols) != len(profiles)
+        or sorted(contract_protocols) != sorted(protocols)
+        or any(
+            profile.observed_trials != sample_n
+            or profile.expected_trials != sample_n
+            or profile.execution_surface != execution_surface
+            for profile in profiles
+        )
+    ):
+        return scope
+    return _ChartScope(
+        model_count=scope.model_count,
+        protocol_count=scope.protocol_count,
+        profile_count=scope.profile_count,
+        observation_count=scope.observation_count,
+        sample_n=sample_n,
+        sample_dialect_modality="text" if dialect.modality == "text" else "spatial",
+    )
+
+
 def _chart_empty_state() -> str:
     return "<p class=notice>no admitted aggregate profiles; charts are not available.</p>"
 
 
 def _decimal_text(value: Decimal) -> str:
-    return format(value.normalize(), "f")
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
 
 
 def _svg_bar(*, x: float, y: float, width: float, css_class: str) -> str:
@@ -423,11 +519,11 @@ def _validity_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> 
 
 
 def _resource_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> str:
-    costs = [profile.cost_usd * 100 for profile in profiles]
+    costs = [_decimal_multiply(profile.cost_usd, Decimal("100")) for profile in profiles]
     latencies = [profile.mean_latency_seconds for profile in profiles]
     outputs = [profile.output_tokens_per_observation for profile in profiles]
     output_values = [value for value in outputs if value is not None]
-    maxima = (max(costs, default=0), max(latencies, default=0), max(output_values, default=0))
+    maxima = (max(costs), max(latencies), max(output_values, default=Decimal("0")))
     panels = (
         ("cost (cents)", costs, maxima[0], lambda value: f"{value:.4f}¢"),
         ("mean latency (seconds)", latencies, maxima[1], lambda value: f"{value:.3f}s"),
@@ -445,7 +541,11 @@ def _resource_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> 
         panel_markup.append(f'<line class=chart-axis x1="{x}" y1="48" x2="{x + 205}" y2="48"/>')
         for row_index, value in enumerate(values):
             y = 74 + row_index * 58
-            width = 0 if value is None or maximum == 0 else (value / maximum) * 190
+            width = (
+                Decimal("0")
+                if value is None or maximum == 0
+                else _decimal_multiply(_decimal_divide(value, maximum), Decimal("190"))
+            )
             panel_markup.append(
                 f'<rect class=chart-track x="{x:.1f}" y="{y:.1f}" '
                 'width="190.0" height="18" rx="2"/>'
@@ -462,17 +562,20 @@ def _resource_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> 
     for profile in profiles:
         output_per_observation = profile.output_tokens_per_observation
         output_display = (
-            "not available" if output_per_observation is None else f"{output_per_observation:.3f}"
+            "not available"
+            if output_per_observation is None
+            else _decimal_text(output_per_observation)
         )
         table_rows.append(
             "<tr>"
             f"<td><code>{_e(profile.protocol_id)}</code></td>"
             f"<td>{_decimal_text(profile.cost_usd)}</td>"
-            f"<td>{profile.mean_latency_seconds:.3f}</td>"
+            f"<td>{_decimal_text(profile.mean_latency_seconds)}</td>"
             f"<td>{output_display}</td>"
+            f"<td>{profile.output_tokens}</td>"
             f"<td>{profile.observed_trials}</td></tr>"
         )
-    total_cost = sum((profile.cost_usd for profile in profiles), Decimal("0"))
+    total_cost = _decimal_sum([profile.cost_usd for profile in profiles])
     total_observations = sum(profile.observed_trials for profile in profiles)
     total_input = sum(profile.input_tokens for profile in profiles)
     total_output = sum(profile.output_tokens for profile in profiles)
@@ -497,13 +600,66 @@ def _resource_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> 
         + "</svg>"
         "<table class=chart-values><caption>exact resource values</caption><thead><tr>"
         "<th>protocol</th><th>cost usd</th><th>mean latency seconds</th>"
-        "<th>output tokens / observation</th><th>observed n</th></tr></thead>"
+        "<th>output tokens / observation</th><th>output tokens</th><th>observed n</th>"
+        "</tr></thead>"
         f"<tbody>{''.join(table_rows)}</tbody></table></figure>"
+    )
+
+
+def _sample_comparison_copy(
+    profiles: tuple[_ChartProfile, ...],
+    scope: _ChartScope,
+) -> str:
+    if not scope.is_matching_sample:
+        return ""
+    by_protocol = {profile.protocol_id: profile for profile in profiles}
+    pairs = (
+        ("reduce-infer-v1", "reduce-taught-v1", "the two reduce protocols"),
+        ("transcribe-infer-v1", "transcribe-taught-v1", "the two transcription protocols"),
+    )
+    equal_pairs = [
+        label
+        for left, right, label in pairs
+        if left in by_protocol
+        and right in by_protocol
+        and by_protocol[left].competence == by_protocol[right].competence
+    ]
+    if not equal_pairs:
+        return ""
+    observed = " and ".join(f"{label} observed the same result" for label in equal_pairs)
+    return (
+        f"<p>{observed}. this descriptive equality does not show that teaching had no effect; "
+        "the sample is too small for a causal conclusion.</p>"
+    )
+
+
+def _counted(count: int, noun: str) -> str:
+    suffix = "" if count == 1 else "s"
+    return f"{count} {noun}{suffix}"
+
+
+def _chart_scope_notice(scope: _ChartScope) -> str:
+    if scope.is_matching_sample:
+        return (
+            "<p class=notice><strong>smoke test:</strong> "
+            f"{scope.model_count} model, 1 {_e(scope.sample_dialect_modality)} dialect, "
+            f"{scope.protocol_count} protocols, and n={scope.sample_n} per protocol. this "
+            "sample cannot estimate dialect sensitivity, invariance, or controlled effects."
+            "</p>"
+        )
+    return (
+        "<p class=notice><strong>aggregate scope:</strong> "
+        f"{_counted(scope.model_count, 'resolved model')}, "
+        f"{_counted(scope.protocol_count, 'protocol')}, "
+        f"{_counted(scope.observation_count, 'observation')} across "
+        f"{_counted(scope.profile_count, 'profile')}. "
+        "these charts are descriptive; interpret uncertainty from the release design.</p>"
     )
 
 
 def _chart_group(
     profiles: tuple[_ChartProfile, ...],
+    scope: _ChartScope,
     *,
     id_prefix: str,
     outcome_only: bool = False,
@@ -513,17 +669,13 @@ def _chart_group(
             f'<section class=chart-group data-chart-group="{_e(id_prefix)}">'
             f"{_chart_empty_state()}</section>"
         )
-    caveat = (
-        "<p class=notice><strong>smoke test:</strong> one model, one spatial dialect, four "
-        "protocols, and five observations per protocol. this sample cannot estimate dialect "
-        "sensitivity, invariance, or controlled effects.</p>"
-    )
     figures = _outcome_figure(profiles, id_prefix=id_prefix)
     if not outcome_only:
         figures += _validity_figure(profiles, id_prefix=id_prefix)
         figures += _resource_figure(profiles, id_prefix=id_prefix)
     return (
-        f'<section class=chart-group data-chart-group="{_e(id_prefix)}">{caveat}{figures}</section>'
+        f'<section class=chart-group data-chart-group="{_e(id_prefix)}">'
+        f"{_chart_scope_notice(scope)}{figures}</section>"
     )
 
 
@@ -758,6 +910,7 @@ def _overview(
     suite: LoadedSuite,
     protocols: dict[str, ProtocolSpec],
     chart_profiles: tuple[_ChartProfile, ...],
+    chart_scope: _ChartScope,
 ) -> str:
     runs = publication.runs
     trials = len(publication.trials)
@@ -775,11 +928,23 @@ def _overview(
         for number, label in metrics
     )
     exemplars = _dialect_exemplar_cards(suite)
-    caveat = (
-        "this is a four-protocol by five-form smoke test, not a model ranking."
-        if publication.sample_contract
-        else "results shown here are aggregate views of admitted bundle records."
-    )
+    if chart_scope.is_matching_sample:
+        caveat = (
+            f"this is an authenticated {chart_scope.protocol_count}-protocol by "
+            f"n={chart_scope.sample_n} smoke test, not a model ranking."
+        )
+        outcome_heading = "sample outcome"
+        outcome_copy = (
+            f"in this one-{chart_scope.sample_dialect_modality}-dialect sample, competence "
+            "equals observed accuracy. percentages are descriptive, not a model comparison."
+        )
+    else:
+        caveat = "results shown here are aggregate views of admitted bundle records."
+        outcome_heading = "aggregate outcomes"
+        outcome_copy = (
+            "competence values are descriptive aggregates. release design and coverage "
+            "determine which comparisons they can support."
+        )
     return (
         "<h1>distinction benchmark</h1>"
         "<p class=lede>an inspectable benchmark of whether a model can preserve laws of form "
@@ -790,10 +955,8 @@ def _overview(
         "<p>competence and representational invariance are reported separately. a model can be "
         "consistently wrong; that does not make it competent. plain and treated dialect effects "
         "are paired only within an archetype.</p>"
-        "<h2>sample outcome</h2>"
-        "<p>in this one-dialect sample, competence equals observed accuracy. percentages are "
-        "descriptive, not a model comparison.</p>"
-        f"{_chart_group(chart_profiles, id_prefix='home', outcome_only=True)}"
+        f"<h2>{_e(outcome_heading)}</h2><p>{_e(outcome_copy)}</p>"
+        f"{_chart_group(chart_profiles, chart_scope, id_prefix='home', outcome_only=True)}"
         "<h2>every dialect, one frozen form</h2>"
         "<p>the same medium probe form is rendered once in each documented dialect; open a card "
         "for its reading rule, provenance, limitations, and all 400 frozen cells.</p>"
@@ -1096,6 +1259,7 @@ def _runs_page(
     profiles: list[dict[str, Any]],
     effects: list[dict[str, Any]],
     chart_profiles: tuple[_ChartProfile, ...],
+    chart_scope: _ChartScope,
 ) -> str:
     suite = publication.suite
     profile_table = _records_table(
@@ -1144,22 +1308,25 @@ def _runs_page(
         ),
     )
     dialect_matrix, family_matrix = _coverage_matrices(suite, profiles)
-    scope = (
-        "this sample is a four-protocol by five-form smoke test (twenty trial observations "
-        "summarized into four aggregate profile rows), not a model ranking."
-        if publication.sample_contract
-        else "all tables are aggregates recomputed from admitted bundle records."
-    )
+    if chart_scope.is_matching_sample:
+        scope = (
+            f"this authenticated sample is a {chart_scope.protocol_count}-protocol by "
+            f"n={chart_scope.sample_n} smoke test ({chart_scope.observation_count} trial "
+            f"observations summarized into {chart_scope.profile_count} aggregate profile "
+            "rows), not a model ranking."
+        )
+    else:
+        scope = "all tables are aggregates recomputed from admitted bundle records."
+    comparison_copy = _sample_comparison_copy(chart_profiles, chart_scope)
     return (
         "<h1>models + aggregate results</h1><p class=lede>api and agent-mediated execution "
         "surfaces remain separate experimental conditions. only recomputed aggregate rows "
         "are published here.</p>"
         f"<p class=notice>{_e(scope)}</p>"
         "<h2>presentation charts</h2>"
-        "<p>all plotted values come from the validated public aggregate profile rows. the two "
-        "reduce protocols observed the same result, as did the two transcription protocols; "
-        "five observations per protocol cannot support a causal claim about teaching.</p>"
-        f"{_chart_group(chart_profiles, id_prefix='results')}"
+        "<p>all plotted values come from the validated public aggregate profile rows.</p>"
+        f"{comparison_copy}"
+        f"{_chart_group(chart_profiles, chart_scope, id_prefix='results')}"
         "<h2>how these rows are derived</h2><p>validated scored observations are grouped by "
         "model, protocol, execution surface, and reasoning setting. competence balances "
         "families; coverage compares observed with planned observations; invariance measures "
@@ -1180,19 +1347,33 @@ def _runs_page(
     )
 
 
-def _presentation(profiles: tuple[_ChartProfile, ...]) -> str:
+def _presentation(profiles: tuple[_ChartProfile, ...], scope: _ChartScope) -> str:
+    if scope.is_matching_sample:
+        heading = "sample presentation"
+        lede = (
+            "three views of the admitted aggregate sample: outcome, valid output versus "
+            "correct result, and resource footprint."
+        )
+        detail = (
+            f"all values are projected only from the public profile rows. this authenticated "
+            f"sample covers {scope.model_count} model and 1 {scope.sample_dialect_modality} "
+            f"dialect, with {scope.protocol_count} protocols and n={scope.sample_n} per "
+            "protocol. competence therefore equals observed accuracy here."
+        )
+    else:
+        heading = "aggregate presentation"
+        lede = (
+            "available aggregate views of outcome, valid output versus correct result, and "
+            "resource footprint."
+        )
+        detail = (
+            "all values are projected only from admitted public profile rows. no "
+            "sample-specific design or result is inferred without a matching sample contract."
+        )
     return (
-        "<h1>sample presentation</h1>"
-        "<p class=lede>three views of the admitted aggregate sample: outcome, valid output "
-        "versus correct result, and resource footprint.</p>"
-        "<p>all values are projected only from the public profile rows. this release covers "
-        "one model and one spatial dialect, with four protocols and five observations per "
-        "protocol. competence therefore equals observed accuracy here.</p>"
-        "<p>the taught and infer variants observed the same result within each task family. "
-        "that does not show that teaching had no effect: this smoke test is too small for a "
-        "causal conclusion and cannot estimate dialect sensitivity, invariance, or controlled "
-        "effects.</p>"
-        f"{_chart_group(profiles, id_prefix='presentation')}"
+        f"<h1>{_e(heading)}</h1><p class=lede>{_e(lede)}</p><p>{_e(detail)}</p>"
+        f"{_sample_comparison_copy(profiles, scope)}"
+        f"{_chart_group(profiles, scope, id_prefix='presentation')}"
     )
 
 
@@ -1327,6 +1508,7 @@ def build_site(publication: PublicationView, out: Path) -> None:
     profiles = [dict(row) for row in publication.profiles]
     effects = [dict(row) for row in publication.effects]
     chart_profiles = _chart_projection(publication.profiles)
+    chart_scope = _chart_scope(publication, chart_profiles)
     downloads = out / "downloads"
     downloads.mkdir()
     for name in _VERBATIM_DOWNLOADS:
@@ -1335,17 +1517,23 @@ def build_site(publication: PublicationView, out: Path) -> None:
         pq.write_table(table, downloads / name, compression="zstd")
     _write(
         out / "index.html",
-        _page("what is tested", _overview(publication, suite, protocols, chart_profiles)),
+        _page(
+            "what is tested",
+            _overview(publication, suite, protocols, chart_profiles, chart_scope),
+        ),
     )
     _write(out / "forms.html", _page("forms + protocols", _forms(suite, protocols)))
     _write(out / "atlas.html", _page("dialect atlas", _atlas(out, suite)))
     _write(
         out / "runs.html",
-        _page("models + runs", _runs_page(publication, profiles, effects, chart_profiles)),
+        _page(
+            "models + runs",
+            _runs_page(publication, profiles, effects, chart_profiles, chart_scope),
+        ),
     )
     _write(
         out / "presentation.html",
-        _page("sample presentation", _presentation(chart_profiles)),
+        _page("presentation", _presentation(chart_profiles, chart_scope)),
     )
     _write(
         out / "human.html",

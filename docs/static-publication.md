@@ -48,6 +48,12 @@ accessible inline svg with adjacent exact-value tables. they use no javascript, 
 chart, external asset, or network request. an empty profile set produces an explicit notice and
 no empty axes.
 
+sample-specific headings, scope, and taught-versus-infer observations are emitted only when the
+authenticated sample contract matches the complete aggregate projection: protocol multiset,
+execution surface, one resolved model, dialect modality, and observed/expected `n`. empty,
+non-sample, partial, or nonmatching projections use generic aggregate copy and never inherit the
+sample's one-model/one-dialect/four-protocol claims.
+
 the results page otherwise publishes only recomputed aggregate profiles, controlled
 effects, accuracy matrices, and aggregate resource use. individual model
 exchanges, execution identifiers, provider envelopes, routing/catalog details,

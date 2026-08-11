@@ -44,7 +44,7 @@ from lofbench.records import (
 from lofbench.release_bundle import ReleaseBundle, _matches_finite_aggregate
 from lofbench.run_models import call_id_for, request_sha256_for, trial_id_for
 from lofbench.suites import DEFAULT_SUITE_REGISTRY, load_suite
-from lofsite.build import build_site
+from lofsite.build import SAFE_DOWNLOADS, build_site, verify_public_site
 
 
 def _provider_envelope(
@@ -1459,7 +1459,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
     build_site(bundle.publication(), bundle.root / "site")
     runs_page = (bundle.root / "site" / "runs.html").read_text()
     for marker in (
-        "four-protocol by five-form smoke test",
+        "authenticated sample is a 4-protocol by n=5 smoke test",
         "how these rows are derived",
         "competence + invariance profiles",
         "aggregate resource use",
@@ -1477,7 +1477,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
         "outcome by protocol",
         "valid output versus correct result",
         "resource footprint",
-        "five observations per protocol",
+        "1 model, 1 spatial dialect, 4 protocols, and n=5 per protocol",
     ):
         assert marker in presentation_page
     assert "no admitted aggregate profiles" not in presentation_page
@@ -1893,6 +1893,14 @@ def _copy_reissue_source(sealed_reissue_source, root: Path):
     return repository, source, state, Path(archive)
 
 
+def _checksums_outside_site(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): sha256(path.read_bytes()).hexdigest()
+        for path in root.rglob("*")
+        if path.is_file() and path.relative_to(root).parts[0] != "site"
+    }
+
+
 @pytest.mark.requires_visual_runtime
 def test_reissue_accepts_only_stale_site_and_preserves_exact_core(tmp_path, sealed_reissue_source):
     repository, source, state, archive = _copy_reissue_source(sealed_reissue_source, tmp_path)
@@ -1932,6 +1940,44 @@ def test_reissue_accepts_only_stale_site_and_preserves_exact_core(tmp_path, seal
     calls = pq.read_table(target / "calls.parquet").to_pylist()
     assert len(calls) == 20
     assert math.fsum(row["observed_cost_usd"] for row in calls) == 0.069506875
+
+    publication = reissued.publication()
+    evidence_before = _checksums_outside_site(target)
+    build_site(publication, target / "site")
+    verify_public_site(publication, target / "site")
+    reissued.validate()
+    assert _checksums_outside_site(target) == evidence_before
+
+    site_files = {
+        path.relative_to(target / "site").as_posix()
+        for path in (target / "site").rglob("*")
+        if path.is_file()
+    }
+    assert len(site_files) == 3_642
+    assert "presentation.html" in site_files
+    presentation = (target / "site" / "presentation.html").read_text()
+    assert "sample presentation" in presentation
+    assert "outcome by protocol" in presentation
+    assert "valid output versus correct result" in presentation
+    assert "resource footprint" in presentation
+    assert {path.name for path in (target / "site" / "downloads").iterdir()} == set(SAFE_DOWNLOADS)
+    for name in ("suite.json", "protocols.json", "human-trial.schema.json"):
+        assert (target / "site" / "downloads" / name).read_bytes() == (target / name).read_bytes()
+    spatial_cells = [cell for cell in publication.suite.cells if cell["modality"] != "text"]
+    assert len(spatial_cells) == 3_600
+    for cell in spatial_cells:
+        assert (target / "site" / "assets" / cell["asset_path"]).read_bytes() == (
+            target / cell["asset_path"]
+        ).read_bytes()
+    assert not {Path(relative).name for relative in site_files} & {
+        "runs.jsonl",
+        "trials.parquet",
+        "calls.parquet",
+        "transcripts.jsonl",
+        "request-started.jsonl",
+        "ledger.jsonl",
+        "release.json",
+    }
 
 
 @pytest.mark.requires_visual_runtime

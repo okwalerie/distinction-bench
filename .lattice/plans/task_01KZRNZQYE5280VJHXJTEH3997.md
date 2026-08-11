@@ -298,3 +298,18 @@ gates; the separate db-14 authority job owns the 11,600-cell raster replay.
 - a new typed sealed sibling and complete audit evidence remain local; only its independently
   reviewed site subtree is deployed; and all relevant source ci/pages checks plus representative
   live urls pass before db-15 is marked done.
+
+## review cycle 1 findings
+
+implementation-level rework is required before source approval:
+
+1. the generic site builder must not make sample-specific claims for empty, non-sample, or
+   fuller profile sets. derive chart scope from the authenticated sample contract and validated
+   aggregate projection, gate sample prose on that scope, and add populated and empty non-sample
+   regressions;
+2. the accessible resource fallback must preserve exact fixed decimal profile values instead of
+   rounding mean latency and output tokens per observation to three decimals;
+3. the real typed reissue acceptance regression must assert `presentation.html`, the exact
+   3,642-file closure, and unchanged evidence, aggregate-download, and spatial-asset boundaries.
+
+## Reset 2026-08-11 by agent:codex-db15-rework
