@@ -7,6 +7,7 @@ one-command boot instructions).
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 from fasthtml.core import FastHTML
@@ -19,9 +20,10 @@ from lofsite.pages.sandbox import sandbox_page, sandbox_results
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_app() -> FastHTML:
-    """Build the FastHTML app instance with all phase-1 routes registered."""
-    app = FastHTML()
+def create_app(secret_key: str | None = None) -> FastHTML:
+    """Build the app without relying on FastHTML's cwd-backed key file."""
+    session_secret = secret_key or os.environ.get("LOFSITE_SECRET_KEY") or secrets.token_urlsafe(32)
+    app = FastHTML(secret_key=session_secret)
     app.static_route_exts(static_path=str(STATIC_DIR))
 
     @app.get("/")

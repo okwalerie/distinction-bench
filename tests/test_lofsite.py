@@ -8,6 +8,7 @@ schema_version checks, chart aggregation, and SVG rendering.
 
 from __future__ import annotations
 
+import importlib
 import json
 
 import pandas as pd
@@ -28,6 +29,24 @@ from lofsite.validation import MAX_CHARS, MAX_DEPTH, validate_form_input
 @pytest.fixture
 def client():
     return TestClient(create_app())
+
+
+def test_app_construction_never_creates_a_cwd_session_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LOFSITE_SECRET_KEY", raising=False)
+
+    app_module = importlib.import_module("lofsite.app")
+    app_module = importlib.reload(app_module)
+
+    assert app_module.app.secret_key
+    assert not (tmp_path / ".sesskey").exists()
+
+
+def test_app_secret_precedence(monkeypatch):
+    monkeypatch.setenv("LOFSITE_SECRET_KEY", "environment-secret")
+
+    assert create_app(secret_key="argument-secret").secret_key == "argument-secret"
+    assert create_app().secret_key == "environment-secret"
 
 
 # ---------------------------------------------------------------------------
