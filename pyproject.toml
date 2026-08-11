@@ -55,6 +55,9 @@ packages = ["src/lofbench", "src/lofsite", "src/dbench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "requires_visual_runtime: needs both the cairosvg optional package and native cairo",
+]
 
 [tool.ruff]
 target-version = "py311"

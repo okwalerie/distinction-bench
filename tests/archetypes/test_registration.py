@@ -20,8 +20,6 @@ Enclosure is out of scope here (DB-4's own M5 migration) -- see
 
 from __future__ import annotations
 
-import ctypes.util
-
 import pytest
 
 from lofbench.renderers.pipeline.registry import ARCHETYPE_REGISTRY
@@ -81,10 +79,7 @@ class TestSpatialEmitWired:
     spatial composed dialect now renders a real PNG data URI instead of
     raising ``NotImplementedError``."""
 
-    @pytest.mark.skipif(
-        ctypes.util.find_library("cairo") is None,
-        reason="native cairo is not installed",
-    )
+    @pytest.mark.requires_visual_runtime
     @pytest.mark.parametrize("dialect_id", sorted(EXPECTED_DIALECT_IDS))
     def test_render_produces_png_data_uri(self, dialect_id):
         from lofbench.renderers import ComposedRenderer

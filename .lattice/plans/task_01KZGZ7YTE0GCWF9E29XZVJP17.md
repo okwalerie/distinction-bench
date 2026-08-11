@@ -1113,3 +1113,23 @@ draft-2020-12 `$schema` uri and its public distinction `$id` uri; both are inert
 identifiers, not navigational links or fetched resources. no other external url string
 is allowed in the snapshot. keep the reviewed site bytes and snapshot unchanged,
 repeat the artifact go/no-go against this exact criterion, then publish only on pass.
+
+## approved github actions recovery
+
+keep the reviewed pages snapshot unchanged. allow only `gh-pages` alongside `main` in
+the github-pages environment and rerun that exact commit. in core ci, fetch complete
+git history because the bounded-lineage regression intentionally proves an old commit,
+and make every raster test use the shared visual-runtime capability check so dev-only
+installs skip before rendering.
+
+the frozen v1 png authority must not be regenerated or relaxed. the rna-arc renderer
+uses an svg text glyph whose png bytes vary across cairo/pango stacks; run the visual
+rerun gate in a checked-in, digest/version-pinned debian 13 authority environment
+matching the renderer used to freeze v1, with exact cairo, pango, fontconfig, dejavu,
+python, and cairosvg versions recorded. add a fast environment preflight so version
+drift fails before the 11,600-cell rerun. retain the ordinary core suite separately.
+
+acceptance: pages deploys the unchanged `1ed1f347` snapshot; core ci passes with full
+history and no visual extra; the pinned visual job reproduces all frozen hashes and
+runs visual tests; no frozen registry or public site byte changes. fresh review is
+required before pushing the ci repair.

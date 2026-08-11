@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import ctypes.util
-import importlib
 import json
 from collections import Counter
-from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
 
 from lofbench.core import DIFFICULTY_CONFIGS, normal_value, string_depth, string_to_form
 from lofbench.renderers import get_renderer
+from lofbench.renderers.runtime import visual_runtime_available
 from lofbench.suites import (
     DEFAULT_SUITE_VERSION,
     EXCLUDED_DIALECT_IDS,
@@ -27,32 +25,11 @@ from lofbench.suites import (
 )
 
 
-def _visual_runtime_available(
-    *,
-    find_library: Callable[[str], str | None] = ctypes.util.find_library,
-    import_module: Callable[[str], object] = importlib.import_module,
-) -> bool:
-    if find_library("cairo") is None:
-        return False
-    try:
-        import_module("cairosvg")
-    except (ImportError, OSError):
-        return False
-    return True
-
-
-HAS_VISUAL_RUNTIME = _visual_runtime_available()
-visual = pytest.mark.skipif(
-    not HAS_VISUAL_RUNTIME,
-    reason="the visual extra or native cairo is not installed",
-)
-
-
 def test_visual_gate_requires_optional_package_when_native_cairo_is_present():
     def missing_package(_name: str) -> object:
         raise ModuleNotFoundError("cairosvg")
 
-    assert not _visual_runtime_available(
+    assert not visual_runtime_available(
         find_library=lambda _name: "libcairo.so",
         import_module=missing_package,
     )
@@ -197,7 +174,7 @@ class TestCells:
         ]
 
 
-@visual
+@pytest.mark.requires_visual_runtime
 class TestFreezeLoadAndVerify:
     def test_small_round_trip(self, tmp_path):
         path = tmp_path / "test-suite.json"

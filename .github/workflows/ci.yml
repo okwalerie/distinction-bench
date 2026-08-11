@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -23,11 +25,29 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-      - name: install cairo runtime
-        run: sudo apt-get update && sudo apt-get install -y libcairo2 libpango-1.0-0
-      - run: uv sync --frozen --group dev --extra visual --extra site
-      - run: uv run python -m lofbench.suites --verify-only
-      - run: uv run pytest -q
+      - name: build frozen visual authority runtime
+        run: docker build --file .github/visual-runtime/Containerfile --tag dbench-visual-authority .
+      - name: preflight visual authority runtime
+        run: >-
+          docker run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace:ro"
+          --workdir /workspace
+          --env PYTHONPATH=/workspace/src
+          dbench-visual-authority
+          python .github/visual-runtime/preflight.py
+      - name: verify all 11,600 frozen cells
+        run: >-
+          docker run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace:ro"
+          --workdir /workspace
+          --env PYTHONPATH=/workspace/src
+          dbench-visual-authority
+          python -m lofbench.suites --verify-only
+      - name: run suite in visual authority runtime
+        run: >-
+          docker run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace:ro"
+          --workdir /workspace
+          --env PYTHONPATH=/workspace/src
+          dbench-visual-authority
+          pytest -q -p no:cacheprovider

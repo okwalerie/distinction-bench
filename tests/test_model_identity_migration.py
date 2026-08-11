@@ -655,6 +655,7 @@ def test_current_head_cannot_reopen_the_consumed_bounded_repair_lineage(tmp_path
     )
     post_salvage_paths = frozenset(
         {
+            "src/dbench/model_identity_audit.py",
             "src/dbench/reissue.py",
             "src/dbench/release_policy.py",
             "src/lofbench/release_bundle.py",

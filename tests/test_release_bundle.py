@@ -47,13 +47,6 @@ from lofbench.suites import DEFAULT_SUITE_REGISTRY, load_suite
 from lofsite.build import build_site
 
 
-def _require_visual_runtime() -> None:
-    try:
-        __import__("cairosvg")
-    except (ImportError, OSError):
-        pytest.skip("release-site integration requires the visual extra and native cairo")
-
-
 def _provider_envelope(
     run: RunManifest,
     *,
@@ -1409,8 +1402,8 @@ def _sample_records(
     return trials, calls, events, evidence
 
 
+@pytest.mark.requires_visual_runtime
 def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls(tmp_path):
-    _require_visual_runtime()
     repository = _clean_repository(tmp_path / "repo")
     protocols = (
         "reduce-infer-v1",
@@ -1555,8 +1548,7 @@ def test_sample_contract_rejects_empty_call_evidence(tmp_path):
 
 
 @pytest.fixture(scope="module")
-def sealed_reissue_source(tmp_path_factory):
-    _require_visual_runtime()
+def sealed_reissue_source(tmp_path_factory, visual_runtime):
     root = tmp_path_factory.mktemp("sealed-reissue")
     repository = root / "repository"
     subprocess.run(["git", "clone", "-q", "--shared", str(Path.cwd()), str(repository)], check=True)
