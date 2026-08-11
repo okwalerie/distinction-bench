@@ -1440,6 +1440,7 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
             "total_attempts": 20,
         },
         spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
+        materialize_stimuli=True,
         evidence_projector=project_openrouter_evidence,
         release_policy_validator=validate_sample_release,
     )
@@ -1457,26 +1458,54 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
     build_site(bundle.publication(), bundle.root / "site")
     runs_page = (bundle.root / "site" / "runs.html").read_text()
     for marker in (
-        "containment tree and frozen form",
-        "actual rendered stimulus",
-        "reading rule, protocol, and exact prompt",
-        "target and recorded response",
-        "parse and scorer identity",
-        "profile contribution",
+        "four-protocol by five-form smoke test",
+        "how these rows are derived",
+        "competence + invariance profiles",
+        "aggregate resource use",
+        "controlled dialect effects",
         "dialect matrix",
         "family matrix",
         "reasoning contrasts",
         "not run",
-        "exact endpoint + routing provenance",
-        "allow_fallbacks",
         "input/output/reasoning tokens",
     ):
         assert marker in runs_page
+    for value in (
+        *(run.run_id for run in runs),
+        *(run.endpoint for run in runs),
+        "catalog_row",
+        "routing_policy",
+        "response_text",
+        "prompt_hash",
+        "call_id",
+        "trial_id",
+        "run_id",
+    ):
+        assert value not in runs_page
     human_page = (bundle.root / "site" / "human.html").read_text()
     assert "HumanTrialRecord" in human_page
     assert "familiarity_band" in human_page
     assert "records:rows" in human_page
     assert (bundle.root / "site" / "downloads" / "human-trial.schema.json").is_file()
+    assert {path.name for path in (bundle.root / "site" / "downloads").iterdir()} == {
+        "suite.json",
+        "protocols.json",
+        "human-trial.schema.json",
+        "profiles.parquet",
+        "effects.parquet",
+    }
+    unexpected = bundle.root / "site" / "downloads" / "calls.parquet"
+    unexpected.write_bytes((bundle.root / "calls.parquet").read_bytes())
+    with pytest.raises(RuntimeError, match="file set is not exact"):
+        bundle.seal(repository_root=repository)
+    unexpected.unlink()
+    original_runs_page = runs_page
+    (bundle.root / "site" / "runs.html").write_text(
+        original_runs_page + "<p>request-started.jsonl</p>"
+    )
+    with pytest.raises(RuntimeError, match="forbidden public output marker"):
+        bundle.seal(repository_root=repository)
+    (bundle.root / "site" / "runs.html").write_text(original_runs_page)
     bundle.seal(repository_root=repository)
     assert len(bundle.runs()) == 4
     assert pq.read_table(bundle.root / "calls.parquet").num_rows == 20
@@ -1755,6 +1784,7 @@ def sealed_reissue_source(tmp_path_factory):
             "total_attempts": 20,
         },
         spend_caps_usd={"global": 30.0, "cohorts": {"sample": 30.0}},
+        materialize_stimuli=True,
         evidence_projector=project_openrouter_evidence,
         release_policy_validator=validate_sample_release,
         working_state_migrations=[audit],
@@ -1794,23 +1824,18 @@ def sealed_reissue_source(tmp_path_factory):
     write_release_metrics(bundle.root, suite=load_suite(), runs=bundle.runs())
     build_site(bundle.publication(), bundle.root / "site")
     bundle.seal(repository_root=repository)
-    stale_download = bundle.root / "site" / "downloads" / "request-started.jsonl"
-    stale_download.unlink()
     sealed_manifest = json.loads((bundle.root / "release.json").read_text())
-    sealed_manifest["files"].pop("site/downloads/request-started.jsonl")
-    downloads_path = bundle.root / "site" / "downloads.html"
-    downloads = downloads_path.read_text()
-    for old, new in (
-        ("request-started.jsonl", "request-intents.jsonl"),
-        ("full sealed distribution", "distribution"),
-        ("release.json", "manifest.json"),
-        (".tar.gz", ".tgz"),
-    ):
-        downloads = downloads.replace(old, new)
-    downloads_path.write_text(downloads)
-    sealed_manifest["files"]["site/downloads.html"] = {
-        "sha256": sha256(downloads_path.read_bytes()).hexdigest(),
-        "bytes": downloads_path.stat().st_size,
+    legacy_runs_path = bundle.root / "site" / "runs.html"
+    legacy_runs_path.write_text(
+        legacy_runs_path.read_text()
+        + "\n<!-- containment tree and frozen form; actual rendered stimulus; "
+        "reading rule, protocol, and exact prompt; target and recorded response; "
+        "parse and scorer identity; profile contribution; exact endpoint + routing "
+        "provenance -->\n"
+    )
+    sealed_manifest["files"]["site/runs.html"] = {
+        "sha256": sha256(legacy_runs_path.read_bytes()).hexdigest(),
+        "bytes": legacy_runs_path.stat().st_size,
     }
     (bundle.root / "release.json").write_text(json.dumps(sealed_manifest, indent=2) + "\n")
     archive = archive_release(source, root / "source.tar.gz")

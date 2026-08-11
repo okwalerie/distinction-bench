@@ -4,30 +4,69 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import shutil
 from hashlib import sha256
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import unquote, urlsplit
 
 from lofbench.protocols import ProtocolSpec
-from lofbench.records import RunManifest
+from lofbench.publication import scan_publication
 from lofbench.release_bundle import PublicationView
+from lofbench.renderers.pipeline.spec import DialectSpec
 from lofbench.suites import LoadedSuite
 
-_DOWNLOADS = (
+SAFE_DOWNLOADS = (
     "suite.json",
     "protocols.json",
     "human-trial.schema.json",
+    "profiles.parquet",
+    "effects.parquet",
+)
+_ROOT_FILES = {
+    "index.html",
+    "forms.html",
+    "atlas.html",
+    "runs.html",
+    "human.html",
+    "downloads.html",
+    "CNAME",
+}
+_FORBIDDEN_PATH_NAMES = {
+    "release.json",
     "runs.jsonl",
     "trials.parquet",
     "calls.parquet",
-    "profiles.parquet",
-    "effects.parquet",
     "transcripts.jsonl",
     "request-started.jsonl",
     "ledger.jsonl",
+}
+_FORBIDDEN_HTML_MARKERS = (
+    "/releases/download/",
+    ".tar.gz",
+    ".zip",
+    "release.json",
+    "runs.jsonl",
+    "trials.parquet",
+    "calls.parquet",
+    "transcripts.jsonl",
+    "request-started.jsonl",
+    "ledger.jsonl",
+    "exact endpoint",
+    "catalog_row",
+    "routing_policy",
+    "provider_evidence",
+    "provider_request_id",
+    "response_text",
+    "prompt_hash",
+    "completion_evidence_sha256",
+    "call_id",
+    "trial_id",
+    "run_id",
 )
+_OPAQUE_EXECUTION_ID = re.compile(rb"(?:run|trial|call)_[0-9a-f]{16,}")
 _EXEMPLAR_DIFFICULTY = "2. medium"
 
 _CSS = """
@@ -106,6 +145,151 @@ def verify_site_tree(expected: Path, rebuilt: Path) -> None:
         raise RuntimeError("rebuilt site tree does not match the sealed bundle site")
 
 
+class _LocalReferenceParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.references: list[str] = []
+
+    def handle_starttag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.references.extend(
+            value for name, value in attrs if name in {"href", "src"} and value is not None
+        )
+
+
+def _spatial_assets(publication: PublicationView) -> dict[str, str]:
+    cells = [cell for cell in publication.suite.cells if cell["modality"] != "text"]
+    assets = {f"assets/{cell['asset_path']}": cell["model_payload_sha256"] for cell in cells}
+    if len(assets) != len(cells) or any(
+        not path.startswith("assets/stimuli/image/")
+        or ".." in Path(path).parts
+        or Path(path).is_absolute()
+        for path in assets
+    ):
+        raise RuntimeError("frozen spatial cells do not define unique safe image assets")
+    return assets
+
+
+def _expected_site_files(publication: PublicationView) -> set[str]:
+    dialects = {f"dialects/{dialect_id}.html" for dialect_id in publication.suite.specs}
+    downloads = {f"downloads/{name}" for name in SAFE_DOWNLOADS}
+    return _ROOT_FILES | dialects | downloads | set(_spatial_assets(publication))
+
+
+def _expected_site_directories(expected_files: set[str]) -> set[str]:
+    directories: set[str] = set()
+    for relative in expected_files:
+        parent = Path(relative).parent
+        while parent != Path("."):
+            directories.add(parent.as_posix())
+            parent = parent.parent
+    return directories
+
+
+def _verify_local_references(root: Path, html_paths: list[Path]) -> None:
+    for path in html_paths:
+        parser = _LocalReferenceParser()
+        parser.feed(path.read_text())
+        for reference in parser.references:
+            parsed = urlsplit(reference)
+            if parsed.scheme or parsed.netloc:
+                if parsed.scheme not in {"http", "https", "data"}:
+                    raise RuntimeError(f"unsafe site reference in {path.name}: {reference}")
+                continue
+            local = unquote(parsed.path)
+            if not local:
+                continue
+            if "\\" in local or local.startswith("/"):
+                raise RuntimeError(f"unsafe local site reference in {path.name}: {reference}")
+            target = (path.parent / local).resolve()
+            try:
+                target.relative_to(root.resolve())
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"local site reference escapes output in {path.name}: {reference}"
+                ) from exc
+            if target.is_dir():
+                target = target / "index.html"
+            if not target.is_file():
+                raise RuntimeError(f"broken local site reference in {path.name}: {reference}")
+
+
+def _verify_forbidden_content(publication: PublicationView, html_paths: list[Path]) -> None:
+    run_values = {
+        value for run in publication.runs for value in (run.run_id, run.endpoint) if value
+    }
+    trial_values = {
+        str(row[field])
+        for row in publication.trials
+        for field in (
+            "trial_id",
+            "run_id",
+            "prompt_hash",
+            "response_text",
+            "completion_evidence_sha256",
+        )
+        if row.get(field)
+    }
+    private_values = {value.encode() for value in run_values | trial_values if len(value) >= 8}
+    for path in html_paths:
+        payload = path.read_bytes()
+        unescaped = html.unescape(payload.decode()).encode()
+        lowered = unescaped.lower()
+        marker = next(
+            (value for value in _FORBIDDEN_HTML_MARKERS if value.encode() in lowered), None
+        )
+        if marker is not None:
+            raise RuntimeError(f"forbidden public output marker in {path.name}: {marker}")
+        if _OPAQUE_EXECUTION_ID.search(unescaped) or any(
+            value in unescaped for value in private_values
+        ):
+            raise RuntimeError(f"private execution detail appears in {path.name}")
+
+
+def verify_public_site(publication: PublicationView, root: Path) -> None:
+    """Require the exact public projection, resolvable links, and no private evidence."""
+    if not root.is_dir():
+        raise RuntimeError("public site output is not a directory")
+    expected_files = _expected_site_files(publication)
+    expected_directories = _expected_site_directories(expected_files)
+    actual_files: set[str] = set()
+    actual_directories: set[str] = set()
+    for path in root.rglob("*"):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise RuntimeError(f"public site contains a symlink: {relative}")
+        if path.is_file():
+            actual_files.add(relative)
+        elif path.is_dir():
+            actual_directories.add(relative)
+        else:
+            raise RuntimeError(f"public site contains a special file: {relative}")
+    if actual_files != expected_files:
+        missing = sorted(expected_files - actual_files)
+        unexpected = sorted(actual_files - expected_files)
+        raise RuntimeError(
+            f"public site file set is not exact: missing={missing}, unexpected={unexpected}"
+        )
+    if actual_directories != expected_directories:
+        missing = sorted(expected_directories - actual_directories)
+        unexpected = sorted(actual_directories - expected_directories)
+        raise RuntimeError(
+            f"public site directory set is not exact: missing={missing}, unexpected={unexpected}"
+        )
+    if any(Path(relative).name in _FORBIDDEN_PATH_NAMES for relative in actual_files):
+        raise RuntimeError("public site contains a forbidden evidence artifact")
+    for name in SAFE_DOWNLOADS:
+        if (root / "downloads" / name).read_bytes() != (publication.root / name).read_bytes():
+            raise RuntimeError(f"public download does not match validated bundle input: {name}")
+    for relative, digest in _spatial_assets(publication).items():
+        payload = (root / relative).read_bytes()
+        if sha256(payload).hexdigest() != digest:
+            raise RuntimeError(f"public spatial asset does not match frozen cell: {relative}")
+    html_paths = sorted(root.rglob("*.html"))
+    _verify_local_references(root, html_paths)
+    _verify_forbidden_content(publication, html_paths)
+    scan_publication(root)
+
+
 def _overview(
     publication: PublicationView,
     suite: LoadedSuite,
@@ -128,9 +312,9 @@ def _overview(
     )
     exemplars = _dialect_exemplar_cards(suite)
     caveat = (
-        "this is a protocol smoke test, not a benchmark result or model ranking."
+        "this is a four-protocol by five-form smoke test, not a model ranking."
         if publication.sample_contract
-        else "results shown here are only admitted bundle records."
+        else "results shown here are aggregate views of admitted bundle records."
     )
     return (
         "<h1>distinction benchmark</h1>"
@@ -250,7 +434,7 @@ def _dialect_exemplars(suite: LoadedSuite) -> tuple[str, dict[str, dict[str, Any
 def _dialect_exemplar_card(
     *,
     dialect_id: str,
-    spec: Any,
+    spec: DialectSpec,
     cell: dict[str, Any],
     exemplar_form_id: str,
     cell_count: int | None,
@@ -334,123 +518,48 @@ def _records_table(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> str:
     return f"<table><thead><tr>{heading}</tr></thead><tbody>{body}</tbody></table>"
 
 
-def _worked_path(
-    publication: PublicationView,
-    runs: list[RunManifest],
-    profiles: list[dict[str, Any]],
-) -> str:
-    trials = publication.trials
-    if not runs or not trials:
-        return "<p class=notice>no admitted trial is available for a worked path.</p>"
-    run = runs[0]
-    trial = next(row for row in trials if row["run_id"] == run.run_id)
-    suite = publication.suite
-    protocols = publication.protocols
-    form = next(
-        item for item in suite.forms if item["abstract_form_id"] == trial["abstract_form_id"]
-    )
-    cell = next(
-        item
-        for item in suite.cells
-        if item["abstract_form_id"] == trial["abstract_form_id"]
-        and item["dialect_id"] == trial["dialect_id"]
-    )
-    spec = suite.specs[trial["dialect_id"]]
-    protocol = protocols[trial["protocol_id"]]
-    prompt = protocol.render_user_text(reading_rule=spec.reading_rule)
-    reasoning = json.dumps(run.reasoning, sort_keys=True)
-    profile = next(
-        (
-            row
-            for row in profiles
-            if row.get("execution_surface") == run.execution_surface
-            and row.get("resolved_model_id") == run.resolved_model_id
-            and row.get("protocol_id") == run.protocol_id
-            and row.get("reasoning") == reasoning
-        ),
-        None,
-    )
-    if cell["modality"] == "text":
-        stimulus = f"<pre>{_e(cell['model_payload'])}</pre>"
-    else:
-        stimulus = (
-            f'<img src="assets/{_e(cell["asset_path"])}" '
-            f'alt="actual rendered stimulus {_e(cell["abstract_form_id"])}">'
-        )
-    profile_value = (
-        "not available"
-        if profile is None
-        else (
-            f"this trial contributes {int(bool(trial['correct']))} to the correct-count "
-            f"numerator; profile competence {profile.get('competence')}, coverage "
-            f"{profile.get('coverage')}, mean latency {profile.get('mean_latency_ms')} ms"
-        )
-    )
-    cards = (
-        (
-            "1 · containment tree and frozen form",
-            f"<pre>{_e(json.dumps(form['abstract_form'], separators=(',', ':')))}</pre>"
-            f"<p>reference transcription <code>{_e(form['reference_transcription'])}</code>; "
-            f"normal value <strong>{_e(form['normal_value'])}</strong></p>",
-        ),
-        (
-            "2 · actual rendered stimulus",
-            f"<div class=stimulus>{stimulus}</div><p>dialect <code>{_e(trial['dialect_id'])}"
-            f"</code>; family {_e(spec.family)}</p><p>symbolic hash "
-            f"<code>{_e(cell['symbolic_payload_hash'])}</code><br>payload sha256 "
-            f"<code>{_e(cell['model_payload_sha256'])}</code></p>",
-        ),
-        (
-            "3 · reading rule, protocol, and exact prompt",
-            f"<p><strong>reading rule</strong></p><pre>{_e(spec.reading_rule)}</pre>"
-            f"<p>protocol <code>{_e(protocol.protocol_id)}</code></p>"
-            f"<p><strong>system prompt</strong></p><pre>{_e(protocol.system_text)}</pre>"
-            f"<p><strong>user prompt</strong></p><pre>{_e(prompt)}</pre>"
-            f"<p>prompt hash <code>{_e(trial['prompt_hash'])}</code></p>",
-        ),
-        (
-            "4 · target and recorded response",
-            f"<p>target</p><pre>{_e(protocol.target_for(form))}</pre>"
-            f"<p>response</p><pre>{_e(trial.get('response_text', ''))}</pre>",
-        ),
-        (
-            "5 · parse and scorer identity",
-            f"<p>parse status <strong>{_e(trial['parse_status'])}</strong>; prediction "
-            f"<code>{_e(trial['prediction'])}</code></p><p>scorer "
-            f"<code>{_e(protocol.scorer_id)}@{_e(protocol.scorer_version)}</code>; correctness "
-            f"<strong>{_e(trial['correct'])}</strong></p>",
-        ),
-        ("6 · profile contribution", f"<p>{_e(profile_value)}</p>"),
-    )
-    return "".join(
-        f"<article class=card><h3>{_e(label)}</h3>{value}</article>" for label, value in cards
-    )
+def _profile_aggregate(profile: dict[str, Any], field: str) -> dict[str, float]:
+    value = profile.get(field)
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"published profile has invalid {field}") from exc
+    if not isinstance(parsed, dict) or any(
+        not isinstance(key, str) or isinstance(child, bool) or not isinstance(child, (int, float))
+        for key, child in parsed.items()
+    ):
+        raise RuntimeError(f"published profile has invalid {field}")
+    return {key: float(child) for key, child in parsed.items()}
 
 
-def _accuracy(rows: list[dict[str, Any]]) -> str:
-    if not rows:
-        return "not run"
-    correct = sum(bool(row["correct"]) for row in rows)
-    return f"{correct}/{len(rows)} ({correct / len(rows):.0%})"
+def _profile_label(profile: dict[str, Any]) -> str:
+    return f"{profile['resolved_model_id']} · {profile['protocol_id']}"
 
 
 def _coverage_matrices(
     suite: LoadedSuite,
-    runs: list[RunManifest],
-    trials: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
 ) -> tuple[str, str]:
-    run_columns = sorted(runs, key=lambda run: (run.protocol_id, run.run_id))
-    headings = "".join(f"<th>{_e(run.protocol_id)}</th>" for run in run_columns)
+    columns = sorted(
+        profiles,
+        key=lambda row: (
+            str(row["execution_surface"]),
+            str(row["resolved_model_id"]),
+            str(row["protocol_id"]),
+            str(row["reasoning"]),
+        ),
+    )
+    headings = "".join(f"<th>{_e(_profile_label(profile))}</th>" for profile in columns)
+    dialect_aggregates = [_profile_aggregate(profile, "dialect_accuracy") for profile in columns]
+    family_aggregates = [_profile_aggregate(profile, "family_accuracy") for profile in columns]
     dialect_rows = []
     for dialect_id, spec in sorted(suite.specs.items()):
-        values = []
-        for run in run_columns:
-            rows = [
-                row
-                for row in trials
-                if row["run_id"] == run.run_id and row["dialect_id"] == dialect_id
-            ]
-            values.append(f"<td>{_e(_accuracy(rows))}</td>")
+        values = [
+            "<td>not run</td>"
+            if dialect_id not in aggregate
+            else f"<td>{aggregate[dialect_id]:.0%}</td>"
+            for aggregate in dialect_aggregates
+        ]
         dialect_rows.append(
             f"<tr><td><code>{_e(dialect_id)}</code></td><td>{_e(spec.family)}</td>"
             f"{''.join(values)}</tr>"
@@ -458,17 +567,10 @@ def _coverage_matrices(
     families = sorted({spec.family for spec in suite.specs.values()})
     family_rows = []
     for family in families:
-        dialect_ids = {
-            dialect_id for dialect_id, spec in suite.specs.items() if spec.family == family
-        }
-        values = []
-        for run in run_columns:
-            rows = [
-                row
-                for row in trials
-                if row["run_id"] == run.run_id and row["dialect_id"] in dialect_ids
-            ]
-            values.append(f"<td>{_e(_accuracy(rows))}</td>")
+        values = [
+            "<td>not run</td>" if family not in aggregate else f"<td>{aggregate[family]:.0%}</td>"
+            for aggregate in family_aggregates
+        ]
         family_rows.append(f"<tr><td>{_e(family)}</td>{''.join(values)}</tr>")
     dialect = (
         "<table><thead><tr><th>dialect</th><th>family</th>"
@@ -508,12 +610,15 @@ def _reasoning_contrasts(profiles: list[dict[str, Any]]) -> str:
                 f"<td>{_e(value.get('within_family_invariance'))}</td>"
                 f"<td>{_e(value.get('mean_latency_ms'))}</td>"
                 f"<td>{_e(value.get('input_tokens'))}/{_e(value.get('output_tokens'))}/"
-                f"{_e(value.get('reasoning_tokens'))}</td><td>{_e(contrast)}</td></tr>"
+                f"{_e(value.get('reasoning_tokens'))}</td>"
+                f"<td>{float(value.get('cost_usd') or 0):.8f}</td>"
+                f"<td>{_e(contrast)}</td></tr>"
             )
     return (
         "<table><thead><tr><th>surface</th><th>model</th><th>protocol</th><th>reasoning</th>"
         "<th>competence</th><th>invariance</th><th>mean latency ms</th>"
-        "<th>input/output/reasoning tokens</th><th>contrast status</th></tr></thead>"
+        "<th>input/output/reasoning tokens</th><th>cost usd</th>"
+        "<th>contrast status</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
 
@@ -523,49 +628,36 @@ def _runs_page(
     profiles: list[dict[str, Any]],
     effects: list[dict[str, Any]],
 ) -> str:
-    runs = list(publication.runs)
     suite = publication.suite
-    trials = publication.trials
-    grouped: dict[str, list[RunManifest]] = {"direct_api": [], "agent": []}
-    for run in runs:
-        grouped["direct_api" if run.execution_surface == "direct_api" else "agent"].append(run)
-
-    def table(items: list[RunManifest]) -> str:
-        if not items:
-            return "<p class=notice>no admitted runs on this execution surface.</p>"
-        rows = "".join(
-            f"<tr><td><code>{_e(run.run_id)}</code></td>"
-            f"<td>{_e(run.requested_model_id)}<br>{_e(run.resolved_model_id)}</td>"
-            f"<td>{_e(run.protocol_id)}<br>{_e(run.dialect_id)}</td>"
-            f"<td>{_e(run.execution_surface)}<br>{_e(run.provider)}<br>"
-            f"<code>{_e(run.endpoint)}</code></td>"
-            f"<td><code>{_e(json.dumps(run.reasoning, sort_keys=True))}</code></td>"
-            f"<td>{run.latency_ms:.2f}</td><td>{run.token_usage.get('input_tokens', 0)}/"
-            f"{run.token_usage.get('output_tokens', 0)}/"
-            f"{run.token_usage.get('reasoning_tokens', 0)}</td>"
-            f"<td>{run.cost_usd:.8f}<br>{_e(run.billing_channel)}</td>"
-            f"<td>{_e(run.sdk_version)}</td></tr>"
-            for run in items
-        )
-        return (
-            "<table><thead><tr><th>run</th><th>requested/resolved model</th>"
-            "<th>protocol/dialect</th><th>surface/provider/exact endpoint</th>"
-            "<th>reasoning</th><th>latency ms</th><th>input/output/reasoning tokens</th>"
-            "<th>cost usd/billing</th><th>sdk</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
-        )
-
     profile_table = _records_table(
         profiles,
         (
+            "execution_surface",
+            "requested_model_id",
             "resolved_model_id",
             "protocol_id",
+            "reasoning",
             "competence",
             "within_family_invariance",
             "text_competence",
             "spatial_competence",
             "invalid_output_rate",
             "coverage",
+            "observed_trials",
+            "expected_trials",
+        ),
+    )
+    resource_table = _records_table(
+        profiles,
+        (
+            "execution_surface",
+            "resolved_model_id",
+            "protocol_id",
+            "mean_latency_ms",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "cost_usd",
         ),
     )
     effect_table = _records_table(
@@ -582,41 +674,26 @@ def _runs_page(
             "mcnemar_exact_p",
         ),
     )
-    dialect_matrix, family_matrix = _coverage_matrices(suite, runs, trials)
-    provenance_rows = []
-    for run in runs:
-        exact_provenance = {
-            "provider": run.provider,
-            "endpoint": run.endpoint,
-            "routing_policy": run.routing_policy,
-            "privacy_policy": run.privacy_policy,
-            "catalog_retrieved_at": run.catalog_retrieved_at,
-            "catalog_row": run.catalog_row,
-        }
-        provenance_rows.append(
-            "<details><summary><code>"
-            f"{_e(run.run_id)}</code> exact endpoint and routing provenance</summary><pre>"
-            f"{_e(json.dumps(exact_provenance, indent=2, sort_keys=True))}"
-            "</pre></details>"
-        )
-    provenance = "".join(provenance_rows)
+    dialect_matrix, family_matrix = _coverage_matrices(suite, profiles)
+    scope = (
+        "this sample is a four-protocol by five-form smoke test (twenty aggregate "
+        "observations), not a model ranking."
+        if publication.sample_contract
+        else "all tables are aggregates recomputed from admitted bundle records."
+    )
     return (
-        "<h1>models + runs</h1><p class=lede>direct api calls and agent-mediated runs "
-        "are different "
-        "experimental surfaces and are never silently pooled.</p>"
-        "<div class=tabs><button data-tab=direct_api>direct api</button>"
-        "<button data-tab=agent>agent</button></div>"
-        f"<section id=direct_api>{table(grouped['direct_api'])}</section>"
-        f"<section id=agent hidden>{table(grouped['agent'])}</section>"
-        "<script>document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{"
-        "document.querySelectorAll('main>section[id]').forEach(s=>s.hidden=s.id!==b.dataset.tab)})"
-        "</script><h2>exact endpoint + routing provenance</h2>"
-        f"{provenance}"
-        "<h2>worked result path</h2><p>one admitted result traced from the frozen "
-        "abstract form through its dialect payload and exact protocol to parsing and scoring.</p>"
-        f"<section class=grid>{_worked_path(publication, runs, profiles)}</section>"
+        "<h1>models + aggregate results</h1><p class=lede>api and agent-mediated execution "
+        "surfaces remain separate experimental conditions. only recomputed aggregate rows "
+        "are published here.</p>"
+        f"<p class=notice>{_e(scope)}</p>"
+        "<h2>how these rows are derived</h2><p>validated scored observations are grouped by "
+        "model, protocol, execution surface, and reasoning setting. competence balances "
+        "families; coverage compares observed with planned observations; invariance measures "
+        "agreement across representations. individual exchanges are not part of this site.</p>"
         "<h2>competence + invariance profiles</h2>"
         f"{profile_table}"
+        "<h2>aggregate resource use</h2>"
+        f"{resource_table}"
         "<h2>controlled dialect effects</h2>"
         f"{effect_table}"
         "<h2>dialect matrix</h2><p>every frozen dialect is explicit; absent cells say not run.</p>"
@@ -713,48 +790,25 @@ def _downloads(publication: PublicationView) -> str:
         f'<tr><td><a href="downloads/{_e(name)}">{_e(name)}</a></td>'
         f"<td>{(publication.root / name).stat().st_size}</td>"
         f"<td><code>{sha256((publication.root / name).read_bytes()).hexdigest()}</code></td></tr>"
-        for name in _DOWNLOADS
+        for name in SAFE_DOWNLOADS
     )
     citation = (
         f"distinction benchmark contributors ({publication.release_id}). "
         "distinction benchmark: laws of form representation invariance evaluation."
     )
-    release_id = quote(publication.release_id, safe="")
-    repository = urlsplit(publication.repository_url)
-    if (
-        repository.scheme != "https"
-        or not repository.hostname
-        or repository.username is not None
-        or repository.password is not None
-        or repository.query
-        or repository.fragment
-    ):
-        raise RuntimeError("repository URL cannot define safe release asset links")
-    repository_url = publication.repository_url.rstrip("/").removesuffix(".git")
-    archive_name = f"distinction-bench-{publication.release_id}.tar.gz"
-    manifest_name = f"distinction-bench-{publication.release_id}.release.json"
-    asset_base = f"{repository_url}/releases/download/{release_id}"
-    archive_url = f"{asset_base}/{quote(archive_name, safe='')}"
-    manifest_url = f"{asset_base}/{quote(manifest_name, safe='')}"
     return (
-        "<h1>downloads + citation</h1><p class=lede>the full sealed distribution and its "
-        "embedded evidence exports are separate, explicit artifacts.</p>"
-        "<h2>full sealed distribution</h2><ul>"
-        f'<li><a href="{_e(archive_url)}">{_e(archive_name)}</a> — complete sealed bundle</li>'
-        f'<li><a href="{_e(manifest_url)}">{_e(manifest_name)}</a> — byte-identical sealed '
-        "<code>release.json</code> sidecar</li></ul>"
-        "<p>the manifest is also the archive root and authenticates every in-bundle artifact. "
-        "both distribution files are published after sealing; embedding either the final "
-        "manifest in its checksummed site or the archive inside that bundle would recurse.</p>"
-        "<h2>embedded evidence exports</h2><p>the selected files below are copied verbatim from "
-        "the bundle used to build these pages; this table is not the complete sealed bundle.</p>"
+        "<h1>downloads + citation</h1><p class=lede>these public files define the test and "
+        "support the aggregate claims displayed on this website.</p>"
+        "<p class=notice>the complete audit authority remains offline. individual execution "
+        "records and provider exchanges are deliberately not published.</p>"
+        "<h2>public benchmark data</h2><p>each file below is copied byte for byte from the "
+        "validated local authority used to build this projection.</p>"
         f"<table><thead><tr><th>artifact</th><th>bytes</th><th>sha256</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
         "<h2>caveats</h2><ul><li>sample releases are protocol smoke tests, not rankings.</li>"
         "<li>untaught runs combine dialect inference with task performance.</li>"
         "<li>image runs include raster perception and layout as possible confounds.</li>"
-        "<li>checksums above cover exact embedded evidence exports; the external sealed "
-        "manifest covers every in-bundle artifact.</li></ul>"
+        "<li>the checksums above cover the exact public data files shown here.</li></ul>"
         f"<h2>suggested citation</h2><pre>{_e(citation)}</pre>"
         "<p>code is mit licensed. the frozen suite, stimuli, documentation, and site content are "
         "licensed cc by 4.0.</p>"
@@ -769,6 +823,8 @@ def build_site(publication: PublicationView, out: Path) -> None:
         inside_bundle_site = False
     if publication.status != "sealed" and not inside_bundle_site:
         raise RuntimeError("a working bundle may only build its own site/ directory")
+    if not publication.stimuli_materialized:
+        raise RuntimeError("public site generation requires all frozen stimuli materialized")
     if out.exists():
         if any(out.iterdir()):
             raise FileExistsError(f"site output is not empty: {out}")
@@ -777,8 +833,8 @@ def build_site(publication: PublicationView, out: Path) -> None:
 
     suite = publication.suite
     protocols = publication.protocols
-    profiles = list(publication.profiles)
-    effects = list(publication.effects)
+    profiles = [dict(row) for row in publication.profiles]
+    effects = [dict(row) for row in publication.effects]
     _write(
         out / "index.html",
         _page("what is tested", _overview(publication, suite, protocols)),
@@ -799,8 +855,12 @@ def build_site(publication: PublicationView, out: Path) -> None:
     )
     downloads = out / "downloads"
     downloads.mkdir()
-    for name in _DOWNLOADS:
+    for name in SAFE_DOWNLOADS:
         shutil.copyfile(publication.root / name, downloads / name)
-    if publication.stimuli_materialized:
-        shutil.copytree(publication.root / "stimuli", out / "assets" / "stimuli")
+    for relative in sorted(_spatial_assets(publication)):
+        source = publication.root / relative.removeprefix("assets/")
+        target = out / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
     (out / "CNAME").write_text("distinction.valeriekim.ca\n")
+    verify_public_site(publication, out)

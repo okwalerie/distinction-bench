@@ -153,17 +153,17 @@
     }
   ],
   "id": "task_01KZGZ7YTE0GCWF9E29XZVJP17",
-  "last_event_id": "ev_01KZRBJK1T0HMBQTZTCC8K0KYC",
-  "last_status_changed_at": "2026-08-11T12:08:23Z",
+  "last_event_id": "ev_01KZRBMF2D9R8FQDC7RZ7P6ZFF",
+  "last_status_changed_at": "2026-08-11T12:09:24Z",
   "priority": "medium",
   "relationships_out": [],
   "reopened_count": 24,
   "schema_version": 1,
   "short_id": "DB-14",
-  "status": "planned",
+  "status": "in_progress",
   "tags": null,
   "title": "ship the public v1 benchmark, gallery, and model sweep",
   "type": "task",
-  "updated_at": "2026-08-11T12:08:23Z",
+  "updated_at": "2026-08-11T12:09:24Z",
   "urgency": null
 }

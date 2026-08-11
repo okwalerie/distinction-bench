@@ -1,51 +1,82 @@
 # static publication
 
-The canonical public host is `https://distinction.valeriekim.ca`. The generated
-site includes a matching `CNAME` file. Configure that hostname as a custom
-domain for GitHub Pages, then point DNS at the Pages target shown by GitHub.
+the canonical public host is `https://distinction.valeriekim.ca`. the generated
+site includes a matching `CNAME` file. configure that hostname as a custom
+domain for github pages, then point dns at the pages target shown by github.
 
-Cloudflare should remain DNS-only while the Pages custom-domain certificate is
-being issued. After HTTPS works, proxying is optional. Redirect the apex or any
+cloudflare should remain dns-only while the pages custom-domain certificate is
+being issued. after https works, proxying is optional. redirect the apex or any
 old gallery hostname to the canonical host with a permanent redirect, retaining
-the request path and query. Do not place an authentication or analytics worker
-in front of the human pilot: it is deliberately a local-only static workflow.
+the request path and query. do not place authentication or analytics in front
+of the human pilot: it is deliberately a local-only static workflow.
 
-Pages deployment accepts the paired release assets
-`distinction-bench-<tag>.tar.gz` and
-`distinction-bench-<tag>.release.json`. The archive's extracted root must be a sealed
-release bundle, and the sidecar must be byte-identical to its root `release.json`.
-The workflow checks both conditions and validates the bundle checksums before
-building; a working, edited, incomplete, or unlisted artifact is rejected.
-the download page embeds selected byte-identical evidence, including
-`request-started.jsonl`, and links to the paired external distribution assets. the
-final manifest and archive are not copied into the sealed tree because either would
-introduce a checksum/content recursion.
+## publication boundary
 
-site generation accepts only the validated, read-only publication view returned by
-`dbench.publication.open_release(...).publication()`.
+the complete sealed bundle is the local audit authority. it contains the raw
+execution, accounting, provider, and provenance records needed for independent
+review, but it is not a public web artifact and is never uploaded by the pages
+workflow.
 
-an older sealed sample that predates the portable-download policy is reissued, never
-edited in place. from a clean current commit, the operator supplies its immutable
-directory, matching external archive, absent sibling target, and the four complete
-state directories:
+the public artifact is the deterministic `site/` projection produced by
+`lofsite.build.build_site` from the validated, read-only publication view. the
+builder has one output contract: explanatory pages, all 29 dialect detail pages,
+the frozen spatial images those pages use, and these exact public downloads:
+
+- `suite.json`
+- `protocols.json`
+- `human-trial.schema.json`
+- `profiles.parquet`
+- `effects.parquet`
+
+the output verifier requires exact path membership, byte-identical public
+downloads, all frozen spatial hashes, resolvable local links, no symlinks or
+unexpected directories, no private execution identifiers or distribution
+links, and a clean publication secret scan. site generation fails closed when
+any condition is not met.
+
+the results page publishes only recomputed aggregate profiles, controlled
+effects, accuracy matrices, and aggregate resource use. individual model
+exchanges, execution identifiers, provider envelopes, routing/catalog details,
+and accounting events remain in the local authority.
+
+## immutable reissue
+
+an older sealed sample is reissued, never edited in place. from a clean reviewed
+commit, the operator supplies its immutable directory, matching external
+archive, absent sibling target, and complete state directories:
 
 ```text
 python -m dbench reissue-sealed-release \
   --source-release <sealed-directory> \
-  --source-archive <sealed-archive.tar.gz> \
+  --source-archive <sealed-archive> \
   --target-release <absent-sibling-directory> \
   --state-root <complete-state-directory>
 ```
 
-this command authenticates the old checksums, complete typed tree, archive, authority,
-and evidence/accounting core. its embedded migration audit must equal the current-state
-and deterministic predecessor-backup copies; predecessor release, state, run, call,
-map, and active-attempt bytes are reclosed before readmission. the fresh bundle's typed
-origin keeps the audit and source hashes mandatory through later validation and seal.
-the application policy also matches them to its checked-in source contract, rather
-than trusting manifest self-digests alone. it recognizes the exact known run lineage
-independently of removable manifest markers, so it cannot be downgraded to fresh.
-publication uses an atomic no-replace rename, so a racing target is never clobbered.
-the command performs no planning, execution, provider request, credential load, or
-network access. prepare, independent review, sealing, sidecar publication, and
-archiving remain separate normal steps.
+this command authenticates the old checksums, typed tree, archive, authority,
+and evidence/accounting core. it performs no planning, execution, provider
+request, credential load, or network access. `dbench prepare` builds and verifies
+the sanitized site in the new sibling; ordinary validation and sealing retain
+the complete sibling locally. only its reviewed `site/` subtree crosses the
+public boundary.
+
+## site-only pages snapshot
+
+github pages deploys only from the orphan `gh-pages` branch. that branch contains:
+
+- `site/`
+- `.github/workflows/pages.yml`
+- `SHA256SUMS`, covering every regular file below `site/`
+- `provenance.json`, containing only the release id, sealed-manifest sha256,
+  renderer commit, and build timestamp
+
+the push-triggered workflow verifies the branch path closure, provenance shape,
+inventory closure, and every digest before uploading only `site/`. it does not
+download releases, install the benchmark, receive credentials, or regenerate
+the site. construct the snapshot in an isolated temporary worktree, run the
+same source-side public-site verifier before copying it, generate the sorted
+inventory, and inspect the staged diff before pushing.
+
+the sample tag may identify the local authority commit, but its github release
+has no evidence assets. the draft feature pull request remains unmerged during
+site deployment.

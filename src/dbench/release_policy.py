@@ -10,12 +10,14 @@ import pyarrow.parquet as pq
 from dbench.model_identity_audit import MODEL_IDENTITY_AUDIT_FIELDS
 from dbench.provider_evidence import validate_openrouter_run_policy
 from lofbench.authority import canonical_sha256
+from lofbench.protocols import load_protocol_registry
 from lofbench.release_bundle import (
+    PublicationView,
     ReleasePolicyContext,
     ReleaseReissueProvenance,
 )
 
-_SITE_FILES = {
+_LEGACY_SITE_FILES = {
     "index.html",
     "forms.html",
     "atlas.html",
@@ -26,7 +28,7 @@ _SITE_FILES = {
     "downloads/human-trial.schema.json",
     "downloads/request-started.jsonl",
 }
-_SITE_MARKERS = {
+_LEGACY_SITE_MARKERS = {
     "runs.html": (
         "containment tree and frozen form",
         "actual rendered stimulus",
@@ -268,16 +270,43 @@ def _validate_sample_core(context: ReleasePolicyContext) -> None:
         raise RuntimeError("sealed sample requires complete derived profiles")
 
 
-def _site_gaps(context: ReleasePolicyContext) -> set[tuple[str, str]]:
+def _legacy_site_gaps(context: ReleasePolicyContext) -> set[tuple[str, str]]:
     site = context.root / "site"
-    gaps = {("file", relative) for relative in _SITE_FILES if not (site / relative).is_file()}
-    for relative, markers in _SITE_MARKERS.items():
+    gaps = {
+        ("file", relative) for relative in _LEGACY_SITE_FILES if not (site / relative).is_file()
+    }
+    for relative, markers in _LEGACY_SITE_MARKERS.items():
         path = site / relative
         if not path.is_file():
             continue
         page = path.read_text()
         gaps.update((relative, marker) for marker in markers if marker not in page)
     return gaps
+
+
+def _validate_public_site(context: ReleasePolicyContext) -> None:
+    from lofsite.build import verify_public_site
+
+    verify_public_site(
+        PublicationView(
+            root=context.root,
+            release_id=str(context.manifest["release_id"]),
+            repository_url=str(context.manifest["repository_url"]),
+            status=str(context.manifest["status"]),
+            suite_version=str(context.manifest["suite_version"]),
+            stimuli_materialized=bool(context.manifest.get("stimuli_materialized")),
+            expected_run_ids=tuple(context.manifest["expected_run_ids"]),
+            sample_contract=context.manifest.get("sample_contract"),
+            paid_run_approval=context.manifest.get("paid_run_approval"),
+            suite=context.suite,
+            protocols=load_protocol_registry(context.root / "protocols.json"),
+            runs=context.runs,
+            trials=context.trials,
+            profiles=tuple(pq.read_table(context.root / "profiles.parquet").to_pylist()),
+            effects=tuple(pq.read_table(context.root / "effects.parquet").to_pylist()),
+        ),
+        context.root / "site",
+    )
 
 
 def validate_sample_release(context: ReleasePolicyContext) -> None:
@@ -291,9 +320,7 @@ def validate_sample_release(context: ReleasePolicyContext) -> None:
     _validate_reissued_sample(context, required=known_reissue)
     if context.manifest["status"] != "sealed" and not context.sealing:
         return
-    gaps = _site_gaps(context)
-    if gaps:
-        raise RuntimeError(f"sealed sample site violates publication policy: {sorted(gaps)}")
+    _validate_public_site(context)
 
 
 def validate_legacy_sample_reissue_source(context: ReleasePolicyContext) -> None:
@@ -309,6 +336,6 @@ def validate_legacy_sample_reissue_source(context: ReleasePolicyContext) -> None
     _validate_sample_core(context)
     if context.manifest["status"] != "sealed" or context.sealing:
         raise RuntimeError("legacy reissue source must be an already sealed sample")
-    gaps = _site_gaps(context)
+    gaps = _legacy_site_gaps(context)
     if gaps != _LEGACY_PUBLICATION_GAPS:
         raise RuntimeError(f"legacy reissue source has the wrong stale shape: {sorted(gaps)}")

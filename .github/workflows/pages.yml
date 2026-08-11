@@ -1,13 +1,8 @@
-name: publish sealed static gallery
+name: deploy reviewed static gallery
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: release tag whose sealed bundle asset should be published
-        required: true
+  push:
+    branches: [gh-pages]
 
 permissions:
   contents: read
@@ -19,36 +14,88 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-24.04
     environment:
       name: github-pages
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync --frozen --extra site
-      - name: download sealed release bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      - name: verify site-only snapshot
+        shell: bash
         run: |
-          gh release download "$RELEASE_TAG" --pattern "distinction-bench-$RELEASE_TAG.tar.gz"
-          gh release download "$RELEASE_TAG" --pattern "distinction-bench-$RELEASE_TAG.release.json"
-      - name: unpack and validate the sealed bundle
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
-        run: |
-          mkdir release
-          tar -xzf "distinction-bench-$RELEASE_TAG.tar.gz" -C release
-          cmp "distinction-bench-$RELEASE_TAG.release.json" release/release.json
-          uv run python -c 'import os; from pathlib import Path; from dbench.publication import open_release; b=open_release(Path("release")); p=b.publication(); assert p.status == "sealed"; assert p.release_id == os.environ["RELEASE_TAG"]'
-      - name: rebuild and verify sealed site bytes
-        run: >-
-          uv run python -c 'from pathlib import Path; from dbench.publication import
-          open_release; from lofsite.build import build_site, verify_site_tree;
-          p=open_release(Path("release")).publication(); build_site(p,
-          Path("dist/site")); verify_site_tree(Path("release/site"), Path("dist/site"))'
+          python - <<'PY'
+          import hashlib
+          import json
+          import re
+          import subprocess
+          from datetime import datetime
+          from pathlib import Path
+
+          root = Path.cwd()
+          allowed_control = {
+              ".github/workflows/pages.yml",
+              "SHA256SUMS",
+              "provenance.json",
+          }
+          tracked = {
+              line
+              for line in subprocess.check_output(
+                  ["git", "ls-files"], text=True
+              ).splitlines()
+              if line
+          }
+          unexpected = sorted(
+              path for path in tracked if path not in allowed_control and not path.startswith("site/")
+          )
+          if unexpected or not {"site/index.html", *allowed_control} <= tracked:
+              raise SystemExit(f"unexpected or missing tracked paths: {unexpected}")
+
+          site_files = []
+          for path in sorted((root / "site").rglob("*")):
+              if path.is_symlink():
+                  raise SystemExit(f"site contains symlink: {path}")
+              if path.is_file():
+                  site_files.append(path.relative_to(root).as_posix())
+          inventory = {}
+          for line in (root / "SHA256SUMS").read_text().splitlines():
+              digest, separator, relative = line.partition("  ")
+              if (
+                  separator != "  "
+                  or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                  or relative in inventory
+              ):
+                  raise SystemExit("invalid sha256 inventory")
+              inventory[relative] = digest
+          if list(inventory) != site_files:
+              raise SystemExit("sha256 inventory does not exactly cover site files")
+          for relative, expected in inventory.items():
+              actual = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f"sha256 mismatch: {relative}")
+
+          provenance = json.loads((root / "provenance.json").read_text())
+          required = {
+              "release_id",
+              "sealed_manifest_sha256",
+              "renderer_commit",
+              "build_timestamp",
+          }
+          if set(provenance) != required or not provenance["release_id"]:
+              raise SystemExit("invalid provenance shape")
+          if not re.fullmatch(r"[0-9a-f]{64}", provenance["sealed_manifest_sha256"]):
+              raise SystemExit("invalid sealed manifest digest")
+          if not re.fullmatch(r"[0-9a-f]{40}", provenance["renderer_commit"]):
+              raise SystemExit("invalid renderer commit")
+          if not isinstance(provenance["build_timestamp"], str) or not provenance[
+              "build_timestamp"
+          ].endswith("Z"):
+              raise SystemExit("invalid build timestamp")
+          try:
+              datetime.fromisoformat(provenance["build_timestamp"].replace("Z", "+00:00"))
+          except (TypeError, ValueError) as exc:
+              raise SystemExit("invalid build timestamp") from exc
+          PY
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/site
+          path: site
       - uses: actions/deploy-pages@v4
