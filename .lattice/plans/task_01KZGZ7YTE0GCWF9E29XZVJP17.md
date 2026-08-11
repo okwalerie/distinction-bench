@@ -1087,3 +1087,18 @@ deduplicate `PublicationView` assembly if the shared constructor remains small a
 authority-preserving. add exact regressions, run only the affected canonical-dev
 tests plus static/rule lint, and return immediately to fresh rereview—no broad suite,
 rebuild, network, state, or publication action in this repair.
+
+## Reset 2026-08-11 by agent:codex-root
+
+## active approved publication execution
+
+from the untouched original sealed sample, create one absent local sibling at the
+final reviewed commit using the network-disabled pinned runtime; prepare, validate,
+seal, and independently verify its exact sanitized `site/` projection. keep every
+sealed bundle/archive local. create an isolated orphan `gh-pages` snapshot containing
+only verified `site/`, sorted sha256 inventory, minimal provenance, and the reviewed
+credential-free workflow. review that snapshot cold, push it, configure pages to the
+workflow deployment, and verify representative public urls. no github release asset
+is uploaded. afterward perform authenticated catalog/key get requests only, compute
+the true full-sweep and budget-fitting costs, record a cost sheet, and stop before any
+paid inference pending explicit approval.
