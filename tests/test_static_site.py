@@ -8,7 +8,7 @@ from dataclasses import replace
 from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -210,12 +210,14 @@ def _sample_publication(publication):
         )
     return replace(
         populated,
-        sample_contract={
-            "protocol_ids": [value[0] for value in values],
-            "dialect_id": "enclosure.plain-v1",
-            "execution_surface": "direct_api",
-            "trials_per_run": 5,
-        },
+        sample_contract=MappingProxyType(
+            {
+                "protocol_ids": tuple(value[0] for value in values),
+                "dialect_id": "enclosure.plain-v1",
+                "execution_surface": "direct_api",
+                "trials_per_run": 5,
+            }
+        ),
         profiles=tuple(reversed(profiles)),
     ), private_values
 
@@ -432,6 +434,8 @@ def test_sample_charts_are_aggregate_only_accessible_and_presentation_ready(
     site_publication, tmp_path: Path
 ):
     publication, private_values = _sample_publication(site_publication)
+    assert isinstance(publication.sample_contract, MappingProxyType)
+    assert isinstance(publication.sample_contract["protocol_ids"], tuple)
     output = tmp_path / "sample-charts"
     build_site(publication, output)
     verify_public_site(publication, output)
@@ -496,6 +500,42 @@ def test_sample_charts_are_aggregate_only_accessible_and_presentation_ready(
     assert "the two reduce protocols observed the same result" in presentation
     assert "the two transcription protocols observed the same result" in presentation
     assert all(private not in index + results + presentation for private in private_values)
+
+
+@pytest.mark.parametrize(
+    "protocol_ids",
+    (
+        "reduce-infer-v1",
+        [
+            "reduce-infer-v1",
+            "reduce-taught-v1",
+            "transcribe-infer-v1",
+            "transcribe-taught-v1",
+        ],
+        (
+            "reduce-infer-v1",
+            "reduce-taught-v1",
+            "transcribe-infer-v1",
+            7,
+        ),
+    ),
+)
+def test_sample_scope_rejects_non_frozen_or_malformed_protocol_ids(
+    site_publication, tmp_path: Path, protocol_ids: object
+):
+    publication, _private_values = _sample_publication(site_publication)
+    malformed_contract = MappingProxyType(
+        {**dict(publication.sample_contract), "protocol_ids": protocol_ids}
+    )
+    output = tmp_path / f"malformed-contract-{type(protocol_ids).__name__}"
+    build_site(replace(publication, sample_contract=malformed_contract), output)
+    for name in ("index.html", "runs.html", "presentation.html"):
+        page = (output / name).read_text()
+        assert "aggregate scope" in page
+        assert "sample outcome" not in page
+        assert "sample presentation" not in page
+        assert "smoke test" not in page
+        assert "observed the same result" not in page
 
 
 def test_empty_profiles_share_an_honest_chart_state(site_publication):

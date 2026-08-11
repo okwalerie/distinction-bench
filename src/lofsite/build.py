@@ -379,7 +379,7 @@ def _chart_scope(
     execution_surface = contract.get("execution_surface")
     dialect = publication.suite.specs.get(dialect_id) if isinstance(dialect_id, str) else None
     if (
-        not isinstance(contract_protocols, list)
+        not isinstance(contract_protocols, tuple)
         or not contract_protocols
         or any(not isinstance(value, str) or not value for value in contract_protocols)
         or isinstance(sample_n, bool)

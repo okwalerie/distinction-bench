@@ -313,3 +313,12 @@ implementation-level rework is required before source approval:
    3,642-file closure, and unchanged evidence, aggregate-download, and spatial-asset boundaries.
 
 ## Reset 2026-08-11 by agent:codex-db15-rework
+
+## Reset 2026-08-11 by agent:codex-db15-sequence-rework
+
+## review cycle 2 findings
+
+authority integration exposed an implementation boundary mismatch: validated publication views
+freeze `sample_contract.protocol_ids` as a tuple, while chart scope admitted only a mutable list.
+accept the exact immutable tuple exposed by `PublicationView`, keep strings and malformed tuple
+members fail-closed, and cover the frozen publication shape with a regression.

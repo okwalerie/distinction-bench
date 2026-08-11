@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -2048,6 +2049,8 @@ def test_reissue_accepts_only_stale_site_and_preserves_exact_core(tmp_path, seal
     assert math.fsum(row["observed_cost_usd"] for row in calls) == 0.069506875
 
     publication = reissued.publication()
+    assert isinstance(publication.sample_contract, MappingProxyType)
+    assert isinstance(publication.sample_contract["protocol_ids"], tuple)
     evidence_before = _checksums_outside_site(target)
     build_site(publication, target / "site")
     verify_public_site(publication, target / "site")
