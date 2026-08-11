@@ -1158,3 +1158,5 @@ paths remain untouched. a fresh cold review approves before push.
 ## Reset 2026-08-11 by agent:codex-root
 
 ## Reset 2026-08-11 by agent:codex-root
+
+## Reset 2026-08-11 by agent:codex-ci-repair-impl
