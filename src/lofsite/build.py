@@ -6,11 +6,15 @@ import html
 import json
 import re
 import shutil
+from collections.abc import Mapping
 from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from lofbench.protocols import ProtocolSpec
 from lofbench.publication import scan_publication
@@ -24,6 +28,58 @@ SAFE_DOWNLOADS = (
     "human-trial.schema.json",
     "profiles.parquet",
     "effects.parquet",
+)
+PUBLIC_PROFILE_SCHEMA = pa.schema(
+    [
+        ("execution_surface", pa.string()),
+        ("requested_model_id", pa.string()),
+        ("resolved_model_id", pa.string()),
+        ("protocol_id", pa.string()),
+        ("reasoning", pa.string()),
+        ("competence", pa.float64()),
+        ("text_competence", pa.float64()),
+        ("spatial_competence", pa.float64()),
+        ("within_family_invariance", pa.float64()),
+        ("cross_family_text_invariance", pa.float64()),
+        ("cross_family_spatial_invariance", pa.float64()),
+        ("invalid_output_rate", pa.float64()),
+        ("coverage", pa.float64()),
+        ("observed_trials", pa.int64()),
+        ("expected_trials", pa.int64()),
+        ("mean_latency_ms", pa.float64()),
+        ("input_tokens", pa.int64()),
+        ("output_tokens", pa.int64()),
+        ("reasoning_tokens", pa.int64()),
+        ("cost_usd", pa.float64()),
+        ("dialect_accuracy", pa.string()),
+        ("family_accuracy", pa.string()),
+    ]
+)
+PUBLIC_EFFECT_SCHEMA = pa.schema(
+    [
+        ("execution_surface", pa.string()),
+        ("requested_model_id", pa.string()),
+        ("resolved_model_id", pa.string()),
+        ("protocol_id", pa.string()),
+        ("reasoning", pa.string()),
+        ("family", pa.string()),
+        ("archetype", pa.string()),
+        ("plain_dialect_id", pa.string()),
+        ("treatment_dialect_id", pa.string()),
+        ("signed_paired_effect", pa.float64()),
+        ("bootstrap_low", pa.float64()),
+        ("bootstrap_high", pa.float64()),
+        ("mcnemar_b", pa.int64()),
+        ("mcnemar_c", pa.int64()),
+        ("mcnemar_exact_p", pa.float64()),
+        ("paired_forms", pa.int64()),
+        ("coverage", pa.float64()),
+    ]
+)
+_VERBATIM_DOWNLOADS = (
+    "suite.json",
+    "protocols.json",
+    "human-trial.schema.json",
 )
 _ROOT_FILES = {
     "index.html",
@@ -190,11 +246,22 @@ def _verify_local_references(root: Path, html_paths: list[Path]) -> None:
         parser = _LocalReferenceParser()
         parser.feed(path.read_text())
         for reference in parser.references:
-            parsed = urlsplit(reference)
+            if reference != reference.strip() or any(ord(char) < 32 for char in reference):
+                raise RuntimeError(f"unsafe site reference in {path.name}: {reference}")
+            decoded = reference
+            for _depth in range(8):
+                parsed = urlsplit(decoded)
+                if parsed.scheme or parsed.netloc:
+                    raise RuntimeError(f"external site reference in {path.name}: {reference}")
+                next_value = unquote(decoded)
+                if next_value == decoded:
+                    break
+                decoded = next_value
+            else:
+                raise RuntimeError(f"over-encoded site reference in {path.name}: {reference}")
+            parsed = urlsplit(decoded)
             if parsed.scheme or parsed.netloc:
-                if parsed.scheme not in {"http", "https", "data"}:
-                    raise RuntimeError(f"unsafe site reference in {path.name}: {reference}")
-                continue
+                raise RuntimeError(f"external site reference in {path.name}: {reference}")
             local = unquote(parsed.path)
             if not local:
                 continue
@@ -213,7 +280,22 @@ def _verify_local_references(root: Path, html_paths: list[Path]) -> None:
                 raise RuntimeError(f"broken local site reference in {path.name}: {reference}")
 
 
-def _verify_forbidden_content(publication: PublicationView, html_paths: list[Path]) -> None:
+def _aggregate_table(
+    rows: tuple[Mapping[str, Any], ...],
+    schema: pa.Schema,
+) -> pa.Table:
+    projected = [{field.name: row.get(field.name) for field in schema} for row in rows]
+    return pa.Table.from_pylist(projected, schema=schema)
+
+
+def _public_aggregate_tables(publication: PublicationView) -> dict[str, pa.Table]:
+    return {
+        "profiles.parquet": _aggregate_table(publication.profiles, PUBLIC_PROFILE_SCHEMA),
+        "effects.parquet": _aggregate_table(publication.effects, PUBLIC_EFFECT_SCHEMA),
+    }
+
+
+def _private_execution_values(publication: PublicationView) -> set[bytes]:
     run_values = {
         value for run in publication.runs for value in (run.run_id, run.endpoint) if value
     }
@@ -229,7 +311,32 @@ def _verify_forbidden_content(publication: PublicationView, html_paths: list[Pat
         )
         if row.get(field)
     }
-    private_values = {value.encode() for value in run_values | trial_values if len(value) >= 8}
+    return {value.encode() for value in run_values | trial_values if len(value) >= 8}
+
+
+def _verify_public_aggregate_downloads(publication: PublicationView, root: Path) -> None:
+    private_values = _private_execution_values(publication)
+    for name, expected in _public_aggregate_tables(publication).items():
+        actual = pq.read_table(root / "downloads" / name)
+        if not actual.schema.equals(expected.schema, check_metadata=True):
+            raise RuntimeError(f"public aggregate schema is not exact: {name}")
+        if not actual.equals(expected):
+            raise RuntimeError(f"public aggregate values do not match validated rows: {name}")
+        for field in actual.schema:
+            if not (pa.types.is_string(field.type) or pa.types.is_large_string(field.type)):
+                continue
+            for value in actual[field.name].to_pylist():
+                if value is None:
+                    continue
+                payload = value.encode()
+                if _OPAQUE_EXECUTION_ID.search(payload) or any(
+                    private in payload for private in private_values
+                ):
+                    raise RuntimeError(f"private execution detail appears in {name}")
+
+
+def _verify_forbidden_content(publication: PublicationView, html_paths: list[Path]) -> None:
+    private_values = _private_execution_values(publication)
     for path in html_paths:
         payload = path.read_bytes()
         unescaped = html.unescape(payload.decode()).encode()
@@ -277,9 +384,10 @@ def verify_public_site(publication: PublicationView, root: Path) -> None:
         )
     if any(Path(relative).name in _FORBIDDEN_PATH_NAMES for relative in actual_files):
         raise RuntimeError("public site contains a forbidden evidence artifact")
-    for name in SAFE_DOWNLOADS:
+    for name in _VERBATIM_DOWNLOADS:
         if (root / "downloads" / name).read_bytes() != (publication.root / name).read_bytes():
             raise RuntimeError(f"public download does not match validated bundle input: {name}")
+    _verify_public_aggregate_downloads(publication, root)
     for relative, digest in _spatial_assets(publication).items():
         payload = (root / relative).read_bytes()
         if sha256(payload).hexdigest() != digest:
@@ -785,11 +893,11 @@ def _human(suite: LoadedSuite, protocols: dict[str, ProtocolSpec], release_id: s
     )
 
 
-def _downloads(publication: PublicationView) -> str:
+def _downloads(publication: PublicationView, downloads: Path) -> str:
     rows = "".join(
         f'<tr><td><a href="downloads/{_e(name)}">{_e(name)}</a></td>'
-        f"<td>{(publication.root / name).stat().st_size}</td>"
-        f"<td><code>{sha256((publication.root / name).read_bytes()).hexdigest()}</code></td></tr>"
+        f"<td>{(downloads / name).stat().st_size}</td>"
+        f"<td><code>{sha256((downloads / name).read_bytes()).hexdigest()}</code></td></tr>"
         for name in SAFE_DOWNLOADS
     )
     citation = (
@@ -801,8 +909,9 @@ def _downloads(publication: PublicationView) -> str:
         "support the aggregate claims displayed on this website.</p>"
         "<p class=notice>the complete audit authority remains offline. individual execution "
         "records and provider exchanges are deliberately not published.</p>"
-        "<h2>public benchmark data</h2><p>each file below is copied byte for byte from the "
-        "validated local authority used to build this projection.</p>"
+        "<h2>public benchmark data</h2><p>the registries and human schema are exact authority "
+        "copies. profile and effect downloads are fixed-schema aggregate projections of the "
+        "validated rows used on this page.</p>"
         f"<table><thead><tr><th>artifact</th><th>bytes</th><th>sha256</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
         "<h2>caveats</h2><ul><li>sample releases are protocol smoke tests, not rankings.</li>"
@@ -835,6 +944,12 @@ def build_site(publication: PublicationView, out: Path) -> None:
     protocols = publication.protocols
     profiles = [dict(row) for row in publication.profiles]
     effects = [dict(row) for row in publication.effects]
+    downloads = out / "downloads"
+    downloads.mkdir()
+    for name in _VERBATIM_DOWNLOADS:
+        shutil.copyfile(publication.root / name, downloads / name)
+    for name, table in _public_aggregate_tables(publication).items():
+        pq.write_table(table, downloads / name, compression="zstd")
     _write(
         out / "index.html",
         _page("what is tested", _overview(publication, suite, protocols)),
@@ -851,12 +966,8 @@ def build_site(publication: PublicationView, out: Path) -> None:
     )
     _write(
         out / "downloads.html",
-        _page("downloads + citation", _downloads(publication)),
+        _page("downloads + citation", _downloads(publication, downloads)),
     )
-    downloads = out / "downloads"
-    downloads.mkdir()
-    for name in SAFE_DOWNLOADS:
-        shutil.copyfile(publication.root / name, downloads / name)
     for relative in sorted(_spatial_assets(publication)):
         source = publication.root / relative.removeprefix("assets/")
         target = out / relative

@@ -828,6 +828,18 @@ boundary. keep the live release and state untouched pending another review.
 
 ## Reset 2026-08-11 by agent:codex-root
 
+## active site-only review repair
+
+close three implementation blockers without widening scope: publish only fixed-schema
+aggregate parquet data with no execution ids (or omit an empty unsafe effect table),
+reject every external href/src, and keep core-ci tests independent of optional cairo.
+tests must inspect the actual copied parquet schemas/values and adversarial external
+links. retain the exact 3,641-file gallery, all 29 dialects, 20 text/9 spatial
+exemplars, resolvable local links, the pinned visual gate, and the credential-free
+site-only pages workflow. centralize publication-view construction if it removes the
+reviewed duplication without weakening the sealing boundary. require canonical dev
+focused gates, ruff/diff, and fresh independent rereview before any rebuild or push.
+
 ## operator pivot: publish a website, not the evidence bundle
 
 the complete sealed sample and its archives remain immutable local research evidence.
@@ -1027,3 +1039,39 @@ and aggregate-result surfaces remain comprehensible; no raw evidence or sealed a
 bytes or links exist in the deployed branch/release; the complete reviewed evidence
 remains local; and no bulk inference begins before a new catalog-derived cost sheet
 and explicit paid approval.
+
+## site-only review cycle 1 findings
+
+implementation-level rework only. validate the schemas and every value class in the
+actual copied parquet downloads, not merely their byte equality: the real empty
+`effects.parquet` currently carries a forbidden `run_id` placeholder column. either
+publish a genuinely aggregate, fixed-schema effects table or omit it; no public file
+may retain execution identifiers. add adversarial tests over the downloaded parquet
+schema and values.
+
+the generated site needs no external references, so the structural verifier must
+reject every external `href`/`src` instead of permitting arbitrary http/https/data
+targets behind lexical marker checks. retain fragment/query-safe local resolution.
+restore canonical dev/core-ci independence from the optional visual stack: tests that
+exercise policy/site closure must use pre-materialized safe fixtures or be isolated
+behind the visual extra, while the dedicated pinned visual gate continues to prove the
+real 11,600-cell build. if practical, centralize construction of the validated
+publication view rather than duplicating its full field list in release policy.
+
+acceptance: canonical `uv sync --frozen --group dev` focused gates pass without cairo;
+actual public parquet downloads expose only explicit aggregate schemas and no private
+ids; all external-link forgeries reject; the real populated site retains its exact
+3,641-file/29-dialect/20-text/9-spatial closure; ruff/diff and fresh rereview pass.
+
+## Reset 2026-08-11 by agent:codex-root
+
+## active site-only review repair
+
+publish only fixed-schema aggregate parquet data with no execution ids (or omit an
+empty unsafe effect table), reject every external href/src, and keep core-ci tests
+independent of optional cairo. tests inspect actual copied parquet schemas/values and
+adversarial external links. retain the exact gallery, 29 dialects, 20 text/9 spatial
+exemplars, local links, pinned visual gate, and credential-free pages workflow.
+centralize publication-view construction if it removes reviewed duplication without
+weakening sealing. require canonical-dev focused gates, ruff/diff, and fresh rereview
+before any rebuild or public push.

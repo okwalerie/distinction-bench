@@ -10,9 +10,7 @@ import pyarrow.parquet as pq
 from dbench.model_identity_audit import MODEL_IDENTITY_AUDIT_FIELDS
 from dbench.provider_evidence import validate_openrouter_run_policy
 from lofbench.authority import canonical_sha256
-from lofbench.protocols import load_protocol_registry
 from lofbench.release_bundle import (
-    PublicationView,
     ReleasePolicyContext,
     ReleaseReissueProvenance,
 )
@@ -287,26 +285,7 @@ def _legacy_site_gaps(context: ReleasePolicyContext) -> set[tuple[str, str]]:
 def _validate_public_site(context: ReleasePolicyContext) -> None:
     from lofsite.build import verify_public_site
 
-    verify_public_site(
-        PublicationView(
-            root=context.root,
-            release_id=str(context.manifest["release_id"]),
-            repository_url=str(context.manifest["repository_url"]),
-            status=str(context.manifest["status"]),
-            suite_version=str(context.manifest["suite_version"]),
-            stimuli_materialized=bool(context.manifest.get("stimuli_materialized")),
-            expected_run_ids=tuple(context.manifest["expected_run_ids"]),
-            sample_contract=context.manifest.get("sample_contract"),
-            paid_run_approval=context.manifest.get("paid_run_approval"),
-            suite=context.suite,
-            protocols=load_protocol_registry(context.root / "protocols.json"),
-            runs=context.runs,
-            trials=context.trials,
-            profiles=tuple(pq.read_table(context.root / "profiles.parquet").to_pylist()),
-            effects=tuple(pq.read_table(context.root / "effects.parquet").to_pylist()),
-        ),
-        context.root / "site",
-    )
+    verify_public_site(context.publication(), context.root / "site")
 
 
 def validate_sample_release(context: ReleasePolicyContext) -> None:

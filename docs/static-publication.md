@@ -28,11 +28,14 @@ the frozen spatial images those pages use, and these exact public downloads:
 - `profiles.parquet`
 - `effects.parquet`
 
-the output verifier requires exact path membership, byte-identical public
-downloads, all frozen spatial hashes, resolvable local links, no symlinks or
-unexpected directories, no private execution identifiers or distribution
-links, and a clean publication secret scan. site generation fails closed when
-any condition is not met.
+the registries and human schema are byte-identical authority copies. the two
+parquet files are freshly written through explicit aggregate-only schemas; an
+empty effects table therefore still has a truthful effects schema rather than
+an execution-id placeholder. the output verifier reads both parquet files and
+requires their exact schemas and values. it also requires exact path membership,
+all frozen spatial hashes, resolvable local-only links, no symlinks or unexpected
+directories, no private execution identifiers or distribution links, and a clean
+publication secret scan. site generation fails closed when any condition is not met.
 
 the results page publishes only recomputed aggregate profiles, controlled
 effects, accuracy matrices, and aggregate resource use. individual model

@@ -93,6 +93,30 @@ class ReleasePolicyContext:
     calls: tuple[Mapping[str, Any], ...]
     sealing: bool
 
+    def publication(self) -> PublicationView:
+        """Project the already core-validated policy inputs into the publication seam."""
+        return PublicationView(
+            root=self.root,
+            release_id=str(self.manifest["release_id"]),
+            repository_url=str(self.manifest["repository_url"]),
+            status=str(self.manifest["status"]),
+            suite_version=str(self.manifest["suite_version"]),
+            stimuli_materialized=bool(self.manifest.get("stimuli_materialized")),
+            expected_run_ids=tuple(self.manifest["expected_run_ids"]),
+            sample_contract=_freeze(self.manifest.get("sample_contract")),
+            paid_run_approval=_freeze(self.manifest.get("paid_run_approval")),
+            suite=self.suite,
+            protocols=MappingProxyType(load_protocol_registry(self.root / "protocols.json")),
+            runs=self.runs,
+            trials=self.trials,
+            profiles=tuple(
+                _freeze(row) for row in pq.read_table(self.root / "profiles.parquet").to_pylist()
+            ),
+            effects=tuple(
+                _freeze(row) for row in pq.read_table(self.root / "effects.parquet").to_pylist()
+            ),
+        )
+
 
 ReleasePolicyValidator = Callable[[ReleasePolicyContext], None]
 

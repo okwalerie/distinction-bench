@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -8,13 +9,17 @@ from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from lofbench.authority import PROTOCOL_REGISTRY_GIT_PATH, SUITE_REGISTRY_GIT_PATH
 from lofbench.protocols import DEFAULT_PROTOCOL_REGISTRY
-from lofbench.release_bundle import ReleaseBundle
+from lofbench.release_bundle import ReleaseBundle, ReleasePolicyContext
 from lofbench.suites import DEFAULT_SUITE_REGISTRY
 from lofsite.build import (
+    PUBLIC_EFFECT_SCHEMA,
+    PUBLIC_PROFILE_SCHEMA,
     SAFE_DOWNLOADS,
     build_site,
     verify_public_site,
@@ -104,6 +109,10 @@ def _hardlink_site(source: Path, target: Path) -> None:
 def _replace_file(path: Path, value: str) -> None:
     path.unlink()
     path.write_text(value)
+
+
+def _projected_rows(rows, schema: pa.Schema) -> list[dict]:
+    return [{field.name: row.get(field.name) for field in schema} for row in rows]
 
 
 def _populated_publication(publication):
@@ -227,6 +236,25 @@ def test_static_site_has_exact_safe_surface_and_every_dialect_exemplar(site_publ
     assert "connect-src 'none'" in index
 
 
+def test_release_policy_context_uses_the_shared_publication_projection(site_publication):
+    manifest = json.loads((site_publication.root / "release.json").read_text())
+    manifest.update(status="sealed", stimuli_materialized=True)
+    context = ReleasePolicyContext(
+        root=site_publication.root,
+        manifest=manifest,
+        suite=site_publication.suite,
+        runs=site_publication.runs,
+        trials=site_publication.trials,
+        calls=(),
+        sealing=True,
+    )
+    projected = context.publication()
+    assert projected.root == site_publication.root
+    assert projected.suite is site_publication.suite
+    assert projected.status == "sealed"
+    verify_public_site(projected, site_publication.root / "site")
+
+
 def test_static_site_retains_explanations_human_pilot_and_only_safe_downloads(
     site_publication,
 ):
@@ -242,8 +270,16 @@ def test_static_site_retains_explanations_human_pilot_and_only_safe_downloads(
     assert "public benchmark data" in downloads
     assert "sha256" in downloads
     assert "caveats" in downloads
-    for name in SAFE_DOWNLOADS:
+    for name in ("suite.json", "protocols.json", "human-trial.schema.json"):
         assert (site / "downloads" / name).read_bytes() == (publication.root / name).read_bytes()
+    profiles = pq.read_table(site / "downloads" / "profiles.parquet")
+    effects = pq.read_table(site / "downloads" / "effects.parquet")
+    assert profiles.schema == PUBLIC_PROFILE_SCHEMA
+    assert effects.schema == PUBLIC_EFFECT_SCHEMA
+    assert profiles.to_pylist() == []
+    assert effects.to_pylist() == []
+    assert "run_id" not in profiles.column_names
+    assert "run_id" not in effects.column_names
     assert not (_site_files(site) & {f"downloads/{name}" for name in _FORBIDDEN_FILENAMES})
     assert not any(path.name in _FORBIDDEN_FILENAMES for path in site.rglob("*"))
 
@@ -293,6 +329,21 @@ def test_populated_results_render_only_comprehensible_aggregates(site_publicatio
         "run_id",
     ):
         assert marker not in runs.lower()
+    profiles = pq.read_table(output / "downloads" / "profiles.parquet")
+    effects = pq.read_table(output / "downloads" / "effects.parquet")
+    assert profiles.schema == PUBLIC_PROFILE_SCHEMA
+    assert effects.schema == PUBLIC_EFFECT_SCHEMA
+    assert profiles.to_pylist() == _projected_rows(publication.profiles, PUBLIC_PROFILE_SCHEMA)
+    assert effects.to_pylist() == _projected_rows(publication.effects, PUBLIC_EFFECT_SCHEMA)
+    aggregate_values = {
+        value
+        for table in (profiles, effects)
+        for field in table.schema
+        if pa.types.is_string(field.type)
+        for value in table[field.name].to_pylist()
+        if value is not None
+    }
+    assert aggregate_values.isdisjoint(private_values)
 
 
 def test_public_site_verifier_fails_closed(site_publication, tmp_path: Path):
@@ -319,22 +370,73 @@ def test_public_site_verifier_fails_closed(site_publication, tmp_path: Path):
     with pytest.raises(RuntimeError, match="private execution detail"):
         verify_public_site(publication, forbidden)
 
-    distribution = tmp_path / "distribution"
-    _hardlink_site(source, distribution)
-    downloads = distribution / "downloads.html"
-    _replace_file(
-        downloads,
-        downloads.read_text() + '<a href="https://example.invalid/releases/download/x/a.zip">x</a>',
-    )
-    with pytest.raises(RuntimeError, match="forbidden public output marker"):
-        verify_public_site(publication, distribution)
-
     secret = tmp_path / "secret"
     _hardlink_site(source, secret)
     index = secret / "index.html"
     _replace_file(index, index.read_text() + "<p>OPENROUTER_API_KEY=not-a-real-key</p>")
     with pytest.raises(RuntimeError, match="publication secret scan failed"):
         verify_public_site(publication, secret)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    (
+        "https://external.invalid/path",
+        "//external.invalid/path",
+        "data:text/plain,hello",
+        "javascript:alert(1)",
+        "&#x68;ttps://external.invalid/path",
+        "https%3A%2F%2Fexternal.invalid%2Fpath",
+        "%252F%252Fexternal.invalid%252Fpath",
+    ),
+)
+def test_public_site_rejects_every_external_reference(
+    site_publication, tmp_path: Path, reference: str
+):
+    output = tmp_path / "external"
+    _hardlink_site(site_publication.root / "site", output)
+    index = output / "index.html"
+    _replace_file(index, index.read_text() + f'<a href="{reference}">external</a>')
+    with pytest.raises(RuntimeError, match="external site reference"):
+        verify_public_site(site_publication, output)
+
+
+def test_public_site_accepts_local_queries_and_fragments(site_publication, tmp_path: Path):
+    output = tmp_path / "local-reference"
+    _hardlink_site(site_publication.root / "site", output)
+    index = output / "index.html"
+    _replace_file(
+        index,
+        index.read_text().replace(
+            'href="forms.html"',
+            'href="forms.html?from=index#protocols"',
+            1,
+        )
+        + '<a href="#claim">fragment</a><a href="?view=all#claim">query</a>',
+    )
+    verify_public_site(site_publication, output)
+
+
+def test_public_aggregate_downloads_reject_private_schemas_and_values(
+    site_publication, tmp_path: Path
+):
+    forged_schema = tmp_path / "forged-schema"
+    _hardlink_site(site_publication.root / "site", forged_schema)
+    effects = forged_schema / "downloads" / "effects.parquet"
+    effects.unlink()
+    pq.write_table(
+        pa.table({"run_id": ["run_0123456789abcdef01234567"]}),
+        effects,
+    )
+    with pytest.raises(RuntimeError, match="aggregate schema is not exact"):
+        verify_public_site(site_publication, forged_schema)
+
+    publication, _private_values = _populated_publication(site_publication)
+    private_profile = dict(publication.profiles[0])
+    private_profile["resolved_model_id"] = publication.runs[0].run_id
+    private_publication = replace(publication, profiles=(private_profile,))
+    with pytest.raises(RuntimeError, match="private execution detail appears in profiles.parquet"):
+        build_site(private_publication, tmp_path / "forged-value")
 
 
 def test_sealed_bundle_rebuild_is_byte_identical(site_publication, tmp_path: Path):
