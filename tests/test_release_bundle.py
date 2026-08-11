@@ -159,6 +159,113 @@ def _clean_repository(path: Path) -> Path:
     return path
 
 
+def _candidate_lineage_commits(repository: Path) -> tuple[str, str]:
+    """Resolve candidate and predecessor across direct and merge checkouts."""
+    revision = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    head, *parents = revision
+    if len(parents) == 1:
+        candidate = head
+    elif len(parents) == 2:
+        # A merge checkout's second parent is the lineage merged into the
+        # first-parent base. Its synthetic merge commit is not release provenance.
+        candidate = parents[1]
+    else:
+        raise RuntimeError("candidate checkout must have one parent or be a two-parent merge")
+    predecessor = subprocess.run(
+        ["git", "rev-parse", f"{candidate}^"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return candidate, predecessor
+
+
+def test_candidate_lineage_uses_merged_parent_not_synthetic_base(tmp_path):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repository, check=True)
+    (repository / "anchor").write_text("common\n")
+    subprocess.run(["git", "add", "anchor"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "common"], cwd=repository, check=True)
+    base_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    subprocess.run(["git", "switch", "-qc", "candidate"], cwd=repository, check=True)
+    suite_target = repository / SUITE_REGISTRY_GIT_PATH
+    suite_target.parent.mkdir(parents=True)
+    protocol_target = repository / PROTOCOL_REGISTRY_GIT_PATH
+    shutil.copyfile(DEFAULT_SUITE_REGISTRY, suite_target)
+    shutil.copyfile(DEFAULT_PROTOCOL_REGISTRY, protocol_target)
+    subprocess.run(["git", "add", "src"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "authority"], cwd=repository, check=True)
+    predecessor = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (repository / "candidate").write_text("candidate\n")
+    subprocess.run(["git", "add", "candidate"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=repository, check=True)
+    candidate = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    subprocess.run(["git", "switch", "-q", base_branch], cwd=repository, check=True)
+    (repository / "base").write_text("base\n")
+    subprocess.run(["git", "add", "base"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repository, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "merge", "-q", "--no-ff", "candidate", "-m", "synthetic merge"],
+        cwd=repository,
+        check=True,
+    )
+
+    assert _candidate_lineage_commits(repository) == (candidate, predecessor)
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{base}:{SUITE_REGISTRY_GIT_PATH}"],
+            cwd=repository,
+            capture_output=True,
+        ).returncode
+        != 0
+    )
+    candidate_authority, _, _ = authority_from_git(repository, commit=candidate)
+    predecessor_authority, _, _ = authority_from_git(repository, commit=predecessor)
+    assert candidate_authority.source_commit == candidate
+    assert predecessor_authority.source_commit == predecessor
+
+
 def _run(
     *,
     status: str = "complete",
@@ -1563,14 +1670,13 @@ def sealed_reissue_source(tmp_path_factory, visual_runtime):
     root = tmp_path_factory.mktemp("sealed-reissue")
     repository = root / "repository"
     subprocess.run(["git", "clone", "-q", "--shared", str(Path.cwd()), str(repository)], check=True)
-    candidate_authority, _, _ = authority_from_git(repository)
-    predecessor_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD^"],
+    candidate_commit, predecessor_commit = _candidate_lineage_commits(repository)
+    subprocess.run(
+        ["git", "checkout", "-q", "--detach", candidate_commit],
         cwd=repository,
         check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    )
+    candidate_authority, _, _ = authority_from_git(repository)
     predecessor_authority, _, _ = authority_from_git(repository, commit=predecessor_commit)
     protocols = (
         "reduce-infer-v1",
