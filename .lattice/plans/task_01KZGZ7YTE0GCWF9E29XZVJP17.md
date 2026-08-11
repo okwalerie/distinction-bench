@@ -1133,3 +1133,26 @@ acceptance: pages deploys the unchanged `1ed1f347` snapshot; core ci passes with
 history and no visual extra; the pinned visual job reproduces all frozen hashes and
 runs visual tests; no frozen registry or public site byte changes. fresh review is
 required before pushing the ci repair.
+
+## ci review rework after `f5fdcf7`
+
+retain the approved authority-runtime design, but close the committed-head failures
+before any push. add `src/lofbench/renderers/runtime.py` only to the test's exact
+post-salvage path inventory; do not widen production `_REPAIR_SOURCE_PATHS`. fetch
+full history in both jobs. make the authority container able to run its bounded
+visual test slice with snapshot-pinned, preflighted git and the github checkout uid,
+without fetching an unconstrained build backend. do not run unrelated packaging
+tests in the authority job: core ci owns the complete nonvisual suite, while the
+authority job owns the frozen 11,600-cell replay and every test whose behavior
+requires the visual runtime. update `CLAUDE.md` and `README.org` so generic local
+cairo setup is explicitly non-authoritative and the checked-in container is the
+published hash-verification path.
+
+acceptance: the exact historical-lineage test passes from committed head; the
+authority image builds, preflights git/python/cairo/pango/font/cairosvg exactly, runs
+as the checkout owner, reproduces all 11,600 cells, and passes the bounded visual
+tests with network disabled after image construction. ruff, format, yaml, and diff
+checks pass. suite/protocol registries, public site bytes, release/state, and provider
+paths remain untouched. a fresh cold review approves before push.
+
+## Reset 2026-08-11 by agent:codex-root
