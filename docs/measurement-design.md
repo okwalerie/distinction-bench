@@ -305,6 +305,11 @@ flagship spends on images.
 
 ## 9. Worked budget sheet
 
+the current openrouter availability check, literal-grid reprice, frozen-v1 translation, and
+budget-bounded first-tranche recommendation are recorded in
+[`docs/cost-sheets/openrouter-full-run-2026-08-11.md`](cost-sheets/openrouter-full-run-2026-08-11.md).
+the worked sheet below is preserved as the historical design baseline, not a current quote.
+
 The budget cap is 100 US dollars per release run, with a stretch to 150. This section
 first pins one concrete flagship configuration and shows its arithmetic closing under
 the cap, then builds a full-run line-item table.

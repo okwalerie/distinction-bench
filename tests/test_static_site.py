@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from dataclasses import replace
 from hashlib import sha256
+from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +32,7 @@ _ROOT_FILES = {
     "forms.html",
     "atlas.html",
     "runs.html",
+    "presentation.html",
     "human.html",
     "downloads.html",
     "CNAME",
@@ -180,6 +182,49 @@ def _populated_publication(publication):
     }
 
 
+def _sample_publication(publication):
+    populated, private_values = _populated_publication(publication)
+    base = dict(populated.profiles[0])
+    values = (
+        ("reduce-infer-v1", 0.4, 16644.7748, 135364, 60, 0.016965499999999998),
+        ("reduce-taught-v1", 0.4, 16596.1298, 135454, 60, 0.016976750000000002),
+        ("transcribe-infer-v1", 0.0, 17079.903199999997, 137804, 880, 0.0178855),
+        ("transcribe-taught-v1", 0.0, 17142.7474, 137869, 594, 0.017679125),
+    )
+    profiles = []
+    for protocol, competence, latency, input_tokens, output_tokens, cost in values:
+        profiles.append(
+            {
+                **base,
+                "resolved_model_id": "google/gemini-3.1-flash-lite-20260507",
+                "protocol_id": protocol,
+                "competence": competence,
+                "text_competence": None,
+                "spatial_competence": competence,
+                "mean_latency_ms": latency,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost,
+                "dialect_accuracy": f'{{"enclosure.plain-v1": {competence}}}',
+            }
+        )
+    return replace(populated, profiles=tuple(reversed(profiles))), private_values
+
+
+class _AccessibilityParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ids: list[str] = []
+        self.labelled_by: list[tuple[str, ...]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if attributes.get("id"):
+            self.ids.append(str(attributes["id"]))
+        if tag == "svg" and attributes.get("role") == "img":
+            self.labelled_by.append(tuple(str(attributes.get("aria-labelledby", "")).split()))
+
+
 def test_static_site_is_built_only_inside_a_working_bundle(tmp_path: Path, authority_repository):
     bundle = ReleaseBundle.create_working(
         tmp_path / "release",
@@ -207,6 +252,7 @@ def test_static_site_has_exact_safe_surface_and_every_dialect_exemplar(site_publ
         | expected_images
     )
     assert _site_files(site) == expected
+    assert len(expected) == 3_642
     verify_public_site(publication, site)
 
     index = (site / "index.html").read_text()
@@ -345,6 +391,98 @@ def test_populated_results_render_only_comprehensible_aggregates(site_publicatio
         if value is not None
     }
     assert aggregate_values.isdisjoint(private_values)
+
+
+def test_sample_charts_are_aggregate_only_accessible_and_presentation_ready(
+    site_publication, tmp_path: Path
+):
+    publication, private_values = _sample_publication(site_publication)
+    output = tmp_path / "sample-charts"
+    build_site(publication, output)
+    verify_public_site(publication, output)
+    rebuilt = tmp_path / "sample-charts-rebuilt"
+    build_site(publication, rebuilt)
+    verify_site_tree(output, rebuilt)
+
+    index = (output / "index.html").read_text()
+    results = (output / "runs.html").read_text()
+    presentation = (output / "presentation.html").read_text()
+    assert index.count('data-chart="outcome-by-protocol"') == 1
+    assert 'data-chart="valid-versus-correct"' not in index
+    assert 'data-chart="resource-footprint"' not in index
+    for page in (results, presentation):
+        assert page.count('data-chart="outcome-by-protocol"') == 1
+        assert page.count('data-chart="valid-versus-correct"') == 1
+        assert page.count('data-chart="resource-footprint"') == 1
+        assert "validity 100%" in page
+        assert "correctness 0%" in page
+        assert "$0.069506875" in page
+        assert "20 observations" in page
+        assert "546,491 input tokens" in page
+        assert "1,594 output tokens" in page
+        assert "exact outcome values" in page
+        assert "exact validity and correctness values" in page
+        assert "exact resource values" in page
+        assert "one model, one spatial dialect" in page
+        assert "cannot estimate dialect sensitivity, invariance, or controlled effects" in page
+        offsets = [
+            page.index(protocol)
+            for protocol in (
+                "reduce-infer-v1",
+                "reduce-taught-v1",
+                "transcribe-infer-v1",
+                "transcribe-taught-v1",
+            )
+        ]
+        assert offsets == sorted(offsets)
+        parser = _AccessibilityParser()
+        parser.feed(page)
+        parser.close()
+        assert len(parser.labelled_by) == 3
+        assert len(parser.ids) == len(set(parser.ids))
+        assert all(len(labels) == 2 for labels in parser.labelled_by)
+        assert all(label in parser.ids for labels in parser.labelled_by for label in labels)
+    assert presentation.count('role="img"') == 3
+    assert "<canvas" not in presentation
+    assert "<script" not in presentation
+    assert "connect-src 'none'" in presentation
+    assert all(private not in index + results + presentation for private in private_values)
+
+
+def test_empty_profiles_share_an_honest_chart_state(site_publication):
+    site = site_publication.root / "site"
+    for name in ("index.html", "runs.html", "presentation.html"):
+        page = (site / name).read_text()
+        assert "no admitted aggregate profiles; charts are not available" in page
+        assert 'data-chart="' not in page
+        assert 'role="img"' not in page
+        assert ">nan<" not in page.lower()
+        assert "nan%" not in page.lower()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("competence", True),
+        ("competence", float("nan")),
+        ("invalid_output_rate", 1.01),
+        ("observed_trials", -1),
+        ("observed_trials", 6),
+        ("input_tokens", -1),
+        ("reasoning_tokens", -1),
+        ("mean_latency_ms", float("inf")),
+        ("cost_usd", -0.01),
+    ),
+)
+def test_chart_projection_rejects_invalid_numeric_profiles(
+    site_publication, tmp_path: Path, field: str, value: object
+):
+    publication, _private_values = _populated_publication(site_publication)
+    profile = dict(publication.profiles[0])
+    profile[field] = value
+    forged = replace(publication, profiles=(profile,))
+    with pytest.raises(RuntimeError, match="published profile"):
+        build_site(forged, tmp_path / f"invalid-{field}-{type(value).__name__}")
 
 
 def test_public_site_verifier_fails_closed(site_publication, tmp_path: Path):

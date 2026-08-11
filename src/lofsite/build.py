@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import re
 import shutil
 from collections.abc import Mapping
+from dataclasses import dataclass
+from decimal import Decimal
 from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
@@ -86,6 +89,7 @@ _ROOT_FILES = {
     "forms.html",
     "atlas.html",
     "runs.html",
+    "presentation.html",
     "human.html",
     "downloads.html",
     "CNAME",
@@ -169,7 +173,17 @@ place-items:center;background:#fff;border:1px solid var(--line);padding:1rem}
 background:#fff8df}code{font-size:.88em}.answer button{padding:.7rem 1rem;margin:.2rem}
 .dialect-cells details{margin:.5rem 0}.exemplar .stimulus{min-height:9rem;max-height:18rem;
 overflow:auto}.exemplar h3{margin-bottom:.25rem}
+.chart-group{margin:1.5rem 0}.chart-figure{margin:1.5rem 0;padding:1rem;background:#fff;
+border:1px solid var(--line);border-radius:.35rem;overflow-x:auto}.chart-figure svg{display:block;
+width:100%;min-width:680px;height:auto}.chart-track{fill:#e6e5dd}.chart-competence{fill:#d55e00}
+.chart-validity{fill:#0072b2}.chart-resource{fill:#5d3fc0}.chart-axis{stroke:#68685f;stroke-width:1}
+.chart-label{fill:#171713;font:14px system-ui,sans-serif}.chart-value{fill:#171713;
+font:bold 14px system-ui,sans-serif}.chart-values{font-variant-numeric:tabular-nums;margin-top:1rem}
+.chart-values caption{text-align:left;font-weight:700;padding:.5rem 0}
 footer{margin-top:4rem;border-top:1px solid var(--line);color:var(--muted)}
+@media(max-width:720px){.chart-figure{padding:.5rem}.chart-figure svg{min-width:640px}}
+@media print{body{background:#fff}.chart-figure{break-inside:avoid;border-color:#777}
+nav{display:none}}
 """
 
 
@@ -183,6 +197,7 @@ def _nav(prefix: str = "") -> str:
         ("forms.html", "forms + protocols"),
         ("atlas.html", "dialect atlas"),
         ("runs.html", "models + runs"),
+        ("presentation.html", "presentation"),
         ("human.html", "human pilot"),
         ("downloads.html", "downloads + citation"),
     )
@@ -210,6 +225,306 @@ def _page(title: str, body: str, *, prefix: str = "") -> str:
 def _write(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value)
+
+
+@dataclass(frozen=True)
+class _ChartProfile:
+    execution_surface: str
+    resolved_model_id: str
+    protocol_id: str
+    reasoning: str
+    competence: float
+    validity: float
+    observed_trials: int
+    expected_trials: int
+    mean_latency_seconds: float
+    input_tokens: int
+    output_tokens: int
+    cost_usd: Decimal
+
+    @property
+    def output_tokens_per_observation(self) -> float | None:
+        if self.observed_trials == 0:
+            return None
+        return self.output_tokens / self.observed_trials
+
+
+def _chart_text(row: Mapping[str, Any], field: str) -> str:
+    value = row.get(field)
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"published profile has invalid {field}")
+    return value
+
+
+def _chart_number(
+    row: Mapping[str, Any],
+    field: str,
+    *,
+    maximum: float | None = None,
+) -> float:
+    value = row.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RuntimeError(f"published profile has invalid {field}")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0 or (maximum is not None and parsed > maximum):
+        raise RuntimeError(f"published profile has invalid {field}")
+    return 0.0 if parsed == 0 else parsed
+
+
+def _chart_count(row: Mapping[str, Any], field: str) -> int:
+    value = row.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError(f"published profile has invalid {field}")
+    return value
+
+
+def _chart_projection(rows: tuple[Mapping[str, Any], ...]) -> tuple[_ChartProfile, ...]:
+    projected = []
+    for row in rows:
+        observed = _chart_count(row, "observed_trials")
+        expected = _chart_count(row, "expected_trials")
+        _chart_count(row, "reasoning_tokens")
+        if observed > expected:
+            raise RuntimeError("published profile has observed_trials above expected_trials")
+        cost = _chart_number(row, "cost_usd")
+        projected.append(
+            _ChartProfile(
+                execution_surface=_chart_text(row, "execution_surface"),
+                resolved_model_id=_chart_text(row, "resolved_model_id"),
+                protocol_id=_chart_text(row, "protocol_id"),
+                reasoning=_chart_text(row, "reasoning"),
+                competence=_chart_number(row, "competence", maximum=1),
+                validity=1 - _chart_number(row, "invalid_output_rate", maximum=1),
+                observed_trials=observed,
+                expected_trials=expected,
+                mean_latency_seconds=_chart_number(row, "mean_latency_ms") / 1_000,
+                input_tokens=_chart_count(row, "input_tokens"),
+                output_tokens=_chart_count(row, "output_tokens"),
+                cost_usd=Decimal(str(cost)),
+            )
+        )
+    return tuple(
+        sorted(
+            projected,
+            key=lambda row: (
+                row.execution_surface,
+                row.resolved_model_id,
+                row.protocol_id,
+                row.reasoning,
+            ),
+        )
+    )
+
+
+def _chart_empty_state() -> str:
+    return "<p class=notice>no admitted aggregate profiles; charts are not available.</p>"
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _svg_bar(*, x: float, y: float, width: float, css_class: str) -> str:
+    return (
+        f'<rect class=chart-track x="{x:.1f}" y="{y:.1f}" width="500.0" height="18" rx="2"/>'
+        f'<rect class="{css_class}" x="{x:.1f}" y="{y:.1f}" '
+        f'width="{width:.1f}" height="18" rx="2"/>'
+    )
+
+
+def _outcome_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> str:
+    height = 92 + 62 * len(profiles)
+    rows = []
+    table_rows = []
+    for index, profile in enumerate(profiles):
+        y = 66 + index * 62
+        label = f"{profile.protocol_id} · n={profile.observed_trials}"
+        rows.append(
+            f'<text class=chart-label x="10" y="{y + 14}">{_e(label)}</text>'
+            + _svg_bar(
+                x=300,
+                y=y,
+                width=500 * profile.competence,
+                css_class="chart-competence",
+            )
+            + f'<text class=chart-value x="810" y="{y + 14}">'
+            f"{profile.competence:.0%}</text>"
+        )
+        table_rows.append(
+            "<tr>"
+            f"<td><code>{_e(profile.protocol_id)}</code></td>"
+            f"<td>{_e(profile.resolved_model_id)}</td>"
+            f"<td>{profile.competence:.1%}</td>"
+            f"<td>{profile.observed_trials}</td><td>{profile.expected_trials}</td></tr>"
+        )
+    title_id = f"{id_prefix}-outcome-title"
+    desc_id = f"{id_prefix}-outcome-desc"
+    return (
+        '<figure class=chart-figure data-chart="outcome-by-protocol">'
+        "<h3>outcome by protocol</h3>"
+        f'<svg role="img" aria-labelledby="{title_id} {desc_id}" '
+        f'viewBox="0 0 900 {height}">'
+        f'<title id="{title_id}">competence by protocol</title>'
+        f'<desc id="{desc_id}">horizontal bars show competence, with percentages and '
+        "observation counts written directly on every row.</desc>"
+        '<text class=chart-label x="300" y="32">0%</text>'
+        '<text class=chart-label x="775" y="32">100%</text>' + "".join(rows) + "</svg>"
+        "<table class=chart-values><caption>exact outcome values</caption><thead><tr>"
+        "<th>protocol</th><th>model</th><th>competence</th><th>observed n</th>"
+        f"<th>expected n</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table>"
+        "</figure>"
+    )
+
+
+def _validity_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> str:
+    height = 106 + 92 * len(profiles)
+    rows = []
+    table_rows = []
+    for index, profile in enumerate(profiles):
+        y = 68 + index * 92
+        rows.append(
+            f'<text class=chart-label x="10" y="{y + 13}">'
+            f"{_e(profile.protocol_id)} · n={profile.observed_trials}</text>"
+            + _svg_bar(x=300, y=y, width=500 * profile.validity, css_class="chart-validity")
+            + f'<text class=chart-value x="810" y="{y + 14}">validity '
+            f"{profile.validity:.0%}</text>"
+            + _svg_bar(
+                x=300,
+                y=y + 28,
+                width=500 * profile.competence,
+                css_class="chart-competence",
+            )
+            + f'<text class=chart-value x="810" y="{y + 42}">correctness '
+            f"{profile.competence:.0%}</text>"
+        )
+        table_rows.append(
+            "<tr>"
+            f"<td><code>{_e(profile.protocol_id)}</code></td>"
+            f"<td>{profile.validity:.1%}</td><td>{profile.competence:.1%}</td>"
+            f"<td>{profile.observed_trials}</td></tr>"
+        )
+    title_id = f"{id_prefix}-validity-title"
+    desc_id = f"{id_prefix}-validity-desc"
+    return (
+        '<figure class=chart-figure data-chart="valid-versus-correct">'
+        "<h3>valid output versus correct result</h3>"
+        f'<svg role="img" aria-labelledby="{title_id} {desc_id}" '
+        f'viewBox="0 0 1040 {height}">'
+        f'<title id="{title_id}">validity and correctness by protocol</title>'
+        f'<desc id="{desc_id}">paired, directly labelled bars distinguish the rate of '
+        "schema-valid output from competence for each protocol.</desc>"
+        '<text class=chart-label x="300" y="32">0%</text>'
+        '<text class=chart-label x="775" y="32">100%</text>' + "".join(rows) + "</svg>"
+        "<table class=chart-values><caption>exact validity and correctness values</caption>"
+        "<thead><tr><th>protocol</th><th>valid output</th><th>correct result</th>"
+        f"<th>observed n</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table>"
+        "</figure>"
+    )
+
+
+def _resource_figure(profiles: tuple[_ChartProfile, ...], *, id_prefix: str) -> str:
+    costs = [profile.cost_usd * 100 for profile in profiles]
+    latencies = [profile.mean_latency_seconds for profile in profiles]
+    outputs = [profile.output_tokens_per_observation for profile in profiles]
+    output_values = [value for value in outputs if value is not None]
+    maxima = (max(costs, default=0), max(latencies, default=0), max(output_values, default=0))
+    panels = (
+        ("cost (cents)", costs, maxima[0], lambda value: f"{value:.4f}¢"),
+        ("mean latency (seconds)", latencies, maxima[1], lambda value: f"{value:.3f}s"),
+        (
+            "output tokens / observation",
+            outputs,
+            maxima[2],
+            lambda value: "not available" if value is None else f"{value:.1f}",
+        ),
+    )
+    panel_markup = []
+    for panel_index, (heading, values, maximum, formatter) in enumerate(panels):
+        x = 280 + panel_index * 300
+        panel_markup.append(f'<text class=chart-value x="{x}" y="34">{_e(heading)}</text>')
+        panel_markup.append(f'<line class=chart-axis x1="{x}" y1="48" x2="{x + 205}" y2="48"/>')
+        for row_index, value in enumerate(values):
+            y = 74 + row_index * 58
+            width = 0 if value is None or maximum == 0 else (value / maximum) * 190
+            panel_markup.append(
+                f'<rect class=chart-track x="{x:.1f}" y="{y:.1f}" '
+                'width="190.0" height="18" rx="2"/>'
+                f'<rect class=chart-resource x="{x:.1f}" y="{y:.1f}" '
+                f'width="{width:.1f}" height="18" rx="2"/>'
+                f'<text class=chart-label x="{x}" y="{y + 38}">{_e(formatter(value))}</text>'
+            )
+    labels = "".join(
+        f'<text class=chart-label x="10" y="{88 + index * 58}">'
+        f"{_e(profile.protocol_id)} · n={profile.observed_trials}</text>"
+        for index, profile in enumerate(profiles)
+    )
+    table_rows = []
+    for profile in profiles:
+        output_per_observation = profile.output_tokens_per_observation
+        output_display = (
+            "not available" if output_per_observation is None else f"{output_per_observation:.3f}"
+        )
+        table_rows.append(
+            "<tr>"
+            f"<td><code>{_e(profile.protocol_id)}</code></td>"
+            f"<td>{_decimal_text(profile.cost_usd)}</td>"
+            f"<td>{profile.mean_latency_seconds:.3f}</td>"
+            f"<td>{output_display}</td>"
+            f"<td>{profile.observed_trials}</td></tr>"
+        )
+    total_cost = sum((profile.cost_usd for profile in profiles), Decimal("0"))
+    total_observations = sum(profile.observed_trials for profile in profiles)
+    total_input = sum(profile.input_tokens for profile in profiles)
+    total_output = sum(profile.output_tokens for profile in profiles)
+    height = 118 + 58 * len(profiles)
+    title_id = f"{id_prefix}-resource-title"
+    desc_id = f"{id_prefix}-resource-desc"
+    return (
+        '<figure class=chart-figure data-chart="resource-footprint">'
+        "<h3>resource footprint</h3>"
+        "<p>profile-row totals: "
+        f"<strong>{total_observations} observations</strong>; "
+        f"<strong>${_decimal_text(total_cost)}</strong>; "
+        f"<strong>{total_input:,} input tokens</strong>; "
+        f"<strong>{total_output:,} output tokens</strong>.</p>"
+        f'<svg role="img" aria-labelledby="{title_id} {desc_id}" '
+        f'viewBox="0 0 1180 {height}">'
+        f'<title id="{title_id}">resource footprint by protocol</title>'
+        f'<desc id="{desc_id}">three independently scaled panels show aggregate cost in '
+        "cents, mean latency in seconds, and output tokens per observation.</desc>"
+        + labels
+        + "".join(panel_markup)
+        + "</svg>"
+        "<table class=chart-values><caption>exact resource values</caption><thead><tr>"
+        "<th>protocol</th><th>cost usd</th><th>mean latency seconds</th>"
+        "<th>output tokens / observation</th><th>observed n</th></tr></thead>"
+        f"<tbody>{''.join(table_rows)}</tbody></table></figure>"
+    )
+
+
+def _chart_group(
+    profiles: tuple[_ChartProfile, ...],
+    *,
+    id_prefix: str,
+    outcome_only: bool = False,
+) -> str:
+    if not profiles:
+        return (
+            f'<section class=chart-group data-chart-group="{_e(id_prefix)}">'
+            f"{_chart_empty_state()}</section>"
+        )
+    caveat = (
+        "<p class=notice><strong>smoke test:</strong> one model, one spatial dialect, four "
+        "protocols, and five observations per protocol. this sample cannot estimate dialect "
+        "sensitivity, invariance, or controlled effects.</p>"
+    )
+    figures = _outcome_figure(profiles, id_prefix=id_prefix)
+    if not outcome_only:
+        figures += _validity_figure(profiles, id_prefix=id_prefix)
+        figures += _resource_figure(profiles, id_prefix=id_prefix)
+    return (
+        f'<section class=chart-group data-chart-group="{_e(id_prefix)}">{caveat}{figures}</section>'
+    )
 
 
 def site_tree_checksums(root: Path) -> dict[str, str]:
@@ -442,6 +757,7 @@ def _overview(
     publication: PublicationView,
     suite: LoadedSuite,
     protocols: dict[str, ProtocolSpec],
+    chart_profiles: tuple[_ChartProfile, ...],
 ) -> str:
     runs = publication.runs
     trials = len(publication.trials)
@@ -474,6 +790,10 @@ def _overview(
         "<p>competence and representational invariance are reported separately. a model can be "
         "consistently wrong; that does not make it competent. plain and treated dialect effects "
         "are paired only within an archetype.</p>"
+        "<h2>sample outcome</h2>"
+        "<p>in this one-dialect sample, competence equals observed accuracy. percentages are "
+        "descriptive, not a model comparison.</p>"
+        f"{_chart_group(chart_profiles, id_prefix='home', outcome_only=True)}"
         "<h2>every dialect, one frozen form</h2>"
         "<p>the same medium probe form is rendered once in each documented dialect; open a card "
         "for its reading rule, provenance, limitations, and all 400 frozen cells.</p>"
@@ -775,6 +1095,7 @@ def _runs_page(
     publication: PublicationView,
     profiles: list[dict[str, Any]],
     effects: list[dict[str, Any]],
+    chart_profiles: tuple[_ChartProfile, ...],
 ) -> str:
     suite = publication.suite
     profile_table = _records_table(
@@ -834,6 +1155,11 @@ def _runs_page(
         "surfaces remain separate experimental conditions. only recomputed aggregate rows "
         "are published here.</p>"
         f"<p class=notice>{_e(scope)}</p>"
+        "<h2>presentation charts</h2>"
+        "<p>all plotted values come from the validated public aggregate profile rows. the two "
+        "reduce protocols observed the same result, as did the two transcription protocols; "
+        "five observations per protocol cannot support a causal claim about teaching.</p>"
+        f"{_chart_group(chart_profiles, id_prefix='results')}"
         "<h2>how these rows are derived</h2><p>validated scored observations are grouped by "
         "model, protocol, execution surface, and reasoning setting. competence balances "
         "families; coverage compares observed with planned observations; invariance measures "
@@ -851,6 +1177,22 @@ def _runs_page(
         "<h2>reasoning contrasts</h2><p>competence, invariance, latency, and tokens stay "
         "separate across reasoning settings.</p>"
         f"{_reasoning_contrasts(profiles)}"
+    )
+
+
+def _presentation(profiles: tuple[_ChartProfile, ...]) -> str:
+    return (
+        "<h1>sample presentation</h1>"
+        "<p class=lede>three views of the admitted aggregate sample: outcome, valid output "
+        "versus correct result, and resource footprint.</p>"
+        "<p>all values are projected only from the public profile rows. this release covers "
+        "one model and one spatial dialect, with four protocols and five observations per "
+        "protocol. competence therefore equals observed accuracy here.</p>"
+        "<p>the taught and infer variants observed the same result within each task family. "
+        "that does not show that teaching had no effect: this smoke test is too small for a "
+        "causal conclusion and cannot estimate dialect sensitivity, invariance, or controlled "
+        "effects.</p>"
+        f"{_chart_group(profiles, id_prefix='presentation')}"
     )
 
 
@@ -984,6 +1326,7 @@ def build_site(publication: PublicationView, out: Path) -> None:
     protocols = publication.protocols
     profiles = [dict(row) for row in publication.profiles]
     effects = [dict(row) for row in publication.effects]
+    chart_profiles = _chart_projection(publication.profiles)
     downloads = out / "downloads"
     downloads.mkdir()
     for name in _VERBATIM_DOWNLOADS:
@@ -992,13 +1335,17 @@ def build_site(publication: PublicationView, out: Path) -> None:
         pq.write_table(table, downloads / name, compression="zstd")
     _write(
         out / "index.html",
-        _page("what is tested", _overview(publication, suite, protocols)),
+        _page("what is tested", _overview(publication, suite, protocols, chart_profiles)),
     )
     _write(out / "forms.html", _page("forms + protocols", _forms(suite, protocols)))
     _write(out / "atlas.html", _page("dialect atlas", _atlas(out, suite)))
     _write(
         out / "runs.html",
-        _page("models + runs", _runs_page(publication, profiles, effects)),
+        _page("models + runs", _runs_page(publication, profiles, effects, chart_profiles)),
+    )
+    _write(
+        out / "presentation.html",
+        _page("sample presentation", _presentation(chart_profiles)),
     )
     _write(
         out / "human.html",

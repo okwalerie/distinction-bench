@@ -19,7 +19,7 @@ workflow.
 
 the public artifact is the deterministic `site/` projection produced by
 `lofsite.build.build_site` from the validated, read-only publication view. the
-builder has one output contract: explanatory pages, all 29 dialect detail pages,
+builder has one output contract: seven root html pages plus `CNAME`, all 29 dialect detail pages,
 the frozen spatial images those pages use, and these exact public downloads:
 
 - `suite.json`
@@ -37,7 +37,18 @@ all frozen spatial hashes, resolvable local-only links, no symlinks or unexpecte
 directories, no private execution identifiers or distribution links, and a clean
 publication secret scan. site generation fails closed when any condition is not met.
 
-the results page publishes only recomputed aggregate profiles, controlled
+the exact public tree contains 3,642 files: seven root html pages, `CNAME`, 29 dialect pages,
+3,600 frozen spatial pngs, and the five downloads above.
+
+the homepage contains a compact outcome chart. `presentation.html` and the results page share
+the complete outcome, valid-versus-correct, and resource-footprint chart set. chart projection
+reads only the validated aggregate `PublicationView.profiles` rows; it never reads individual
+trials, calls, transcripts, provider evidence, or loose files. the figures are deterministic,
+accessible inline svg with adjacent exact-value tables. they use no javascript, canvas, raster
+chart, external asset, or network request. an empty profile set produces an explicit notice and
+no empty axes.
+
+the results page otherwise publishes only recomputed aggregate profiles, controlled
 effects, accuracy matrices, and aggregate resource use. individual model
 exchanges, execution identifiers, provider envelopes, routing/catalog details,
 and accounting events remain in the local authority.

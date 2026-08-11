@@ -1471,6 +1471,17 @@ def test_sample_contract_seals_only_four_runs_five_shared_forms_and_twenty_calls
         "input/output/reasoning tokens",
     ):
         assert marker in runs_page
+    presentation_page = (bundle.root / "site" / "presentation.html").read_text()
+    for marker in (
+        "sample presentation",
+        "outcome by protocol",
+        "valid output versus correct result",
+        "resource footprint",
+        "five observations per protocol",
+    ):
+        assert marker in presentation_page
+    assert "no admitted aggregate profiles" not in presentation_page
+    assert len([path for path in (bundle.root / "site").rglob("*") if path.is_file()]) == 3_642
     for value in (
         *(run.run_id for run in runs),
         *(run.endpoint for run in runs),
