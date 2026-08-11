@@ -51,11 +51,12 @@ jobs:
               raise SystemExit(f"unexpected or missing tracked paths: {unexpected}")
 
           site_files = []
-          for path in sorted((root / "site").rglob("*")):
+          for path in (root / "site").rglob("*"):
               if path.is_symlink():
                   raise SystemExit(f"site contains symlink: {path}")
               if path.is_file():
                   site_files.append(path.relative_to(root).as_posix())
+          site_files.sort(key=lambda relative: relative.encode("utf-8"))
           inventory = {}
           for line in (root / "SHA256SUMS").read_text().splitlines():
               digest, separator, relative = line.partition("  ")
