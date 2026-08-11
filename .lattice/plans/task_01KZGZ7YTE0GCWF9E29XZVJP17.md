@@ -1102,3 +1102,14 @@ workflow deployment, and verify representative public urls. no github release as
 is uploaded. afterward perform authenticated catalog/key get requests only, compute
 the true full-sweep and budget-fitting costs, record a cost sheet, and stop before any
 paid inference pending explicit approval.
+
+## Reset 2026-08-11 by agent:codex-root
+
+## binding schema-identifier clarification
+
+the public boundary forbids outbound browser references and arbitrary external urls.
+the byte-identical authoritative human json schema may retain exactly its standard
+draft-2020-12 `$schema` uri and its public distinction `$id` uri; both are inert schema
+identifiers, not navigational links or fetched resources. no other external url string
+is allowed in the snapshot. keep the reviewed site bytes and snapshot unchanged,
+repeat the artifact go/no-go against this exact criterion, then publish only on pass.
