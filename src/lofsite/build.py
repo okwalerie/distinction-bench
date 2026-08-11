@@ -28,6 +28,7 @@ _DOWNLOADS = (
     "request-started.jsonl",
     "ledger.jsonl",
 )
+_EXEMPLAR_DIFFICULTY = "2. medium"
 
 _CSS = """
 :root{color-scheme:light;--ink:#171713;--muted:#68685f;--line:#d7d6c9;--paper:#f7f6ee;
@@ -226,8 +227,16 @@ def _cell_markup(cell: dict[str, Any], *, prefix: str = "") -> str:
     )
 
 
-def _dialect_exemplar_cards(suite: LoadedSuite) -> str:
-    exemplar_form_id = suite.form_sets["probe"][1]
+def _dialect_exemplars(suite: LoadedSuite) -> tuple[str, dict[str, dict[str, Any]]]:
+    probe_ids = set(suite.form_sets["probe"])
+    candidates = [
+        form["abstract_form_id"]
+        for form in suite.forms
+        if form["abstract_form_id"] in probe_ids and form["difficulty"] == _EXEMPLAR_DIFFICULTY
+    ]
+    if len(candidates) != 1:
+        raise RuntimeError("probe set must contain exactly one medium exemplar form")
+    exemplar_form_id = candidates[0]
     cells = {
         cell["dialect_id"]: cell
         for cell in suite.cells
@@ -235,15 +244,44 @@ def _dialect_exemplar_cards(suite: LoadedSuite) -> str:
     }
     if set(cells) != set(suite.specs):
         raise RuntimeError("dialect exemplars do not cover the frozen registry")
-    return "".join(
+    return exemplar_form_id, cells
+
+
+def _dialect_exemplar_card(
+    *,
+    dialect_id: str,
+    spec: Any,
+    cell: dict[str, Any],
+    exemplar_form_id: str,
+    cell_count: int | None,
+) -> str:
+    description = f"<p>{_e(spec.description)}</p>" if cell_count is not None else ""
+    count = f" · {cell_count} cells" if cell_count is not None else ""
+    link_text = (
+        "inspect every frozen cell" if cell_count is not None else "reading rule + all frozen cells"
+    )
+    return (
         '<article class="card exemplar" '
         f'data-dialect-exemplar="{_e(dialect_id)}">'
         f"<h3>{_e(spec.label)}</h3><p><code>{_e(dialect_id)}</code></p>"
-        f"<div class=stimulus>{_stimulus_markup(cells[dialect_id])}</div>"
-        f"<p class=muted>same frozen form · <code>{_e(exemplar_form_id)}</code><br>"
-        f"{_e(spec.modality)} · {_e(spec.family)} · {_e(spec.archetype)}</p>"
-        f'<a href="dialects/{_e(dialect_id)}.html">reading rule + all frozen cells</a>'
-        "</article>"
+        f"<div class=stimulus>{_stimulus_markup(cell)}</div>"
+        f"<p class=muted>same frozen form · <code>{_e(exemplar_form_id)}</code></p>"
+        f"{description}<p class=muted>{_e(spec.modality)} · {_e(spec.family)} · "
+        f"{_e(spec.archetype)}{count}</p>"
+        f'<a href="dialects/{_e(dialect_id)}.html">{link_text}</a></article>'
+    )
+
+
+def _dialect_exemplar_cards(suite: LoadedSuite) -> str:
+    exemplar_form_id, cells = _dialect_exemplars(suite)
+    return "".join(
+        _dialect_exemplar_card(
+            dialect_id=dialect_id,
+            spec=spec,
+            cell=cells[dialect_id],
+            exemplar_form_id=exemplar_form_id,
+            cell_count=None,
+        )
         for dialect_id, spec in sorted(suite.specs.items())
     )
 
@@ -253,19 +291,17 @@ def _atlas(out: Path, suite: LoadedSuite) -> str:
     for cell in suite.cells:
         cells_by_dialect.setdefault(cell["dialect_id"], []).append(cell)
     cards = []
-    exemplar_form_id = suite.form_sets["probe"][1]
+    exemplar_form_id, exemplars = _dialect_exemplars(suite)
     for dialect_id, spec in suite.specs.items():
         cells = cells_by_dialect[dialect_id]
-        exemplar = next(cell for cell in cells if cell["abstract_form_id"] == exemplar_form_id)
         cards.append(
-            '<article class="card exemplar" '
-            f'data-dialect-exemplar="{_e(dialect_id)}">'
-            f"<h3>{_e(spec.label)}</h3><p><code>{_e(dialect_id)}</code></p>"
-            f"<div class=stimulus>{_stimulus_markup(exemplar)}</div>"
-            f"<p class=muted>same frozen form · <code>{_e(exemplar_form_id)}</code></p>"
-            f"<p>{_e(spec.description)}</p><p class=muted>{_e(spec.modality)} · "
-            f"{_e(spec.family)} · {_e(spec.archetype)} · {len(cells)} cells</p>"
-            f'<a href="dialects/{_e(dialect_id)}.html">inspect every frozen cell</a></article>'
+            _dialect_exemplar_card(
+                dialect_id=dialect_id,
+                spec=spec,
+                cell=exemplars[dialect_id],
+                exemplar_form_id=exemplar_form_id,
+                cell_count=len(cells),
+            )
         )
         cell_markup = "".join(_cell_markup(cell, prefix="../") for cell in cells)
         limitations = "".join(f"<li>{_e(item)}</li>" for item in spec.limitations)

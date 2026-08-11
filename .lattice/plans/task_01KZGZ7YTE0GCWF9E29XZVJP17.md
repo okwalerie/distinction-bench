@@ -827,3 +827,47 @@ boundary. keep the live release and state untouched pending another review.
 ## Reset 2026-08-09 by agent:codex-root
 
 ## Reset 2026-08-11 by agent:codex-root
+
+## active plan: publish sample gallery and stage budgeted full run
+
+render the sole medium form in the frozen `probe` set once for every dialect on
+both the homepage and atlas, using one shared card renderer over bundle-authoritative
+cells. preserve escaped text payloads, lazy spatial assets, detail links, and csp.
+
+acceptance: each page has exactly 29 unique dialects, 20 text and 9 spatial exemplars,
+the same semantic medium form, and resolvable assets/details. pass static, release,
+and reissue gates plus fresh review. leave old sealed artifacts immutable; create a
+new reviewed sibling, seal/archive it, push a draft pr, publish matching github release
+assets, and deploy pages. then retrieve current key/catalog data without inference,
+write a full-run cost sheet bounded by the remaining openrouter balance, and require
+explicit paid approval before bulk calls.
+
+## publish sample gallery and begin budgeted full run
+
+publish the independently sealed four-protocol sample through a github release and
+the existing release-triggered pages workflow. before resealing, make the homepage
+and dialect atlas each show one immediately visible exemplar for every frozen dialect.
+use the sole medium form in the frozen `probe` set as the semantic selector so all 29
+cards compare the same structure without a positional magic number. share one card
+renderer between the two pages; preserve escaped text, lazy-loaded spatial assets,
+local detail links, and the bundle-only build boundary.
+
+acceptance: both pages contain exactly 29 unique dialect markers, 20 text exemplars,
+9 spatial exemplars, one shared medium form, resolvable image/detail paths, and retain
+the restrictive csp. static-site and reissue tests pass; a fresh reviewer approves;
+the original sealed artifact stays immutable while a new sibling is reissued, built,
+sealed, archived, uploaded, and deployed. after publication, perform authenticated
+catalog-only pricing and stage a full-run plan under the remaining openrouter balance;
+do not start bulk inference without a newly explicit cost sheet and paid approval.
+
+## Reset 2026-08-11 by agent:codex-root
+
+## active publication acceptance
+
+show the same semantically selected medium probe form in all 29 dialects on both the
+homepage and atlas through one bundle-only renderer. require 20 escaped text and 9
+lazy spatial exemplars, exact dialect coverage, and resolvable local assets/details.
+after static/release/reissue tests and fresh approval, reissue without inference into
+an absent sibling, seal it, publish a draft pr plus matching github release assets,
+and deploy pages. only then perform catalog-only full-run pricing against the remaining
+key balance; bulk inference requires a new explicit cost sheet and paid approval.

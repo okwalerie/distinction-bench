@@ -77,6 +77,7 @@ def test_static_site_exposes_suite_protocol_atlas_and_local_human_pilot(working)
         marker = f'data-dialect-exemplar="{dialect_id}"'
         assert marker in index
         assert marker in atlas
+        assert (bundle.root / "site" / "dialects" / f"{dialect_id}.html").is_file()
     assert index.count("data-dialect-exemplar=") == 29
     assert atlas.count("data-dialect-exemplar=") == 29
     exemplar_label = f"same frozen form · <code>{exemplar_form_id}</code>"
@@ -84,6 +85,20 @@ def test_static_site_exposes_suite_protocol_atlas_and_local_human_pilot(working)
     assert atlas.count(exemplar_label) == 29
     assert "<img loading=lazy" in index
     assert "<pre>" in index
+    assert index.count("<img loading=lazy") == 9
+    assert atlas.count("<img loading=lazy") == 9
+    assert index.count("<div class=stimulus><pre>") == 20
+    assert atlas.count("<div class=stimulus><pre>") == 20
+    exemplar_cells = [
+        cell
+        for cell in bundle.publication().suite.cells
+        if cell["abstract_form_id"] == exemplar_form_id and cell["modality"] != "text"
+    ]
+    assert len(exemplar_cells) == 9
+    for cell in exemplar_cells:
+        source = f"assets/{cell['asset_path']}"
+        assert f'src="{source}"' in index
+        assert f'src="{source}"' in atlas
     forms = (bundle.root / "site" / "forms.html").read_text()
     assert "system prompt" in forms
     assert "every form and its set membership" in forms
