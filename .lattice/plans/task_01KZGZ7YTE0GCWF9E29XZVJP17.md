@@ -828,6 +828,118 @@ boundary. keep the live release and state untouched pending another review.
 
 ## Reset 2026-08-11 by agent:codex-root
 
+## operator pivot: publish a website, not the evidence bundle
+
+the complete sealed sample and its archives remain immutable local research evidence.
+the public artifact is one deterministic static-site projection from that validated
+bundle, not the bundle itself. do not upload the archive, release sidecar, inspect zip,
+or any raw execution export, and do not merge draft pr #6 as part of deployment.
+
+### public surface and exclusions
+
+keep the pages that explain the benchmark: homepage, forms and exact protocol
+definitions, the 29-dialect atlas and detail pages, aggregate model results, the
+local-only human instrument, downloads/citation, `cname`, and the spatial stimulus
+assets actually linked by those pages. retain the frozen suite and protocol registry,
+human-trial schema, and aggregate `profiles`/`effects` tables as explicit public
+downloads because they define the test and support the displayed aggregate claims.
+
+the site must not contain or link `release.json`, a release tarball, an inspect zip,
+`runs.jsonl`, `trials.parquet`, `calls.parquet`, `transcripts.jsonl`,
+`request-started.jsonl`, or `ledger.jsonl`. remove the external full-bundle links and
+all prose which promises those assets. the runs page may derive public summaries from
+the validated in-memory view, but it must not serialize run ids, individual responses,
+prompt/request hashes, request/provider envelopes, catalog rows, routing policies,
+ledger events, or individual call/trial records. keep model/protocol labels, declared
+execution surface, aggregate accuracy/coverage/competence/invariance/effects,
+aggregate latency/token/cost summaries, and the sample-not-ranking caveat. replace the
+single-trial worked path and exact endpoint dump with a short explanation of how
+aggregate rows are derived.
+
+copy only the image stimulus paths required by frozen spatial cells. the text stimuli
+are already rendered into escaped html and present in the public suite; their currently
+orphaned asset json files do not belong in the website tree.
+
+### implementation seam
+
+make the existing `lofsite.build.build_site` output unconditionally public-safe; do
+not add a `public` flag or maintain a second renderer. define one explicit safe-download
+allowlist and one structural verifier in `src/lofsite/build.py`. the verifier receives
+the validated publication view and requires the exact root pages, exactly 29 declared
+dialect detail pages, exactly the frozen spatial image set, and exactly the safe
+download set. it also resolves every local `href`/`src`, refuses unexpected files,
+release-asset urls, and raw run/trial/call/evidence/ledger identifiers, and runs the
+existing publication secret scan over the completed tree.
+
+update `src/dbench/release_policy.py` so a prepared or sealed sample requires this
+sanitized site shape and rejects every forbidden evidence path or full-distribution
+marker. update `docs/static-publication.md` to separate the local sealed authority from
+the public website projection and to document the site-only deployment. the complete
+bundle remains the sole data input and local audit authority; no loose logs or live
+registries enter site generation.
+
+because the current sealed sample contains the old evidence-download site, never edit
+it. after implementation and independent review, reissue from the authenticated
+original sample into a new absent sibling using the normal no-network reissue path,
+prepare the sanitized site, validate, seal, and retain that complete sibling locally.
+publish only its `site/` subtree. neither complete sibling nor any distribution archive
+is a github release asset.
+
+### tests and review gates
+
+change `tests/test_static_site.py` to assert the exact safe download set and exact
+absence of every forbidden evidence filename and release/archive link; assert the
+rendered runs page contains aggregate tables and no run id, response, exact endpoint,
+catalog, routing, request, call, or trial detail from a populated fixture. preserve the
+29-exemplar, 20-text/9-spatial, shared-medium-form, csp, local-human, traversal, and
+byte-determinism checks. add unexpected-file, broken-local-link, and forbidden-output
+fail-closed cases for the structural verifier.
+
+update the sample publication assertions in `tests/test_release_bundle.py` for the new
+site contract. run static-site, release-bundle, publication, reissue, full pytest, ruff,
+and clean-diff gates without credentials, network, or inference. then have a fresh
+reviewer inspect both the source diff and a real generated site, including exact path
+inventory, link resolution, forbidden-artifact absence, secret scan, and deterministic
+rebuild.
+
+### site-only github pages deployment
+
+replace `.github/workflows/pages.yml` with a site-snapshot workflow triggered only by
+pushes to `gh-pages`. that branch is an orphan deployment branch whose public contents
+are limited to `site/`, the deploy workflow, a sha256 inventory, and a small provenance
+json containing only release id, sealed manifest sha256, renderer commit, and build
+timestamp. the workflow checks out that branch, verifies the inventory, uploads only
+`site/` with `actions/upload-pages-artifact`, and deploys it; it has no release-download
+step, no bundle validator, and no access to evidence or credentials.
+
+construct the first `gh-pages` commit in an isolated temporary worktree from the
+reviewed local site, verify it again before push, and push it without touching or
+merging the draft feature pr. retain github pages in actions mode, dispatch no paid
+work, and verify the deployed github-pages/custom-domain urls plus representative
+homepage, atlas, spatial asset, protocol, aggregate-results, and human-schema paths.
+the already-created sample tag may remain, but its release must have no evidence
+assets and the website must contain no broken links to them.
+
+### acceptance
+
+- the public tree contains only the enumerated website pages, 29 dialect details,
+  frozen spatial assets, suite/protocol/human schema, and aggregate profile/effect
+  downloads; every local link resolves.
+- homepage and atlas each retain all 29 exemplars for the same medium form, with 20
+  escaped text and 9 spatial renderings and the restrictive csp.
+- no raw transcript, provider/request, run, trial, call, ledger, release manifest,
+  inspect archive, or sealed archive bytes or links exist anywhere on `gh-pages` or in
+  github release assets.
+- aggregate sample results remain visible and are explicitly labelled a four-protocol
+  by five-form smoke test, not a ranking.
+- the complete independently validated sealed evidence remains local and unchanged;
+  a new sanitized-site sibling, if produced, is also retained locally and never
+  uploaded.
+- github pages deploys from the isolated site-only branch while draft pr #6 remains
+  unmerged. only after publication verification does db-14 return to catalog-only
+  budget planning; bulk inference still requires a new explicit cost sheet and paid
+  approval.
+
 ## active plan: publish sample gallery and stage budgeted full run
 
 render the sole medium form in the frozen `probe` set once for every dialect on
@@ -871,3 +983,47 @@ after static/release/reissue tests and fresh approval, reissue without inference
 an absent sibling, seal it, publish a draft pr plus matching github release assets,
 and deploy pages. only then perform catalog-only full-run pricing against the remaining
 key balance; bulk inference requires a new explicit cost sheet and paid approval.
+
+## Reset 2026-08-11 by agent:codex-root
+
+## binding site-only publication plan
+
+the public artifact is the deterministic static-site subtree built from the validated
+sealed sample; the complete bundle and archives remain immutable and local. implement
+the detailed operator-pivot design above in `src/lofsite/build.py`,
+`src/dbench/release_policy.py`, `tests/test_static_site.py`, the relevant sample
+assertions in `tests/test_release_bundle.py`, `docs/static-publication.md`, and
+`.github/workflows/pages.yml`.
+
+make the sole site builder allow only the explanatory pages, all 29 dialect detail
+pages, linked frozen spatial images, and downloads of `suite.json`, `protocols.json`,
+`human-trial.schema.json`, `profiles.parquet`, and `effects.parquet`. remove the full
+archive/manifest links and exclude raw runs, trials, calls, transcripts,
+request-started records, ledger, provider envelopes, individual responses, ids, and
+exact routing/catalog evidence from both files and rendered html. retain aggregate
+model/protocol results, modality/family matrices, aggregate resource summaries, the
+protocol/form exposition, local-only human instrument, sample caveat, and the same
+29 medium-form exemplars (20 text, 9 spatial) on homepage and atlas.
+
+add one fail-closed structural verifier for exact path membership, frozen dialect and
+image coverage, local-link resolution, forbidden artifacts/links/identifiers, and the
+existing secret scan. test the exact allowlist and forbidden set against populated
+results as well as broken links, unexpected files, deterministic rebuilds, csp, human
+schema, and exemplar coverage. run focused static/release/publication/reissue gates,
+full pytest, ruff, and an independent real-artifact review without network or
+inference.
+
+do not edit either sealed sample. reissue the authenticated original into an absent
+local sibling at the reviewed commit, prepare and seal the sanitized form, and publish
+only its `site/` subtree. create an orphan `gh-pages` snapshot containing only `site/`,
+the push-triggered pages workflow, a sha256 inventory, and minimal provenance (release
+id, sealed-manifest digest, renderer commit, build time). the workflow verifies that
+inventory and uploads only `site/`; it never downloads a release asset or receives a
+credential. push and verify pages while draft pr #6 remains unmerged and the sample
+release has no evidence assets.
+
+acceptance is exact: all public local links resolve; all dialect/protocol/suite/human
+and aggregate-result surfaces remain comprehensible; no raw evidence or sealed archive
+bytes or links exist in the deployed branch/release; the complete reviewed evidence
+remains local; and no bulk inference begins before a new catalog-derived cost sheet
+and explicit paid approval.
