@@ -1075,3 +1075,15 @@ exemplars, local links, pinned visual gate, and credential-free pages workflow.
 centralize publication-view construction if it removes reviewed duplication without
 weakening sealing. require canonical-dev focused gates, ruff/diff, and fresh rereview
 before any rebuild or public push.
+
+## Reset 2026-08-11 by agent:codex-root
+
+## active final site-boundary repair
+
+explicitly reject unsupported browser url-bearing attributes such as `srcset` and
+`xlink:href`; generated output uses only local `href`/`src`. gate legacy visual tests
+on importability of the actual optional visual dependency, not merely native libcairo.
+deduplicate `PublicationView` assembly if the shared constructor remains small and
+authority-preserving. add exact regressions, run only the affected canonical-dev
+tests plus static/rule lint, and return immediately to fresh rereview—no broad suite,
+rebuild, network, state, or publication action in this repair.

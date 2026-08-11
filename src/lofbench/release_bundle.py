@@ -95,26 +95,14 @@ class ReleasePolicyContext:
 
     def publication(self) -> PublicationView:
         """Project the already core-validated policy inputs into the publication seam."""
-        return PublicationView(
+        return _publication_view_from_validated_inputs(
             root=self.root,
-            release_id=str(self.manifest["release_id"]),
-            repository_url=str(self.manifest["repository_url"]),
-            status=str(self.manifest["status"]),
-            suite_version=str(self.manifest["suite_version"]),
-            stimuli_materialized=bool(self.manifest.get("stimuli_materialized")),
-            expected_run_ids=tuple(self.manifest["expected_run_ids"]),
-            sample_contract=_freeze(self.manifest.get("sample_contract")),
-            paid_run_approval=_freeze(self.manifest.get("paid_run_approval")),
+            manifest=self.manifest,
             suite=self.suite,
-            protocols=MappingProxyType(load_protocol_registry(self.root / "protocols.json")),
             runs=self.runs,
             trials=self.trials,
-            profiles=tuple(
-                _freeze(row) for row in pq.read_table(self.root / "profiles.parquet").to_pylist()
-            ),
-            effects=tuple(
-                _freeze(row) for row in pq.read_table(self.root / "effects.parquet").to_pylist()
-            ),
+            profiles=pq.read_table(self.root / "profiles.parquet").to_pylist(),
+            effects=pq.read_table(self.root / "effects.parquet").to_pylist(),
         )
 
 
@@ -198,6 +186,36 @@ def _freeze(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_freeze(child) for child in value)
     return value
+
+
+def _publication_view_from_validated_inputs(
+    *,
+    root: Path,
+    manifest: Mapping[str, Any],
+    suite: LoadedSuite,
+    runs: Iterable[RunManifest],
+    trials: Iterable[Mapping[str, Any]],
+    profiles: Iterable[Mapping[str, Any]],
+    effects: Iterable[Mapping[str, Any]],
+) -> PublicationView:
+    """Build the sole immutable publication projection from core-validated inputs."""
+    return PublicationView(
+        root=root,
+        release_id=str(manifest["release_id"]),
+        repository_url=str(manifest["repository_url"]),
+        status=str(manifest["status"]),
+        suite_version=str(manifest["suite_version"]),
+        stimuli_materialized=bool(manifest.get("stimuli_materialized")),
+        expected_run_ids=tuple(manifest["expected_run_ids"]),
+        sample_contract=_freeze(manifest.get("sample_contract")),
+        paid_run_approval=_freeze(manifest.get("paid_run_approval")),
+        suite=suite,
+        protocols=MappingProxyType(load_protocol_registry(root / "protocols.json")),
+        runs=tuple(runs),
+        trials=tuple(_freeze(row) for row in trials),
+        profiles=tuple(_freeze(row) for row in profiles),
+        effects=tuple(_freeze(row) for row in effects),
+    )
 
 
 def _utc_now() -> str:
@@ -1070,28 +1088,21 @@ class ReleaseBundle:
         """Return the sole validated view consumed by site/export publication."""
         self.validate()
         suite = load_suite(version=self.manifest["suite_version"], path=self.root / "suite.json")
-        protocols = load_protocol_registry(self.root / "protocols.json")
+        runs = self.runs()
+        trials = _read_rows(self.root / "trials.parquet")
         profiles, effects = self._verified_metric_rows(
             suite=suite,
-            runs=self.runs(),
-            trials=_read_rows(self.root / "trials.parquet"),
+            runs=runs,
+            trials=trials,
         )
-        return PublicationView(
+        return _publication_view_from_validated_inputs(
             root=self.root,
-            release_id=self.manifest["release_id"],
-            repository_url=self.manifest["repository_url"],
-            status=self.manifest["status"],
-            suite_version=self.manifest["suite_version"],
-            stimuli_materialized=bool(self.manifest.get("stimuli_materialized")),
-            expected_run_ids=tuple(self.manifest["expected_run_ids"]),
-            sample_contract=_freeze(self.manifest.get("sample_contract")),
-            paid_run_approval=_freeze(self.manifest.get("paid_run_approval")),
+            manifest=self.manifest,
             suite=suite,
-            protocols=MappingProxyType(protocols),
-            runs=tuple(self.runs()),
-            trials=tuple(_freeze(row) for row in _read_rows(self.root / "trials.parquet")),
-            profiles=tuple(_freeze(row) for row in profiles),
-            effects=tuple(_freeze(row) for row in effects),
+            runs=runs,
+            trials=trials,
+            profiles=profiles,
+            effects=effects,
         )
 
     def _artifact_paths(self) -> list[Path]:

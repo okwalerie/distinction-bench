@@ -249,6 +249,7 @@ def test_release_policy_context_uses_the_shared_publication_projection(site_publ
         sealing=True,
     )
     projected = context.publication()
+    assert projected == site_publication
     assert projected.root == site_publication.root
     assert projected.suite is site_publication.suite
     assert projected.status == "sealed"
@@ -398,6 +399,27 @@ def test_public_site_rejects_every_external_reference(
     index = output / "index.html"
     _replace_file(index, index.read_text() + f'<a href="{reference}">external</a>')
     with pytest.raises(RuntimeError, match="external site reference"):
+        verify_public_site(site_publication, output)
+
+
+@pytest.mark.parametrize(
+    "markup",
+    (
+        '<img srcset="https://external.invalid/one.png 1x">',
+        '<img SRCSET="assets/stimuli/image/local.png 1x">',
+        '<svg><use xlink:href="https%3A%2F%2Fexternal.invalid%2Fshape"></use></svg>',
+        '<svg><use XLINK:HREF="&#x68;ttps://external.invalid/shape"></use></svg>',
+        '<form action="//external.invalid/submit"></form>',
+    ),
+)
+def test_public_site_rejects_unsupported_url_bearing_attributes(
+    site_publication, tmp_path: Path, markup: str
+):
+    output = tmp_path / "unsupported-url-attribute"
+    _hardlink_site(site_publication.root / "site", output)
+    index = output / "index.html"
+    _replace_file(index, index.read_text() + markup)
+    with pytest.raises(RuntimeError, match="unsupported url-bearing attribute"):
         verify_public_site(site_publication, output)
 
 

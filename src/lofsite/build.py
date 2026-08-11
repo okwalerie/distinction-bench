@@ -124,6 +124,31 @@ _FORBIDDEN_HTML_MARKERS = (
 )
 _OPAQUE_EXECUTION_ID = re.compile(rb"(?:run|trial|call)_[0-9a-f]{16,}")
 _EXEMPLAR_DIFFICULTY = "2. medium"
+_SUPPORTED_URL_ATTRIBUTES = frozenset({"href", "src"})
+_UNSUPPORTED_URL_ATTRIBUTES = frozenset(
+    {
+        "action",
+        "archive",
+        "background",
+        "cite",
+        "classid",
+        "codebase",
+        "data",
+        "dynsrc",
+        "formaction",
+        "icon",
+        "imagesrcset",
+        "longdesc",
+        "lowsrc",
+        "manifest",
+        "ping",
+        "poster",
+        "profile",
+        "srcdoc",
+        "srcset",
+        "usemap",
+    }
+)
 
 _CSS = """
 :root{color-scheme:light;--ink:#171713;--muted:#68685f;--line:#d7d6c9;--paper:#f7f6ee;
@@ -205,11 +230,21 @@ class _LocalReferenceParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.references: list[str] = []
+        self.unsupported_attributes: list[str] = []
 
     def handle_starttag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.references.extend(
-            value for name, value in attrs if name in {"href", "src"} and value is not None
-        )
+        for name, value in attrs:
+            normalized = name.casefold()
+            if normalized in _SUPPORTED_URL_ATTRIBUTES:
+                if value is not None:
+                    self.references.append(value)
+                continue
+            if (
+                normalized in _UNSUPPORTED_URL_ATTRIBUTES
+                or normalized.endswith(":href")
+                or normalized.endswith(":src")
+            ):
+                self.unsupported_attributes.append(name)
 
 
 def _spatial_assets(publication: PublicationView) -> dict[str, str]:
@@ -245,6 +280,11 @@ def _verify_local_references(root: Path, html_paths: list[Path]) -> None:
     for path in html_paths:
         parser = _LocalReferenceParser()
         parser.feed(path.read_text())
+        if parser.unsupported_attributes:
+            raise RuntimeError(
+                f"unsupported url-bearing attribute in {path.name}: "
+                f"{parser.unsupported_attributes[0]}"
+            )
         for reference in parser.references:
             if reference != reference.strip() or any(ord(char) < 32 for char in reference):
                 raise RuntimeError(f"unsafe site reference in {path.name}: {reference}")
@@ -784,8 +824,8 @@ def _runs_page(
     )
     dialect_matrix, family_matrix = _coverage_matrices(suite, profiles)
     scope = (
-        "this sample is a four-protocol by five-form smoke test (twenty aggregate "
-        "observations), not a model ranking."
+        "this sample is a four-protocol by five-form smoke test (twenty trial observations "
+        "summarized into four aggregate profile rows), not a model ranking."
         if publication.sample_contract
         else "all tables are aggregates recomputed from admitted bundle records."
     )
