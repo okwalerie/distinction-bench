@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "protocols": {
+    "reduce-infer-v1": {
+      "protocol_id": "reduce-infer-v1",
+      "system_text": "You are evaluating a ground expression in George Spencer-Brown's Laws of Form.\nOnly containment and adjacency matter. Use these two laws repeatedly:\n- calling: adjacent identical marks have the value of one mark;\n- crossing: a mark whose sole content is one empty mark has the unmarked value.\nEvery ground expression reduces to marked or unmarked. Return only JSON matching the\nsupplied schema. Do not include an explanation or chain of thought.",
+      "user_template": "The attached stimulus encodes one Laws of Form containment structure. Reduce it and return its normal value.",
+      "response_json_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "enum": ["marked", "unmarked"]
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "scorer_id": "normal-value-exact",
+      "scorer_version": "1",
+      "maximum_output_tokens": 512,
+      "includes_dialect_legend": false,
+      "answer_kind": "normal_value"
+    },
+    "reduce-taught-v1": {
+      "protocol_id": "reduce-taught-v1",
+      "system_text": "You are evaluating a ground expression in George Spencer-Brown's Laws of Form.\nOnly containment and adjacency matter. Use these two laws repeatedly:\n- calling: adjacent identical marks have the value of one mark;\n- crossing: a mark whose sole content is one empty mark has the unmarked value.\nEvery ground expression reduces to marked or unmarked. Return only JSON matching the\nsupplied schema. Do not include an explanation or chain of thought.",
+      "user_template": "Reading convention: {reading_rule}\n\nThe attached stimulus encodes one Laws of Form containment structure. Reduce it and return its normal value.",
+      "response_json_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "enum": ["marked", "unmarked"]
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "scorer_id": "normal-value-exact",
+      "scorer_version": "1",
+      "maximum_output_tokens": 512,
+      "includes_dialect_legend": true,
+      "answer_kind": "normal_value"
+    },
+    "transcribe-infer-v1": {
+      "protocol_id": "transcribe-infer-v1",
+      "system_text": "You are evaluating a ground expression in George Spencer-Brown's Laws of Form.\nOnly containment and adjacency matter. Use these two laws repeatedly:\n- calling: adjacent identical marks have the value of one mark;\n- crossing: a mark whose sole content is one empty mark has the unmarked value.\nEvery ground expression reduces to marked or unmarked. Return only JSON matching the\nsupplied schema. Do not include an explanation or chain of thought.",
+      "user_template": "The attached stimulus encodes one containment tree. Transcribe it as nested JSON arrays: each array item is a mark, and that mark is itself an array of the marks directly contained by it. Return the top-level list in `tree`.",
+      "response_json_schema": {
+        "$defs": {
+          "mark": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/mark"}
+          }
+        },
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/mark"}
+          }
+        },
+        "required": ["tree"],
+        "additionalProperties": false
+      },
+      "scorer_id": "containment-tree-exact",
+      "scorer_version": "1",
+      "maximum_output_tokens": 512,
+      "includes_dialect_legend": false,
+      "answer_kind": "structural_transcription"
+    },
+    "transcribe-taught-v1": {
+      "protocol_id": "transcribe-taught-v1",
+      "system_text": "You are evaluating a ground expression in George Spencer-Brown's Laws of Form.\nOnly containment and adjacency matter. Use these two laws repeatedly:\n- calling: adjacent identical marks have the value of one mark;\n- crossing: a mark whose sole content is one empty mark has the unmarked value.\nEvery ground expression reduces to marked or unmarked. Return only JSON matching the\nsupplied schema. Do not include an explanation or chain of thought.",
+      "user_template": "Reading convention: {reading_rule}\n\nTranscribe the attached containment structure as nested JSON arrays: each array item is a mark, and that mark is itself an array of the marks directly contained by it. Return the top-level list in `tree`.",
+      "response_json_schema": {
+        "$defs": {
+          "mark": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/mark"}
+          }
+        },
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/mark"}
+          }
+        },
+        "required": ["tree"],
+        "additionalProperties": false
+      },
+      "scorer_id": "containment-tree-exact",
+      "scorer_version": "1",
+      "maximum_output_tokens": 512,
+      "includes_dialect_legend": true,
+      "answer_kind": "structural_transcription"
+    }
+  }
+}

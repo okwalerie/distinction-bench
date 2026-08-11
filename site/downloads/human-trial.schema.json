@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://distinction.valeriekim.ca/schema/human-trial-record-v1.json",
+  "title": "Distinction benchmark human trial export",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "records"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HumanTrialRecord"
+      }
+    }
+  },
+  "$defs": {
+    "HumanTrialRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "participant_code",
+        "familiarity_band",
+        "abstract_form_id",
+        "dialect_id",
+        "protocol_id",
+        "answer",
+        "transcription",
+        "confidence",
+        "elapsed_ms"
+      ],
+      "properties": {
+        "participant_code": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$",
+          "description": "Anonymous or pseudonymous participant code; never a name."
+        },
+        "familiarity_band": {
+          "enum": [
+            "none",
+            "some",
+            "expert"
+          ]
+        },
+        "abstract_form_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dialect_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "answer": {
+              "enum": [
+                "marked",
+                "unmarked"
+              ]
+            },
+            "transcription": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "answer": {
+              "type": "null"
+            },
+            "transcription": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}
