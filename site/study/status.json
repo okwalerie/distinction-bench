@@ -1,0 +1,11 @@
+{
+  "expected_cells": 13440,
+  "completed_cells": 2401,
+  "valid_cells": 2401,
+  "correct_cells": 1573,
+  "attempts": 2670,
+  "ambiguous_runs": 0,
+  "terminal_failed_cells": 66,
+  "observed_spend_usd": "4.412448296",
+  "reserved_spend_usd": "0"
+}
