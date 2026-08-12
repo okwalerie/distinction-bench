@@ -1,11 +1,14 @@
 {
   "expected_cells": 13440,
-  "completed_cells": 2401,
-  "valid_cells": 2401,
-  "correct_cells": 1573,
-  "attempts": 2670,
+  "completed_cells": 13162,
+  "valid_cells": 13162,
+  "correct_cells": 7242,
+  "attempts": 14106,
   "ambiguous_runs": 0,
-  "terminal_failed_cells": 66,
-  "observed_spend_usd": "4.412448296",
-  "reserved_spend_usd": "0"
+  "terminal_failed_cells": 273,
+  "accounting_quarantined_cells": 1,
+  "blocked_sibling_cells": 4,
+  "actionable_cells": 0,
+  "observed_spend_usd": "24.023238932",
+  "reserved_spend_usd": "0.01"
 }
