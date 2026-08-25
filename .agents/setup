@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+started_at=$SECONDS
+
+install_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    uv --version
+    return
+  fi
+
+  curl -fsSL https://astral.sh/uv/install.sh |
+    env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+}
+
+install_bd() {
+  local expected_version
+  expected_version="$(<.beads/.local_version)"
+
+  if command -v bd >/dev/null 2>&1 &&
+    bd version | grep -Fq "bd version ${expected_version} "; then
+    bd version
+    return
+  fi
+
+  npm install --global --force "@beads/bd@${expected_version}"
+  bd version
+}
+
+echo '==> Installing required command-line tools'
+step_started=$SECONDS
+install_uv
+install_bd
+echo "==> Command-line tools ready in $((SECONDS - step_started))s"
+
+echo '==> Installing locked Python dependencies'
+step_started=$SECONDS
+uv sync --locked --extra dev
+echo "==> Python dependencies ready in $((SECONDS - step_started))s"
+
+echo "==> Orb setup complete in $((SECONDS - started_at))s"
